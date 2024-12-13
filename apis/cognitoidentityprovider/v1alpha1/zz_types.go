@@ -72,6 +72,11 @@ type AuthenticationResultType struct {
 }
 
 // +kubebuilder:skipversion
+type CloudWatchLogsConfigurationType struct {
+	LogGroupARN *string `json:"logGroupARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type CodeDeliveryDetailsType struct {
 	Destination *string `json:"destination,omitempty"`
 }
@@ -255,6 +260,11 @@ type LambdaConfigType struct {
 	UserMigration *string `json:"userMigration,omitempty"`
 
 	VerifyAuthChallengeResponse *string `json:"verifyAuthChallengeResponse,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type LogDeliveryConfigurationType struct {
+	UserPoolID *string `json:"userPoolID,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -442,8 +452,15 @@ type UICustomizationType struct {
 }
 
 // +kubebuilder:skipversion
+type UserAttributeUpdateSettingsType struct {
+	AttributesRequireVerificationBeforeUpdate []*string `json:"attributesRequireVerificationBeforeUpdate,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type UserContextDataType struct {
 	EncodedData *string `json:"encodedData,omitempty"`
+
+	IPAddress *string `json:"ipAddress,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -482,14 +499,16 @@ type UserPoolClientType struct {
 	AllowedOAuthFlowsUserPoolClient *bool `json:"allowedOAuthFlowsUserPoolClient,omitempty"`
 
 	AllowedOAuthScopes []*string `json:"allowedOAuthScopes,omitempty"`
-	// The Amazon Pinpoint analytics configuration for collecting metrics for a
-	// user pool.
+	// The Amazon Pinpoint analytics configuration necessary to collect metrics
+	// for a user pool.
 	//
-	// In Regions where Amazon Pinpointisn't available, user pools only support
+	// In Regions where Amazon Pinpoint isn't available, user pools only support
 	// sending events to Amazon Pinpoint projects in us-east-1. In Regions where
 	// Amazon Pinpoint is available, user pools support sending events to Amazon
 	// Pinpoint projects within that same Region.
 	AnalyticsConfiguration *AnalyticsConfigurationType `json:"analyticsConfiguration,omitempty"`
+
+	AuthSessionValidity *int64 `json:"authSessionValidity,omitempty"`
 
 	CallbackURLs []*string `json:"callbackURLs,omitempty"`
 
@@ -502,6 +521,8 @@ type UserPoolClientType struct {
 	CreationDate *metav1.Time `json:"creationDate,omitempty"`
 
 	DefaultRedirectURI *string `json:"defaultRedirectURI,omitempty"`
+
+	EnablePropagateAdditionalUserContextData *bool `json:"enablePropagateAdditionalUserContextData,omitempty"`
 
 	EnableTokenRevocation *bool `json:"enableTokenRevocation,omitempty"`
 
@@ -520,8 +541,8 @@ type UserPoolClientType struct {
 	RefreshTokenValidity *int64 `json:"refreshTokenValidity,omitempty"`
 
 	SupportedIdentityProviders []*string `json:"supportedIdentityProviders,omitempty"`
-	// The data type for TokenValidityUnits that specifics the time measurements
-	// for token validity.
+	// The data type TokenValidityUnits specifies the time units you use when you
+	// set the duration of ID, access, and refresh tokens.
 	TokenValidityUnits *TokenValidityUnitsType `json:"tokenValidityUnits,omitempty"`
 
 	UserPoolID *string `json:"userPoolID,omitempty"`
@@ -566,11 +587,27 @@ type UserPoolType struct {
 	CreationDate *metav1.Time `json:"creationDate,omitempty"`
 
 	CustomDomain *string `json:"customDomain,omitempty"`
-	// The device tracking configuration for a user pool. A user pool with device
-	// tracking deactivated returns a null value.
+
+	DeletionProtection *string `json:"deletionProtection,omitempty"`
+	// The device-remembering configuration for a user pool. A DescribeUserPool
+	// (https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DescribeUserPool.html)
+	// request returns a null value for this object when the user pool isn't configured
+	// to remember devices. When device remembering is active, you can remember
+	// a user's device with a ConfirmDevice (https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_ConfirmDevice.html)
+	// API request. Additionally. when the property DeviceOnlyRememberedOnUserPrompt
+	// is true, you must follow ConfirmDevice with an UpdateDeviceStatus (https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_UpdateDeviceStatus.html)
+	// API request that sets the user's device to remembered or not_remembered.
 	//
-	// When you provide values for any DeviceConfiguration field, you activate device
-	// tracking.
+	// To sign in with a remembered device, include DEVICE_KEY in the authentication
+	// parameters in your user's InitiateAuth (https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_InitiateAuth.html)
+	// request. If your app doesn't include a DEVICE_KEY parameter, the response
+	// (https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_InitiateAuth.html#API_InitiateAuth_ResponseSyntax)
+	// from Amazon Cognito includes newly-generated DEVICE_KEY and DEVICE_GROUP_KEY
+	// values under NewDeviceMetadata. Store these values to use in future device-authentication
+	// requests.
+	//
+	// When you provide a value for any property of DeviceConfiguration, you activate
+	// the device remembering for the user pool.
 	DeviceConfiguration *DeviceConfigurationType `json:"deviceConfiguration,omitempty"`
 
 	Domain *string `json:"domain,omitempty"`
@@ -620,7 +657,18 @@ type UserPoolType struct {
 	SmsVerificationMessage *string `json:"smsVerificationMessage,omitempty"`
 
 	Status *string `json:"status,omitempty"`
-	// The user pool add-ons type.
+	// The settings for updates to user attributes. These settings include the property
+	// AttributesRequireVerificationBeforeUpdate, a user-pool setting that tells
+	// Amazon Cognito how to handle changes to the value of your users' email address
+	// and phone number attributes. For more information, see Verifying updates
+	// to email addresses and phone numbers (https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-email-phone-verification.html#user-pool-settings-verifications-verify-attribute-updates).
+	UserAttributeUpdateSettings *UserAttributeUpdateSettingsType `json:"userAttributeUpdateSettings,omitempty"`
+	// User pool add-ons. Contains settings for activation of advanced security
+	// features. To log user security information but take no action, set to AUDIT.
+	// To configure automatic security responses to risky traffic to your user pool,
+	// set to ENFORCED.
+	//
+	// For more information, see Adding advanced security to a user pool (https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-settings-advanced-security.html).
 	UserPoolAddOns *UserPoolAddOnsType `json:"userPoolAddOns,omitempty"`
 
 	UserPoolTags map[string]*string `json:"userPoolTags,omitempty"`

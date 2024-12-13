@@ -35,6 +35,8 @@ type VPCEndpointServiceConfigurationParameters struct {
 	// (Interface endpoint configuration) The private DNS name to assign to the
 	// VPC endpoint service.
 	PrivateDNSName *string `json:"privateDNSName,omitempty"`
+	// The supported IP address types. The possible values are ipv4 and ipv6.
+	SupportedIPAddressTypes []*string `json:"supportedIPAddressTypes,omitempty"`
 	// The tags to associate with the service.
 	TagSpecifications                               []*TagSpecification `json:"tagSpecifications,omitempty"`
 	CustomVPCEndpointServiceConfigurationParameters `json:",inline"`
@@ -67,6 +69,7 @@ type VPCEndpointServiceConfigurationStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

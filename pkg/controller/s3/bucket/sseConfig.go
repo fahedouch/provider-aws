@@ -23,10 +23,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/s3/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/s3"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -46,14 +48,14 @@ func NewSSEConfigurationClient(client s3.BucketClient) *SSEConfigurationClient {
 }
 
 // Observe checks if the resource exists and if it matches the local configuration
-func (in *SSEConfigurationClient) Observe(ctx context.Context, bucket *v1beta1.Bucket) (ResourceStatus, error) { // nolint:gocyclo
+func (in *SSEConfigurationClient) Observe(ctx context.Context, bucket *v1beta1.Bucket) (ResourceStatus, error) { //nolint:gocyclo
 	config := bucket.Spec.ForProvider.ServerSideEncryptionConfiguration
-	external, err := in.client.GetBucketEncryption(ctx, &awss3.GetBucketEncryptionInput{Bucket: awsclient.String(meta.GetExternalName(bucket))})
+	external, err := in.client.GetBucketEncryption(ctx, &awss3.GetBucketEncryptionInput{Bucket: pointer.ToOrNilIfZeroValue(meta.GetExternalName(bucket))})
 	if err != nil {
 		if s3.SSEConfigurationNotFound(err) && config == nil {
 			return Updated, nil
 		}
-		return NeedsUpdate, awsclient.Wrap(resource.Ignore(s3.SSEConfigurationNotFound, err), sseGetFailed)
+		return NeedsUpdate, errorutils.Wrap(resource.Ignore(s3.SSEConfigurationNotFound, err), sseGetFailed)
 	}
 
 	switch {
@@ -69,13 +71,13 @@ func (in *SSEConfigurationClient) Observe(ctx context.Context, bucket *v1beta1.B
 
 	for i, Rule := range config.Rules {
 		outputRule := external.ServerSideEncryptionConfiguration.Rules[i].ApplyServerSideEncryptionByDefault
-		if awsclient.StringValue(outputRule.KMSMasterKeyID) != awsclient.StringValue(Rule.ApplyServerSideEncryptionByDefault.KMSMasterKeyID) {
+		if pointer.StringValue(outputRule.KMSMasterKeyID) != pointer.StringValue(Rule.ApplyServerSideEncryptionByDefault.KMSMasterKeyID) {
 			return NeedsUpdate, nil
 		}
 		if string(outputRule.SSEAlgorithm) != Rule.ApplyServerSideEncryptionByDefault.SSEAlgorithm {
 			return NeedsUpdate, nil
 		}
-		if external.ServerSideEncryptionConfiguration.Rules[i].BucketKeyEnabled != Rule.BucketKeyEnabled {
+		if ptr.Deref(external.ServerSideEncryptionConfiguration.Rules[i].BucketKeyEnabled, false) != Rule.BucketKeyEnabled {
 			return NeedsUpdate, nil
 		}
 	}
@@ -90,25 +92,25 @@ func (in *SSEConfigurationClient) CreateOrUpdate(ctx context.Context, bucket *v1
 	}
 	input := GeneratePutBucketEncryptionInput(meta.GetExternalName(bucket), bucket.Spec.ForProvider.ServerSideEncryptionConfiguration)
 	_, err := in.client.PutBucketEncryption(ctx, input)
-	return awsclient.Wrap(err, ssePutFailed)
+	return errorutils.Wrap(err, ssePutFailed)
 }
 
 // Delete creates the request to delete the resource on AWS or set it to the default value.
 func (in *SSEConfigurationClient) Delete(ctx context.Context, bucket *v1beta1.Bucket) error {
 	_, err := in.client.DeleteBucketEncryption(ctx,
 		&awss3.DeleteBucketEncryptionInput{
-			Bucket: awsclient.String(meta.GetExternalName(bucket)),
+			Bucket: pointer.ToOrNilIfZeroValue(meta.GetExternalName(bucket)),
 		},
 	)
-	return awsclient.Wrap(err, sseDeleteFailed)
+	return errorutils.Wrap(err, sseDeleteFailed)
 }
 
 // LateInitialize does nothing because the resource might have been deleted by
 // the user.
 func (in *SSEConfigurationClient) LateInitialize(ctx context.Context, bucket *v1beta1.Bucket) error {
-	external, err := in.client.GetBucketEncryption(ctx, &awss3.GetBucketEncryptionInput{Bucket: awsclient.String(meta.GetExternalName(bucket))})
+	external, err := in.client.GetBucketEncryption(ctx, &awss3.GetBucketEncryptionInput{Bucket: pointer.ToOrNilIfZeroValue(meta.GetExternalName(bucket))})
 	if err != nil {
-		return awsclient.Wrap(resource.Ignore(s3.SSEConfigurationNotFound, err), sseGetFailed)
+		return errorutils.Wrap(resource.Ignore(s3.SSEConfigurationNotFound, err), sseGetFailed)
 	}
 
 	// We need the second check here because by default the SSE is not set
@@ -136,14 +138,14 @@ func (in *SSEConfigurationClient) SubresourceExists(bucket *v1beta1.Bucket) bool
 // GeneratePutBucketEncryptionInput creates the input for the PutBucketEncryption request for the S3 Client
 func GeneratePutBucketEncryptionInput(name string, config *v1beta1.ServerSideEncryptionConfiguration) *awss3.PutBucketEncryptionInput {
 	bei := &awss3.PutBucketEncryptionInput{
-		Bucket: awsclient.String(name),
+		Bucket: pointer.ToOrNilIfZeroValue(name),
 		ServerSideEncryptionConfiguration: &types.ServerSideEncryptionConfiguration{
 			Rules: make([]types.ServerSideEncryptionRule, len(config.Rules)),
 		},
 	}
 	for i, rule := range config.Rules {
 		bei.ServerSideEncryptionConfiguration.Rules[i] = types.ServerSideEncryptionRule{
-			BucketKeyEnabled: rule.BucketKeyEnabled,
+			BucketKeyEnabled: ptr.To(rule.BucketKeyEnabled),
 			ApplyServerSideEncryptionByDefault: &types.ServerSideEncryptionByDefault{
 				KMSMasterKeyID: rule.ApplyServerSideEncryptionByDefault.KMSMasterKeyID,
 				SSEAlgorithm:   types.ServerSideEncryption(rule.ApplyServerSideEncryptionByDefault.SSEAlgorithm),

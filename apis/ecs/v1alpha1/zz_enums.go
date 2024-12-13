@@ -29,6 +29,14 @@ const (
 	AgentUpdateStatus_FAILED   AgentUpdateStatus = "FAILED"
 )
 
+type ApplicationProtocol string
+
+const (
+	ApplicationProtocol_http  ApplicationProtocol = "http"
+	ApplicationProtocol_http2 ApplicationProtocol = "http2"
+	ApplicationProtocol_grpc  ApplicationProtocol = "grpc"
+)
+
 type AssignPublicIP string
 
 const (
@@ -199,12 +207,12 @@ const (
 	HealthStatus_UNKNOWN   HealthStatus = "UNKNOWN"
 )
 
-type IPcMode string
+type IPCMode string
 
 const (
-	IPcMode_host IPcMode = "host"
-	IPcMode_task IPcMode = "task"
-	IPcMode_none IPcMode = "none"
+	IPCMode_host IPCMode = "host"
+	IPCMode_task IPCMode = "task"
+	IPCMode_none IPCMode = "none"
 )
 
 type InstanceHealthCheckState string
@@ -285,11 +293,11 @@ const (
 	OSFamily_LINUX                    OSFamily = "LINUX"
 )
 
-type PidMode string
+type PIDMode string
 
 const (
-	PidMode_host PidMode = "host"
-	PidMode_task PidMode = "task"
+	PIDMode_host PIDMode = "host"
+	PIDMode_task PIDMode = "task"
 )
 
 type PlacementConstraintType string
@@ -363,11 +371,14 @@ const (
 type SettingName string
 
 const (
-	SettingName_serviceLongArnFormat           SettingName = "serviceLongArnFormat"
-	SettingName_taskLongArnFormat              SettingName = "taskLongArnFormat"
-	SettingName_containerInstanceLongArnFormat SettingName = "containerInstanceLongArnFormat"
-	SettingName_awsvpcTrunking                 SettingName = "awsvpcTrunking"
-	SettingName_containerInsights              SettingName = "containerInsights"
+	SettingName_serviceLongArnFormat            SettingName = "serviceLongArnFormat"
+	SettingName_taskLongArnFormat               SettingName = "taskLongArnFormat"
+	SettingName_containerInstanceLongArnFormat  SettingName = "containerInstanceLongArnFormat"
+	SettingName_awsvpcTrunking                  SettingName = "awsvpcTrunking"
+	SettingName_containerInsights               SettingName = "containerInsights"
+	SettingName_fargateFIPSMode                 SettingName = "fargateFIPSMode"
+	SettingName_tagResourceAuthorization        SettingName = "tagResourceAuthorization"
+	SettingName_fargateTaskRetirementWaitPeriod SettingName = "fargateTaskRetirementWaitPeriod"
 )
 
 type SortOrder string
@@ -413,8 +424,9 @@ const (
 type TaskDefinitionStatus_SDK string
 
 const (
-	TaskDefinitionStatus_SDK_ACTIVE   TaskDefinitionStatus_SDK = "ACTIVE"
-	TaskDefinitionStatus_SDK_INACTIVE TaskDefinitionStatus_SDK = "INACTIVE"
+	TaskDefinitionStatus_SDK_ACTIVE             TaskDefinitionStatus_SDK = "ACTIVE"
+	TaskDefinitionStatus_SDK_INACTIVE           TaskDefinitionStatus_SDK = "INACTIVE"
+	TaskDefinitionStatus_SDK_DELETE_IN_PROGRESS TaskDefinitionStatus_SDK = "DELETE_IN_PROGRESS"
 )
 
 type TaskField string
@@ -432,9 +444,12 @@ const (
 type TaskStopCode string
 
 const (
-	TaskStopCode_TaskFailedToStart        TaskStopCode = "TaskFailedToStart"
-	TaskStopCode_EssentialContainerExited TaskStopCode = "EssentialContainerExited"
-	TaskStopCode_UserInitiated            TaskStopCode = "UserInitiated"
+	TaskStopCode_TaskFailedToStart         TaskStopCode = "TaskFailedToStart"
+	TaskStopCode_EssentialContainerExited  TaskStopCode = "EssentialContainerExited"
+	TaskStopCode_UserInitiated             TaskStopCode = "UserInitiated"
+	TaskStopCode_ServiceSchedulerInitiated TaskStopCode = "ServiceSchedulerInitiated"
+	TaskStopCode_SpotInterruption          TaskStopCode = "SpotInterruption"
+	TaskStopCode_TerminationNotice         TaskStopCode = "TerminationNotice"
 )
 
 type TransportProtocol string

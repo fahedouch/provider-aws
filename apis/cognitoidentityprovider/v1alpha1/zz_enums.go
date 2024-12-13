@@ -119,6 +119,13 @@ const (
 	DefaultEmailOptionType_CONFIRM_WITH_CODE DefaultEmailOptionType = "CONFIRM_WITH_CODE"
 )
 
+type DeletionProtectionType string
+
+const (
+	DeletionProtectionType_ACTIVE   DeletionProtectionType = "ACTIVE"
+	DeletionProtectionType_INACTIVE DeletionProtectionType = "INACTIVE"
+)
+
 type DeliveryMediumType string
 
 const (
@@ -161,8 +168,15 @@ const (
 type EventResponseType string
 
 const (
-	EventResponseType_Success EventResponseType = "Success"
-	EventResponseType_Failure EventResponseType = "Failure"
+	EventResponseType_Pass       EventResponseType = "Pass"
+	EventResponseType_Fail       EventResponseType = "Fail"
+	EventResponseType_InProgress EventResponseType = "InProgress"
+)
+
+type EventSourceName string
+
+const (
+	EventSourceName_userNotification EventSourceName = "userNotification"
 )
 
 type EventType string
@@ -171,6 +185,8 @@ const (
 	EventType_SignIn         EventType = "SignIn"
 	EventType_SignUp         EventType = "SignUp"
 	EventType_ForgotPassword EventType = "ForgotPassword"
+	EventType_PasswordChange EventType = "PasswordChange"
+	EventType_ResendCode     EventType = "ResendCode"
 )
 
 type ExplicitAuthFlowsType string
@@ -202,6 +218,12 @@ const (
 	IdentityProviderTypeType_LoginWithAmazon IdentityProviderTypeType = "LoginWithAmazon"
 	IdentityProviderTypeType_SignInWithApple IdentityProviderTypeType = "SignInWithApple"
 	IdentityProviderTypeType_OIDC            IdentityProviderTypeType = "OIDC"
+)
+
+type LogLevel string
+
+const (
+	LogLevel_ERROR LogLevel = "ERROR"
 )
 
 type MessageActionType string

@@ -21,12 +21,12 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/crossplane-contrib/provider-aws/apis/sns/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	snstypes "github.com/aws/aws-sdk-go-v2/service/sns/types"
+
+	"github.com/crossplane-contrib/provider-aws/apis/sns/v1beta1"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // SubscriptionAttributes refers to AWS SNS Subscription Attributes List
@@ -38,6 +38,8 @@ const (
 	SubscriptionDeliveryPolicy = "DeliveryPolicy"
 	// SubscriptionFilterPolicy is FilterPolicy of SNS Subscription
 	SubscriptionFilterPolicy = "FilterPolicy"
+	// SubscriptionFilterPolicyScope is FilterPolicyScope of SNS Subscription
+	SubscriptionFilterPolicyScope = "FilterPolicyScope"
 	// SubscriptionRawMessageDelivery is RawMessageDelivery of SNS Subscription
 	SubscriptionRawMessageDelivery = "RawMessageDelivery"
 	// SubscriptionRedrivePolicy is RedrivePolicy of SNS Subscription
@@ -103,10 +105,11 @@ func GenerateSubscriptionObservation(attr map[string]string) v1beta1.Subscriptio
 // *v1beta1.SubscriptionParameters with the values seen in
 // sns.Subscription
 func LateInitializeSubscription(in *v1beta1.SubscriptionParameters, subAttributes map[string]string) {
-	in.DeliveryPolicy = awsclients.LateInitializeStringPtr(in.DeliveryPolicy, awsclients.String(subAttributes[SubscriptionDeliveryPolicy]))
-	in.FilterPolicy = awsclients.LateInitializeStringPtr(in.FilterPolicy, awsclients.String(subAttributes[SubscriptionFilterPolicy]))
-	in.RawMessageDelivery = awsclients.LateInitializeStringPtr(in.RawMessageDelivery, awsclients.String(subAttributes[SubscriptionRawMessageDelivery]))
-	in.RedrivePolicy = awsclients.LateInitializeStringPtr(in.RedrivePolicy, awsclients.String(subAttributes[SubscriptionRedrivePolicy]))
+	in.DeliveryPolicy = pointer.LateInitialize(in.DeliveryPolicy, pointer.ToOrNilIfZeroValue(subAttributes[SubscriptionDeliveryPolicy]))
+	in.FilterPolicy = pointer.LateInitialize(in.FilterPolicy, pointer.ToOrNilIfZeroValue(subAttributes[SubscriptionFilterPolicy]))
+	in.FilterPolicyScope = pointer.LateInitialize(in.FilterPolicyScope, pointer.ToOrNilIfZeroValue(subAttributes[SubscriptionFilterPolicyScope]))
+	in.RawMessageDelivery = pointer.LateInitialize(in.RawMessageDelivery, pointer.ToOrNilIfZeroValue(subAttributes[SubscriptionRawMessageDelivery]))
+	in.RedrivePolicy = pointer.LateInitialize(in.RedrivePolicy, pointer.ToOrNilIfZeroValue(subAttributes[SubscriptionRedrivePolicy]))
 }
 
 // getSubAttributes returns map of SNS Sunscription Attributes
@@ -114,6 +117,7 @@ func getSubAttributes(p v1beta1.SubscriptionParameters) map[string]string {
 	return map[string]string{
 		SubscriptionDeliveryPolicy:     aws.ToString(p.DeliveryPolicy),
 		SubscriptionFilterPolicy:       aws.ToString(p.FilterPolicy),
+		SubscriptionFilterPolicyScope:  aws.ToString(p.FilterPolicyScope),
 		SubscriptionRawMessageDelivery: aws.ToString(p.RawMessageDelivery),
 		SubscriptionRedrivePolicy:      aws.ToString(p.RedrivePolicy),
 	}
@@ -137,6 +141,7 @@ func GetChangedSubAttributes(p v1beta1.SubscriptionParameters, attrs map[string]
 func IsSNSSubscriptionAttributesUpToDate(p v1beta1.SubscriptionParameters, subAttributes map[string]string) bool {
 	return aws.ToString(p.DeliveryPolicy) == subAttributes[SubscriptionDeliveryPolicy] &&
 		aws.ToString(p.FilterPolicy) == subAttributes[SubscriptionFilterPolicy] &&
+		aws.ToString(p.FilterPolicyScope) == subAttributes[SubscriptionFilterPolicyScope] &&
 		aws.ToString(p.RawMessageDelivery) == subAttributes[SubscriptionRawMessageDelivery] &&
 		aws.ToString(p.RedrivePolicy) == subAttributes[SubscriptionRedrivePolicy]
 }

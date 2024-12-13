@@ -41,6 +41,16 @@ type ResolverEndpointParameters struct {
 	// A friendly name that lets you easily find a configuration in the Resolver
 	// dashboard in the Route 53 console.
 	Name *string `json:"name,omitempty"`
+	// The Amazon Resource Name (ARN) of the Outpost. If you specify this, you must
+	// also specify a value for the PreferredInstanceType.
+	OutpostARN *string `json:"outpostARN,omitempty"`
+	// The instance type. If you specify this, you must also specify a value for
+	// the OutpostArn.
+	PreferredInstanceType *string `json:"preferredInstanceType,omitempty"`
+	// For the endpoint type you can choose either IPv4, IPv6, or dual-stack. A
+	// dual-stack endpoint means that it will resolve via both IPv4 and IPv6. This
+	// endpoint type is applied to all IP addresses.
+	ResolverEndpointType *string `json:"resolverEndpointType,omitempty"`
 	// A list of the tag keys and values that you want to associate with the endpoint.
 	Tags                             []*Tag `json:"tags,omitempty"`
 	CustomResolverEndpointParameters `json:",inline"`
@@ -127,6 +137,7 @@ type ResolverEndpointStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

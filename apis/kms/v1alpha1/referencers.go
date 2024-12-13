@@ -15,7 +15,7 @@ package v1alpha1
 
 import (
 	"github.com/crossplane/crossplane-runtime/pkg/reference"
-	resource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/pkg/resource"
 )
 
 // KMSKeyARN returns the status.atProvider.ARN of an KMSKey.

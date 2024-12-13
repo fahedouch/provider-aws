@@ -73,7 +73,7 @@ type AccessPointObservation struct {
 	LifeCycleState *string `json:"lifeCycleState,omitempty"`
 	// The name of the access point. This is the value of the Name tag.
 	Name *string `json:"name,omitempty"`
-	// Identified the Amazon Web Services account that owns the access point resource.
+	// Identifies the Amazon Web Services account that owns the access point resource.
 	OwnerID *string `json:"ownerID,omitempty"`
 }
 
@@ -89,6 +89,7 @@ type AccessPointStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

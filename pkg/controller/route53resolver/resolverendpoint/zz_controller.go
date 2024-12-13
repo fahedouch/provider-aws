@@ -34,7 +34,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/route53resolver/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -57,7 +58,7 @@ func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
@@ -80,21 +81,25 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.GetResolverEndpointWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateResolverEndpoint(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
@@ -111,7 +116,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateResolverEndpointWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.ResolverEndpoint.Arn != nil {
@@ -159,14 +164,29 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Spec.ForProvider.Name = nil
 	}
+	if resp.ResolverEndpoint.OutpostArn != nil {
+		cr.Spec.ForProvider.OutpostARN = resp.ResolverEndpoint.OutpostArn
+	} else {
+		cr.Spec.ForProvider.OutpostARN = nil
+	}
+	if resp.ResolverEndpoint.PreferredInstanceType != nil {
+		cr.Spec.ForProvider.PreferredInstanceType = resp.ResolverEndpoint.PreferredInstanceType
+	} else {
+		cr.Spec.ForProvider.PreferredInstanceType = nil
+	}
+	if resp.ResolverEndpoint.ResolverEndpointType != nil {
+		cr.Spec.ForProvider.ResolverEndpointType = resp.ResolverEndpoint.ResolverEndpointType
+	} else {
+		cr.Spec.ForProvider.ResolverEndpointType = nil
+	}
 	if resp.ResolverEndpoint.SecurityGroupIds != nil {
-		f9 := []*string{}
-		for _, f9iter := range resp.ResolverEndpoint.SecurityGroupIds {
-			var f9elem string
-			f9elem = *f9iter
-			f9 = append(f9, &f9elem)
+		f12 := []*string{}
+		for _, f12iter := range resp.ResolverEndpoint.SecurityGroupIds {
+			var f12elem string
+			f12elem = *f12iter
+			f12 = append(f12, &f12elem)
 		}
-		cr.Status.AtProvider.SecurityGroupIDs = f9
+		cr.Status.AtProvider.SecurityGroupIDs = f12
 	} else {
 		cr.Status.AtProvider.SecurityGroupIDs = nil
 	}
@@ -194,7 +214,7 @@ func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.E
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.UpdateResolverEndpointWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
 func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
@@ -212,7 +232,7 @@ func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
 		return nil
 	}
 	resp, err := e.client.DeleteResolverEndpointWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
 }
 
 type option func(*external)
@@ -244,7 +264,7 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.ResolverEndpoint, *svcsdk.GetResolverEndpointInput) error
 	postObserve    func(context.Context, *svcapitypes.ResolverEndpoint, *svcsdk.GetResolverEndpointOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.ResolverEndpointParameters, *svcsdk.GetResolverEndpointOutput) error
-	isUpToDate     func(*svcapitypes.ResolverEndpoint, *svcsdk.GetResolverEndpointOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.ResolverEndpoint, *svcsdk.GetResolverEndpointOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.ResolverEndpoint, *svcsdk.CreateResolverEndpointInput) error
 	postCreate     func(context.Context, *svcapitypes.ResolverEndpoint, *svcsdk.CreateResolverEndpointOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.ResolverEndpoint, *svcsdk.DeleteResolverEndpointInput) (bool, error)
@@ -263,8 +283,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.ResolverEndpoint, _ *svcsd
 func nopLateInitialize(*svcapitypes.ResolverEndpointParameters, *svcsdk.GetResolverEndpointOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.ResolverEndpoint, *svcsdk.GetResolverEndpointOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.ResolverEndpoint, *svcsdk.GetResolverEndpointOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.ResolverEndpoint, *svcsdk.CreateResolverEndpointInput) error {

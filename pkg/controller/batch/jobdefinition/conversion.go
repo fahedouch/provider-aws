@@ -18,12 +18,13 @@ package jobdefinition
 
 import (
 	svcsdk "github.com/aws/aws-sdk-go/service/batch"
+	"k8s.io/utils/ptr"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/batch/manualv1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
-func generateJobDefinition(resp *svcsdk.DescribeJobDefinitionsOutput) *svcapitypes.JobDefinition { // nolint:gocyclo
+func generateJobDefinition(resp *svcsdk.DescribeJobDefinitionsOutput) *svcapitypes.JobDefinition { //nolint:gocyclo
 	cr := &svcapitypes.JobDefinition{}
 
 	for _, elem := range resp.JobDefinitions {
@@ -43,7 +44,7 @@ func generateJobDefinition(resp *svcsdk.DescribeJobDefinitionsOutput) *svcapityp
 			cr.Status.AtProvider.Status = nil
 		}
 		if elem.Type != nil {
-			cr.Spec.ForProvider.JobDefinitionType = awsclient.StringValue(elem.Type)
+			cr.Spec.ForProvider.JobDefinitionType = pointer.StringValue(elem.Type)
 		}
 		if elem.ContainerProperties != nil {
 			cr.Spec.ForProvider.ContainerProperties = getContainerProperties(elem.ContainerProperties)
@@ -52,7 +53,7 @@ func generateJobDefinition(resp *svcsdk.DescribeJobDefinitionsOutput) *svcapityp
 		if np != nil {
 			nodeProps := &svcapitypes.NodeProperties{}
 			if np.MainNode != nil {
-				nodeProps.MainNode = awsclient.Int64Value(np.MainNode)
+				nodeProps.MainNode = pointer.Int64Value(np.MainNode)
 			}
 			if np.NodeRangeProperties != nil {
 				noRaProps := []svcapitypes.NodeRangeProperty{}
@@ -61,13 +62,13 @@ func generateJobDefinition(resp *svcsdk.DescribeJobDefinitionsOutput) *svcapityp
 					if noRaProp.Container != nil {
 						apiNoRaProp.Container = getContainerProperties(noRaProp.Container)
 					}
-					apiNoRaProp.TargetNodes = awsclient.StringValue(noRaProp.TargetNodes)
+					apiNoRaProp.TargetNodes = pointer.StringValue(noRaProp.TargetNodes)
 					noRaProps = append(noRaProps, apiNoRaProp)
 				}
 				nodeProps.NodeRangeProperties = noRaProps
 			}
 			if np.NumNodes != nil {
-				nodeProps.NumNodes = awsclient.Int64Value(np.NumNodes)
+				nodeProps.NumNodes = pointer.Int64Value(np.NumNodes)
 			}
 			cr.Spec.ForProvider.NodeProperties = nodeProps
 		}
@@ -88,7 +89,7 @@ func generateJobDefinition(resp *svcsdk.DescribeJobDefinitionsOutput) *svcapityp
 				eoes := []*svcapitypes.EvaluateOnExit{}
 				for _, eoe := range elem.RetryStrategy.EvaluateOnExit {
 					eoes = append(eoes, &svcapitypes.EvaluateOnExit{
-						Action:         awsclient.StringValue(eoe.Action),
+						Action:         pointer.StringValue(eoe.Action),
 						OnExitCode:     eoe.OnExitCode,
 						OnReason:       eoe.OnReason,
 						OnStatusReason: eoe.OnStatusReason,
@@ -112,7 +113,7 @@ func generateJobDefinition(resp *svcsdk.DescribeJobDefinitionsOutput) *svcapityp
 }
 
 // Helper for generateJobDefinition() with filling ContainerProperties
-func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.ContainerProperties { // nolint:gocyclo
+func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.ContainerProperties { //nolint:gocyclo
 	speccp := &svcapitypes.ContainerProperties{}
 	if cp != nil {
 		if cp.Command != nil {
@@ -150,7 +151,7 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 				for _, device := range cp.LinuxParameters.Devices {
 					devices = append(devices, &svcapitypes.Device{
 						ContainerPath: device.ContainerPath,
-						HostPath:      awsclient.StringValue(device.HostPath),
+						HostPath:      pointer.StringValue(device.HostPath),
 						Permissions:   device.Permissions,
 					})
 				}
@@ -172,9 +173,9 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 				tmpfs := []*svcapitypes.Tmpfs{}
 				for _, tmpf := range cp.LinuxParameters.Tmpfs {
 					tmpfs = append(tmpfs, &svcapitypes.Tmpfs{
-						ContainerPath: awsclient.StringValue(tmpf.ContainerPath),
+						ContainerPath: pointer.StringValue(tmpf.ContainerPath),
 						MountOptions:  tmpf.MountOptions,
-						Size:          awsclient.Int64Value(tmpf.Size),
+						Size:          pointer.Int64Value(tmpf.Size),
 					})
 				}
 				lipa.Tmpfs = tmpfs
@@ -184,7 +185,7 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 		if cp.LogConfiguration != nil {
 			logConfi := &svcapitypes.LogConfiguration{}
 			if cp.LogConfiguration.LogDriver != nil {
-				logConfi.LogDriver = awsclient.StringValue(cp.LogConfiguration.LogDriver)
+				logConfi.LogDriver = pointer.StringValue(cp.LogConfiguration.LogDriver)
 			}
 			if cp.LogConfiguration.Options != nil {
 				logConfi.Options = cp.LogConfiguration.Options
@@ -193,8 +194,8 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 				secrets := []*svcapitypes.Secret{}
 				for _, secret := range cp.LogConfiguration.SecretOptions {
 					secrets = append(secrets, &svcapitypes.Secret{
-						Name:      awsclient.StringValue(secret.Name),
-						ValueFrom: awsclient.StringValue(secret.ValueFrom),
+						Name:      pointer.StringValue(secret.Name),
+						ValueFrom: pointer.StringValue(secret.ValueFrom),
 					})
 				}
 				logConfi.SecretOptions = secrets
@@ -226,8 +227,8 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 			resReqs := []*svcapitypes.ResourceRequirement{}
 			for _, resReq := range cp.ResourceRequirements {
 				resReqs = append(resReqs, &svcapitypes.ResourceRequirement{
-					ResourceType: awsclient.StringValue(resReq.Type),
-					Value:        awsclient.StringValue(resReq.Value),
+					ResourceType: pointer.StringValue(resReq.Type),
+					Value:        pointer.StringValue(resReq.Value),
 				})
 			}
 			speccp.ResourceRequirements = resReqs
@@ -236,8 +237,8 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 			secrets := []*svcapitypes.Secret{}
 			for _, secret := range cp.Secrets {
 				secrets = append(secrets, &svcapitypes.Secret{
-					Name:      awsclient.StringValue(secret.Name),
-					ValueFrom: awsclient.StringValue(secret.ValueFrom),
+					Name:      pointer.StringValue(secret.Name),
+					ValueFrom: pointer.StringValue(secret.ValueFrom),
 				})
 			}
 			speccp.Secrets = secrets
@@ -246,9 +247,9 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 			ulimits := []*svcapitypes.Ulimit{}
 			for _, ulimit := range cp.Ulimits {
 				ulimits = append(ulimits, &svcapitypes.Ulimit{
-					HardLimit: awsclient.Int64Value(ulimit.HardLimit),
-					Name:      awsclient.StringValue(ulimit.Name),
-					SoftLimit: awsclient.Int64Value(ulimit.SoftLimit),
+					HardLimit: pointer.Int64Value(ulimit.HardLimit),
+					Name:      pointer.StringValue(ulimit.Name),
+					SoftLimit: pointer.Int64Value(ulimit.SoftLimit),
 				})
 			}
 			speccp.Ulimits = ulimits
@@ -268,7 +269,7 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 							IAM:           volume.EfsVolumeConfiguration.AuthorizationConfig.Iam,
 						}
 					}
-					specVolumeConfig.FileSystemID = awsclient.StringValue(volume.EfsVolumeConfiguration.FileSystemId)
+					specVolumeConfig.FileSystemID = pointer.StringValue(volume.EfsVolumeConfiguration.FileSystemId)
 					specVolumeConfig.RootDirectory = volume.EfsVolumeConfiguration.RootDirectory
 					specVolumeConfig.TransitEncryption = volume.EfsVolumeConfiguration.TransitEncryption
 					specVolumeConfig.TransitEncryptionPort = volume.EfsVolumeConfiguration.TransitEncryptionPort
@@ -286,10 +287,10 @@ func getContainerProperties(cp *svcsdk.ContainerProperties) *svcapitypes.Contain
 	return speccp
 }
 
-func generateRegisterJobDefinitionInput(cr *svcapitypes.JobDefinition) *svcsdk.RegisterJobDefinitionInput { // nolint:gocyclo
+func generateRegisterJobDefinitionInput(cr *svcapitypes.JobDefinition) *svcsdk.RegisterJobDefinitionInput { //nolint:gocyclo
 	res := &svcsdk.RegisterJobDefinitionInput{}
-	res.JobDefinitionName = awsclient.String(cr.Name)
-	res.Type = awsclient.String(cr.Spec.ForProvider.JobDefinitionType)
+	res.JobDefinitionName = pointer.ToOrNilIfZeroValue(cr.Name)
+	res.Type = pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.JobDefinitionType)
 
 	if cr.Spec.ForProvider.ContainerProperties != nil {
 		res.ContainerProperties = assignContainerProperties(cr.Spec.ForProvider.ContainerProperties)
@@ -308,7 +309,7 @@ func generateRegisterJobDefinitionInput(cr *svcapitypes.JobDefinition) *svcsdk.R
 				if noRaProp.Container != nil {
 					sdkNoRaProp.Container = assignContainerProperties(noRaProp.Container)
 				}
-				sdkNoRaProp.TargetNodes = awsclient.String(noRaProp.TargetNodes)
+				sdkNoRaProp.TargetNodes = pointer.ToOrNilIfZeroValue(noRaProp.TargetNodes)
 				noRaProps = append(noRaProps, sdkNoRaProp)
 			}
 			nodeProps.NodeRangeProperties = noRaProps
@@ -338,7 +339,7 @@ func generateRegisterJobDefinitionInput(cr *svcapitypes.JobDefinition) *svcsdk.R
 			eoes := []*svcsdk.EvaluateOnExit{}
 			for _, eoe := range cr.Spec.ForProvider.RetryStrategy.EvaluateOnExit {
 				eoes = append(eoes, &svcsdk.EvaluateOnExit{
-					Action:         awsclient.String(eoe.Action),
+					Action:         pointer.ToOrNilIfZeroValue(eoe.Action),
 					OnExitCode:     eoe.OnExitCode,
 					OnReason:       eoe.OnReason,
 					OnStatusReason: eoe.OnStatusReason,
@@ -361,7 +362,7 @@ func generateRegisterJobDefinitionInput(cr *svcapitypes.JobDefinition) *svcsdk.R
 }
 
 // Helper for generateRegisterJobDefinitionInput() with filling ContainerProperties
-func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.ContainerProperties { // nolint:gocyclo
+func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.ContainerProperties { //nolint:gocyclo
 	sdkcp := &svcsdk.ContainerProperties{}
 	if cp != nil {
 		if cp.Command != nil {
@@ -399,7 +400,7 @@ func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.Cont
 				for _, device := range cp.LinuxParameters.Devices {
 					devices = append(devices, &svcsdk.Device{
 						ContainerPath: device.ContainerPath,
-						HostPath:      awsclient.String(device.HostPath),
+						HostPath:      pointer.ToOrNilIfZeroValue(device.HostPath),
 						Permissions:   device.Permissions,
 					})
 				}
@@ -421,9 +422,9 @@ func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.Cont
 				tmpfs := []*svcsdk.Tmpfs{}
 				for _, tmpf := range cp.LinuxParameters.Tmpfs {
 					tmpfs = append(tmpfs, &svcsdk.Tmpfs{
-						ContainerPath: awsclient.String(tmpf.ContainerPath),
+						ContainerPath: pointer.ToOrNilIfZeroValue(tmpf.ContainerPath),
 						MountOptions:  tmpf.MountOptions,
-						Size:          &tmpf.Size,
+						Size:          ptr.To(tmpf.Size),
 					})
 				}
 				lipa.Tmpfs = tmpfs
@@ -433,7 +434,7 @@ func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.Cont
 		if cp.LogConfiguration != nil {
 			logConfi := &svcsdk.LogConfiguration{}
 
-			logConfi.LogDriver = awsclient.String(cp.LogConfiguration.LogDriver)
+			logConfi.LogDriver = pointer.ToOrNilIfZeroValue(cp.LogConfiguration.LogDriver)
 
 			if cp.LogConfiguration.Options != nil {
 				logConfi.Options = cp.LogConfiguration.Options
@@ -442,8 +443,8 @@ func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.Cont
 				secrets := []*svcsdk.Secret{}
 				for _, secret := range cp.LogConfiguration.SecretOptions {
 					secrets = append(secrets, &svcsdk.Secret{
-						Name:      awsclient.String(secret.Name),
-						ValueFrom: awsclient.String(secret.ValueFrom),
+						Name:      pointer.ToOrNilIfZeroValue(secret.Name),
+						ValueFrom: pointer.ToOrNilIfZeroValue(secret.ValueFrom),
 					})
 				}
 				logConfi.SecretOptions = secrets
@@ -475,8 +476,8 @@ func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.Cont
 			resReqs := []*svcsdk.ResourceRequirement{}
 			for _, resReq := range cp.ResourceRequirements {
 				resReqs = append(resReqs, &svcsdk.ResourceRequirement{
-					Type:  awsclient.String(resReq.ResourceType),
-					Value: awsclient.String(resReq.Value),
+					Type:  pointer.ToOrNilIfZeroValue(resReq.ResourceType),
+					Value: pointer.ToOrNilIfZeroValue(resReq.Value),
 				})
 			}
 			sdkcp.ResourceRequirements = resReqs
@@ -485,8 +486,8 @@ func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.Cont
 			secrets := []*svcsdk.Secret{}
 			for _, secret := range cp.Secrets {
 				secrets = append(secrets, &svcsdk.Secret{
-					Name:      awsclient.String(secret.Name),
-					ValueFrom: awsclient.String(secret.ValueFrom),
+					Name:      pointer.ToOrNilIfZeroValue(secret.Name),
+					ValueFrom: pointer.ToOrNilIfZeroValue(secret.ValueFrom),
 				})
 			}
 			sdkcp.Secrets = secrets
@@ -495,9 +496,9 @@ func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.Cont
 			ulimits := []*svcsdk.Ulimit{}
 			for _, ulimit := range cp.Ulimits {
 				ulimits = append(ulimits, &svcsdk.Ulimit{
-					HardLimit: &ulimit.HardLimit,
-					Name:      awsclient.String(ulimit.Name),
-					SoftLimit: &ulimit.SoftLimit,
+					HardLimit: ptr.To(ulimit.HardLimit),
+					Name:      pointer.ToOrNilIfZeroValue(ulimit.Name),
+					SoftLimit: ptr.To(ulimit.SoftLimit),
 				})
 			}
 			sdkcp.Ulimits = ulimits
@@ -517,7 +518,7 @@ func assignContainerProperties(cp *svcapitypes.ContainerProperties) *svcsdk.Cont
 							Iam:           volume.EfsVolumeConfiguration.AuthorizationConfig.IAM,
 						}
 					}
-					sdkVolumeConfig.FileSystemId = awsclient.String(volume.EfsVolumeConfiguration.FileSystemID)
+					sdkVolumeConfig.FileSystemId = pointer.ToOrNilIfZeroValue(volume.EfsVolumeConfiguration.FileSystemID)
 					sdkVolumeConfig.RootDirectory = volume.EfsVolumeConfiguration.RootDirectory
 					sdkVolumeConfig.TransitEncryption = volume.EfsVolumeConfiguration.TransitEncryption
 					sdkVolumeConfig.TransitEncryptionPort = volume.EfsVolumeConfiguration.TransitEncryptionPort
