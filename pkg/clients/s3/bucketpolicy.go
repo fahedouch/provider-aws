@@ -18,14 +18,25 @@ package s3
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/google/go-cmp/cmp"
+	errors2 "github.com/pkg/errors"
 
-	"github.com/crossplane-contrib/provider-aws/apis/s3/v1alpha3"
+	"github.com/crossplane-contrib/provider-aws/apis/s3/common"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	policyutils "github.com/crossplane-contrib/provider-aws/pkg/utils/policy"
+)
+
+const (
+	policyFormatFailed  = "cannot format policy"
+	policyParseSpec     = "cannot parse spec policy"
+	policyParseExternal = "cannot parse external policy"
 )
 
 // BucketPolicyClient is the external client used for S3BucketPolicy Custom Resource
@@ -52,8 +63,44 @@ func IsErrorBucketNotFound(err error) bool {
 	return errors.As(err, &awsErr) && awsErr.ErrorCode() == "NoSuchBucket"
 }
 
+// DiffParsedPolicies compares two parsed policy strings, `spec` and `external`,
+// and returns the differences as a string.
+// It formats and parses the policies, handling any errors
+func DiffParsedPolicies(spec *common.BucketPolicyBody, external *string) (string, error) {
+	specRaw, err := FormatPolicy(spec)
+	if err != nil {
+		return "", errors2.Wrap(err, policyFormatFailed)
+	}
+	specParsed, err := policyutils.ParsePolicyString(pointer.StringValue(specRaw))
+	if err != nil {
+		return "", errors2.Wrap(err, policyParseSpec)
+	}
+	externalParsed, err := policyutils.ParsePolicyString(pointer.StringValue(external))
+	if err != nil {
+		return "", errors2.Wrap(err, policyParseExternal)
+	}
+	return cmp.Diff(specParsed, externalParsed), nil
+}
+
+// FormatPolicy parses and formats the BucketPolicyBody struct
+func FormatPolicy(policy *common.BucketPolicyBody) (*string, error) {
+	if policy == nil {
+		return nil, nil
+	}
+	body, err := Serialize(policy.DeepCopy())
+	if err != nil {
+		return nil, err
+	}
+	byteData, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	str := string(byteData)
+	return &str, nil
+}
+
 // Serialize is the custom marshaller for the BucketPolicyParameters
-func Serialize(p *v1alpha3.BucketPolicyBody) (interface{}, error) {
+func Serialize(p *common.BucketPolicyBody) (interface{}, error) {
 	m := make(map[string]interface{})
 	m["Version"] = p.Version
 	if p.ID != "" {
@@ -72,7 +119,7 @@ func Serialize(p *v1alpha3.BucketPolicyBody) (interface{}, error) {
 }
 
 // SerializeBucketPolicyStatement is the custom marshaller for the BucketPolicyStatement
-func SerializeBucketPolicyStatement(p v1alpha3.BucketPolicyStatement) (interface{}, error) { // nolint:gocyclo
+func SerializeBucketPolicyStatement(p common.BucketPolicyStatement) (interface{}, error) { //nolint:gocyclo
 	m := make(map[string]interface{})
 	if p.Principal != nil {
 		principal, err := SerializeBucketPrincipal(p.Principal)
@@ -115,7 +162,7 @@ func SerializeBucketPolicyStatement(p v1alpha3.BucketPolicyStatement) (interface
 }
 
 // SerializeBucketPrincipal is the custom serializer for the BucketPrincipal
-func SerializeBucketPrincipal(p *v1alpha3.BucketPrincipal) (interface{}, error) {
+func SerializeBucketPrincipal(p *common.BucketPrincipal) (interface{}, error) {
 	all := "*"
 	if p.AllowAnon {
 		return all, nil
@@ -140,7 +187,7 @@ func SerializeBucketPrincipal(p *v1alpha3.BucketPrincipal) (interface{}, error) 
 }
 
 // SerializeAWSPrincipal converts an AWSPrincipal to a string
-func SerializeAWSPrincipal(p v1alpha3.AWSPrincipal) *string {
+func SerializeAWSPrincipal(p common.AWSPrincipal) *string {
 	switch {
 	case p.AWSAccountID != nil:
 		return p.AWSAccountID
@@ -155,7 +202,7 @@ func SerializeAWSPrincipal(p v1alpha3.AWSPrincipal) *string {
 
 // SerializeBucketCondition converts the string -> Condition map
 // into a serialized version
-func SerializeBucketCondition(p []v1alpha3.Condition) (interface{}, error) {
+func SerializeBucketCondition(p []common.Condition) (interface{}, error) {
 	m := make(map[string]interface{})
 	for _, v := range p {
 		subMap := make(map[string]interface{})

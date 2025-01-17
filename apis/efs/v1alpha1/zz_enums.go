@@ -43,6 +43,8 @@ const (
 	ReplicationStatus_ENABLING ReplicationStatus = "ENABLING"
 	ReplicationStatus_DELETING ReplicationStatus = "DELETING"
 	ReplicationStatus_ERROR    ReplicationStatus = "ERROR"
+	ReplicationStatus_PAUSED   ReplicationStatus = "PAUSED"
+	ReplicationStatus_PAUSING  ReplicationStatus = "PAUSING"
 )
 
 type Resource string
@@ -73,6 +75,7 @@ type ThroughputMode string
 const (
 	ThroughputMode_bursting    ThroughputMode = "bursting"
 	ThroughputMode_provisioned ThroughputMode = "provisioned"
+	ThroughputMode_elastic     ThroughputMode = "elastic"
 )
 
 type TransitionToIARules string
@@ -83,6 +86,7 @@ const (
 	TransitionToIARules_AFTER_30_DAYS TransitionToIARules = "AFTER_30_DAYS"
 	TransitionToIARules_AFTER_60_DAYS TransitionToIARules = "AFTER_60_DAYS"
 	TransitionToIARules_AFTER_90_DAYS TransitionToIARules = "AFTER_90_DAYS"
+	TransitionToIARules_AFTER_1_DAY   TransitionToIARules = "AFTER_1_DAY"
 )
 
 type TransitionToPrimaryStorageClassRules string

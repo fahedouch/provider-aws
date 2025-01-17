@@ -312,7 +312,7 @@ func TestIsUpToDate(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			// Act
-			result, err := isUpToDate(tc.args.cr, tc.args.resp)
+			result, _, err := isUpToDate(context.Background(), tc.args.cr, tc.args.resp)
 
 			// Assert
 			if diff := cmp.Diff(tc.want.result, result, test.EquateConditions()); diff != "" {
@@ -438,7 +438,6 @@ func TestPostCreate(t *testing.T) {
 					withExternalName(testString1),
 				),
 				result: managed.ExternalCreation{
-					ExternalNameAssigned: true,
 					ConnectionDetails: managed.ConnectionDetails{
 						"clientID":     []byte(testString1),
 						"clientSecret": []byte(testString2),

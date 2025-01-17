@@ -19,15 +19,16 @@ package v1alpha1
 import (
 	"context"
 
-	database "github.com/crossplane-contrib/provider-aws/apis/database/v1beta1"
-	network "github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
-	iamv1beta1 "github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-	kmsv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/kms/v1alpha1"
-
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/reference"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	database "github.com/crossplane-contrib/provider-aws/apis/database/v1beta1"
+	network "github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
+	iamv1beta1 "github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
+	kmsv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/kms/v1alpha1"
 )
 
 // ResolveReferences of this DBCluster
@@ -244,3 +245,24 @@ func (mg *DBInstance) ResolveReferences(ctx context.Context, c client.Reader) er
 
 	return nil
 }
+
+// RDSClusterOrInstance interface to access common fields independent of the type
+// See: https://github.com/kubernetes-sigs/controller-tools/issues/471
+// +kubebuilder:object:generate=false
+type RDSClusterOrInstance interface {
+	resource.Managed
+	GetMasterUserPasswordSecretRef() *xpv1.SecretKeySelector
+}
+
+// GetMasterUserPasswordSecretRef returns the MasterUserPasswordSecretRef
+func (mg *DBInstance) GetMasterUserPasswordSecretRef() *xpv1.SecretKeySelector {
+	return mg.Spec.ForProvider.MasterUserPasswordSecretRef
+}
+
+// GetMasterUserPasswordSecretRef returns the MasterUserPasswordSecretRef
+func (mg *DBCluster) GetMasterUserPasswordSecretRef() *xpv1.SecretKeySelector {
+	return mg.Spec.ForProvider.MasterUserPasswordSecretRef
+}
+
+var _ RDSClusterOrInstance = (*DBInstance)(nil)
+var _ RDSClusterOrInstance = (*DBCluster)(nil)

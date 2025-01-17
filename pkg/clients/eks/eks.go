@@ -21,27 +21,26 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-
 	"net"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-
 	"github.com/crossplane-contrib/provider-aws/apis/eks/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
-
-	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -113,7 +112,7 @@ func IsErrorInvalidRequest(err error) bool {
 // GenerateCreateClusterInput from ClusterParameters.
 func GenerateCreateClusterInput(name string, p *v1beta1.ClusterParameters) *eks.CreateClusterInput {
 	c := &eks.CreateClusterInput{
-		Name:    awsclients.String(name),
+		Name:    pointer.ToOrNilIfZeroValue(name),
 		RoleArn: &p.RoleArn,
 		Version: p.Version,
 	}
@@ -127,7 +126,7 @@ func GenerateCreateClusterInput(name string, p *v1beta1.ClusterParameters) *eks.
 			IpFamily: ekstypes.IpFamily(p.KubernetesNetworkConfig.IPFamily),
 		}
 		if p.KubernetesNetworkConfig.ServiceIpv4Cidr != "" {
-			c.KubernetesNetworkConfig.ServiceIpv4Cidr = awsclients.String(p.KubernetesNetworkConfig.ServiceIpv4Cidr)
+			c.KubernetesNetworkConfig.ServiceIpv4Cidr = pointer.ToOrNilIfZeroValue(p.KubernetesNetworkConfig.ServiceIpv4Cidr)
 		}
 	}
 
@@ -167,7 +166,7 @@ func GenerateEncryptionConfig(parameters *v1beta1.ClusterParameters) []ekstypes.
 		for i, conf := range parameters.EncryptionConfig {
 			encryptionConfig[i] = ekstypes.EncryptionConfig{
 				Provider: &ekstypes.Provider{
-					KeyArn: awsclients.String(conf.Provider.KeyArn),
+					KeyArn: pointer.ToOrNilIfZeroValue(conf.Provider.KeyArn),
 				},
 				Resources: conf.Resources,
 			}
@@ -183,7 +182,10 @@ func CreatePatch(in *ekstypes.Cluster, target *v1beta1.ClusterParameters) (*v1be
 	currentParams := &v1beta1.ClusterParameters{}
 	LateInitialize(currentParams, in)
 
-	jsonPatch, err := awsclients.CreateJSONPatch(currentParams, target)
+	slices.Sort(currentParams.ResourcesVpcConfig.SubnetIDs)
+	slices.Sort(target.ResourcesVpcConfig.SubnetIDs)
+
+	jsonPatch, err := jsonpatch.CreateJSONPatch(currentParams, target)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +199,7 @@ func CreatePatch(in *ekstypes.Cluster, target *v1beta1.ClusterParameters) (*v1be
 // GenerateUpdateClusterConfigInputForLogging from ClusterParameters.
 func GenerateUpdateClusterConfigInputForLogging(name string, p *v1beta1.ClusterParameters) *eks.UpdateClusterConfigInput {
 	u := &eks.UpdateClusterConfigInput{
-		Name: awsclients.String(name),
+		Name: pointer.ToOrNilIfZeroValue(name),
 	}
 
 	u.Logging = &ekstypes.Logging{
@@ -219,31 +221,44 @@ func GenerateUpdateClusterConfigInputForLogging(name string, p *v1beta1.ClusterP
 // GenerateUpdateClusterConfigInputForVPC from ClusterParameters.
 func GenerateUpdateClusterConfigInputForVPC(name string, p *v1beta1.ClusterParameters) *eks.UpdateClusterConfigInput {
 	u := &eks.UpdateClusterConfigInput{
-		Name: awsclients.String(name),
+		Name: pointer.ToOrNilIfZeroValue(name),
 	}
 
-	// NOTE(muvaf): SecurityGroupIds and SubnetIds cannot be updated. They are
-	// included in VpcConfigRequest probably because it is used in Create call
-	// as well.
 	u.ResourcesVpcConfig = &ekstypes.VpcConfigRequest{
 		EndpointPrivateAccess: p.ResourcesVpcConfig.EndpointPrivateAccess,
 		EndpointPublicAccess:  p.ResourcesVpcConfig.EndpointPublicAccess,
 		PublicAccessCidrs:     p.ResourcesVpcConfig.PublicAccessCidrs,
+		SubnetIds:             p.ResourcesVpcConfig.SubnetIDs,
+		SecurityGroupIds:      p.ResourcesVpcConfig.SecurityGroupIDs,
+	}
+	return u
+}
+
+// GenerateUpdateClusterConfigInputForAccessConfig from ClusterParameters.
+func GenerateUpdateClusterConfigInputForAccessConfig(name string, p *v1beta1.ClusterParameters) *eks.UpdateClusterConfigInput {
+	u := &eks.UpdateClusterConfigInput{
+		Name: pointer.ToOrNilIfZeroValue(name),
+	}
+
+	if p.AccessConfig != nil && p.AccessConfig.AuthenticationMode != nil {
+		u.AccessConfig = &ekstypes.UpdateAccessConfigRequest{
+			AuthenticationMode: ekstypes.AuthenticationMode(string(*p.AccessConfig.AuthenticationMode)),
+		}
 	}
 	return u
 }
 
 // GenerateObservation is used to produce v1beta1.ClusterObservation from
 // ekstypes.Cluster.
-func GenerateObservation(cluster *ekstypes.Cluster) v1beta1.ClusterObservation { // nolint:gocyclo
+func GenerateObservation(cluster *ekstypes.Cluster) v1beta1.ClusterObservation {
 	if cluster == nil {
 		return v1beta1.ClusterObservation{}
 	}
 	o := v1beta1.ClusterObservation{
-		Arn:             awsclients.StringValue(cluster.Arn),
-		Endpoint:        awsclients.StringValue(cluster.Endpoint),
-		PlatformVersion: awsclients.StringValue(cluster.PlatformVersion),
-		Version:         awsclients.StringValue(cluster.Version),
+		Arn:             pointer.StringValue(cluster.Arn),
+		Endpoint:        pointer.StringValue(cluster.Endpoint),
+		PlatformVersion: pointer.StringValue(cluster.PlatformVersion),
+		Version:         pointer.StringValue(cluster.Version),
 		Status:          v1beta1.ClusterStatusType(cluster.Status),
 	}
 
@@ -254,14 +269,14 @@ func GenerateObservation(cluster *ekstypes.Cluster) v1beta1.ClusterObservation {
 	if cluster.Identity != nil && cluster.Identity.Oidc != nil {
 		o.Identity = v1beta1.Identity{
 			OIDC: v1beta1.OIDC{
-				Issuer: awsclients.StringValue(cluster.Identity.Oidc.Issuer),
+				Issuer: pointer.StringValue(cluster.Identity.Oidc.Issuer),
 			},
 		}
 	}
 
 	if cluster.OutpostConfig != nil {
 		o.OutpostConfig = v1beta1.OutpostConfigResponse{
-			ControlPlaneInstanceType: awsclients.StringValue(cluster.OutpostConfig.ControlPlaneInstanceType),
+			ControlPlaneInstanceType: pointer.StringValue(cluster.OutpostConfig.ControlPlaneInstanceType),
 			OutpostArns:              cluster.OutpostConfig.OutpostArns,
 		}
 	}
@@ -269,27 +284,33 @@ func GenerateObservation(cluster *ekstypes.Cluster) v1beta1.ClusterObservation {
 	if cluster.KubernetesNetworkConfig != nil {
 		o.KubernetesNetworkConfig = v1beta1.KubernetesNetworkConfigResponse{
 			IPFamily:        v1beta1.IPFamily(cluster.KubernetesNetworkConfig.IpFamily),
-			ServiceIpv4Cidr: awsclients.StringValue(cluster.KubernetesNetworkConfig.ServiceIpv4Cidr),
-			ServiceIpv6Cidr: awsclients.StringValue(cluster.KubernetesNetworkConfig.ServiceIpv6Cidr),
+			ServiceIpv4Cidr: pointer.StringValue(cluster.KubernetesNetworkConfig.ServiceIpv4Cidr),
+			ServiceIpv6Cidr: pointer.StringValue(cluster.KubernetesNetworkConfig.ServiceIpv6Cidr),
 		}
 	}
 
 	if cluster.ResourcesVpcConfig != nil {
 		o.ResourcesVpcConfig = v1beta1.VpcConfigResponse{
-			ClusterSecurityGroupID: awsclients.StringValue(cluster.ResourcesVpcConfig.ClusterSecurityGroupId),
-			VpcID:                  awsclients.StringValue(cluster.ResourcesVpcConfig.VpcId),
+			ClusterSecurityGroupID: pointer.StringValue(cluster.ResourcesVpcConfig.ClusterSecurityGroupId),
+			VpcID:                  pointer.StringValue(cluster.ResourcesVpcConfig.VpcId),
+		}
+	}
+
+	if cluster.AccessConfig != nil {
+		o.AccessConfig = v1beta1.AccessConfigResponse{
+			AuthenticationMode: v1beta1.AuthenticationMode(cluster.AccessConfig.AuthenticationMode),
 		}
 	}
 
 	if cluster.CertificateAuthority != nil {
-		o.CertificateAuthorityData = awsclients.StringValue(cluster.CertificateAuthority.Data)
+		o.CertificateAuthorityData = pointer.StringValue(cluster.CertificateAuthority.Data)
 	}
 	return o
 }
 
 // LateInitialize fills the empty fields in *v1beta1.ClusterParameters with the
 // values seen in ekstypes.Cluster.
-func LateInitialize(in *v1beta1.ClusterParameters, cluster *ekstypes.Cluster) { // nolint:gocyclo
+func LateInitialize(in *v1beta1.ClusterParameters, cluster *ekstypes.Cluster) { //nolint:gocyclo
 	if cluster == nil {
 		return
 	}
@@ -322,14 +343,14 @@ func LateInitialize(in *v1beta1.ClusterParameters, cluster *ekstypes.Cluster) { 
 		}
 	}
 	if cluster.OutpostConfig != nil {
-		in.OutpostConfig.ControlPlaneInstanceType = awsclients.StringValue(cluster.OutpostConfig.ControlPlaneInstanceType)
+		in.OutpostConfig.ControlPlaneInstanceType = pointer.StringValue(cluster.OutpostConfig.ControlPlaneInstanceType)
 		if len(in.OutpostConfig.OutpostArns) == 0 && len(cluster.OutpostConfig.OutpostArns) > 0 {
 			in.OutpostConfig.OutpostArns = cluster.OutpostConfig.OutpostArns
 		}
 	}
 	if cluster.ResourcesVpcConfig != nil {
-		in.ResourcesVpcConfig.EndpointPrivateAccess = awsclients.LateInitializeBoolPtr(in.ResourcesVpcConfig.EndpointPrivateAccess, &cluster.ResourcesVpcConfig.EndpointPrivateAccess)
-		in.ResourcesVpcConfig.EndpointPublicAccess = awsclients.LateInitializeBoolPtr(in.ResourcesVpcConfig.EndpointPublicAccess, &cluster.ResourcesVpcConfig.EndpointPublicAccess)
+		in.ResourcesVpcConfig.EndpointPrivateAccess = pointer.LateInitialize(in.ResourcesVpcConfig.EndpointPrivateAccess, &cluster.ResourcesVpcConfig.EndpointPrivateAccess)
+		in.ResourcesVpcConfig.EndpointPublicAccess = pointer.LateInitialize(in.ResourcesVpcConfig.EndpointPublicAccess, &cluster.ResourcesVpcConfig.EndpointPublicAccess)
 		if len(in.ResourcesVpcConfig.PublicAccessCidrs) == 0 && len(cluster.ResourcesVpcConfig.PublicAccessCidrs) > 0 {
 			in.ResourcesVpcConfig.PublicAccessCidrs = cluster.ResourcesVpcConfig.PublicAccessCidrs
 		}
@@ -341,8 +362,27 @@ func LateInitialize(in *v1beta1.ClusterParameters, cluster *ekstypes.Cluster) { 
 			in.ResourcesVpcConfig.SubnetIDs = cluster.ResourcesVpcConfig.SubnetIds
 		}
 	}
-	in.RoleArn = awsclients.LateInitializeString(in.RoleArn, cluster.RoleArn)
-	in.Version = awsclients.LateInitializeStringPtr(in.Version, cluster.Version)
+	if in.KubernetesNetworkConfig == nil && cluster.KubernetesNetworkConfig != nil {
+		in.KubernetesNetworkConfig = &v1beta1.KubernetesNetworkConfigRequest{
+			ServiceIpv4Cidr: pointer.StringValue(cluster.KubernetesNetworkConfig.ServiceIpv4Cidr),
+			IPFamily:        v1beta1.IPFamily(cluster.KubernetesNetworkConfig.IpFamily),
+		}
+	}
+	if cluster.AccessConfig != nil {
+		currentAuthenticationMode := v1beta1.AuthenticationMode(cluster.AccessConfig.AuthenticationMode)
+		if in.AccessConfig == nil {
+			in.AccessConfig = &v1beta1.AccessConfig{
+				AuthenticationMode: &currentAuthenticationMode,
+			}
+		} else {
+			in.AccessConfig = &v1beta1.AccessConfig{
+				AuthenticationMode: pointer.LateInitialize(in.AccessConfig.AuthenticationMode, &currentAuthenticationMode),
+			}
+		}
+	}
+
+	in.RoleArn = pointer.LateInitializeValueFromPtr(in.RoleArn, cluster.RoleArn)
+	in.Version = pointer.LateInitialize(in.Version, cluster.Version)
 	// NOTE(hasheddan): we always will set the default Crossplane tags in
 	// practice during initialization in the controller, but we check if no tags
 	// exist for consistency with expected late initialization behavior.
@@ -387,7 +427,7 @@ func IsUpToDate(p *v1beta1.ClusterParameters, cluster *ekstypes.Cluster) (bool, 
 	res := cmp.Equal(&v1beta1.ClusterParameters{}, patch, cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(&xpv1.Reference{}, &xpv1.Selector{}, []xpv1.Reference{}),
 		cmpopts.IgnoreFields(v1beta1.ClusterParameters{}, "Region"),
-		cmpopts.IgnoreFields(v1beta1.VpcConfigRequest{}, "PublicAccessCidrs", "SubnetIDs", "SecurityGroupIDs"))
+		cmpopts.IgnoreFields(v1beta1.VpcConfigRequest{}, "PublicAccessCidrs"))
 	return res, nil
 }
 

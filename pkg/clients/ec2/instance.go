@@ -21,13 +21,13 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	ec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/manualv1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -60,7 +60,7 @@ func IsInstanceNotFoundErr(err error) bool {
 // and observed state of the resource.
 func IsInstanceUpToDate(spec manualv1alpha1.InstanceParameters, instance types.Instance, attributes ec2.DescribeInstanceAttributeOutput) bool {
 	// DisableApiTermination
-	if awsclients.BoolValue(spec.DisableAPITermination) != attributeBoolValue(attributes.DisableApiTermination) {
+	if pointer.BoolValue(spec.DisableAPITermination) != attributeBoolValue(attributes.DisableApiTermination) {
 		return false
 	}
 	// InstanceInitiatedShutdownBehavior
@@ -68,23 +68,55 @@ func IsInstanceUpToDate(spec manualv1alpha1.InstanceParameters, instance types.I
 		return false
 	}
 	// KernalID
-	if awsclients.StringValue(spec.KernelID) != awsclients.StringValue(instance.KernelId) {
+	if pointer.StringValue(spec.KernelID) != pointer.StringValue(instance.KernelId) {
 		return false
 	}
 	// RamDiskID
-	if awsclients.StringValue(spec.RAMDiskID) != awsclients.StringValue(instance.RamdiskId) {
+	if pointer.StringValue(spec.RAMDiskID) != pointer.StringValue(instance.RamdiskId) {
 		return false
 	}
 	// UserData
-	if awsclients.StringValue(spec.UserData) != attributeValue(attributes.UserData) {
+	if pointer.StringValue(spec.UserData) != attributeValue(attributes.UserData) {
 		return false
 	}
-	return manualv1alpha1.CompareGroupIDs(spec.SecurityGroupIDs, instance.SecurityGroups)
+
+	// Tags
+	existingTags := map[string]string{}
+	for _, t := range instance.Tags {
+		existingTags[*t.Key] = *t.Value
+	}
+	for _, t := range spec.Tags {
+		// A tag is missing from the instance or the value does match the expected value.
+		value, ok := existingTags[t.Key]
+		if !ok {
+			return false
+		}
+		if value != t.Value {
+			return false
+		}
+	}
+
+	return CompareGroupIDs(spec.SecurityGroupIDs, instance.SecurityGroups)
 }
 
 // GenerateInstanceObservation is used to produce manualv1alpha1.InstanceObservation from
 // a []ec2.Instance.
-func GenerateInstanceObservation(i types.Instance) manualv1alpha1.InstanceObservation {
+func GenerateInstanceObservation(i types.Instance, attributes *ec2.DescribeInstanceAttributeOutput) manualv1alpha1.InstanceObservation {
+	var disableAPITermination *bool = nil
+	if attributes.DisableApiTermination != nil {
+		disableAPITermination = attributes.DisableApiTermination.Value
+	}
+
+	var instanceInitiatedShutdownBehavior *string = nil
+	if attributes.InstanceInitiatedShutdownBehavior != nil {
+		instanceInitiatedShutdownBehavior = attributes.InstanceInitiatedShutdownBehavior.Value
+	}
+
+	var userData *string = nil
+	if attributes.UserData != nil {
+		userData = attributes.UserData.Value
+	}
+
 	return manualv1alpha1.InstanceObservation{
 		AmiLaunchIndex:                          i.AmiLaunchIndex,
 		Architecture:                            string(i.Architecture),
@@ -93,6 +125,7 @@ func GenerateInstanceObservation(i types.Instance) manualv1alpha1.InstanceObserv
 		CapacityReservationSpecification:        GenerateCapacityReservationSpecResponse(i.CapacityReservationSpecification),
 		ClientToken:                             i.ClientToken,
 		CPUOptons:                               GenerateCPUOptionsRequest(i.CpuOptions),
+		DisableAPITermination:                   disableAPITermination,
 		EBSOptimized:                            i.EbsOptimized,
 		ElasticGPUAssociations:                  GenerateElasticGPUAssociation(i.ElasticGpuAssociations),
 		ElasticInferenceAcceleratorAssociations: GenerateElasticInferenceAcceleratorAssociation(i.ElasticInferenceAcceleratorAssociations),
@@ -102,6 +135,7 @@ func GenerateInstanceObservation(i types.Instance) manualv1alpha1.InstanceObserv
 		IAMInstanceProfile:                      GenerateIAMInstanceProfile(i.IamInstanceProfile),
 		ImageID:                                 i.ImageId,
 		InstanceID:                              i.InstanceId,
+		InstanceInitiatedShutdownBehavior:       instanceInitiatedShutdownBehavior,
 		InstanceLifecycle:                       string(i.InstanceLifecycle),
 		InstanceType:                            string(i.InstanceType),
 		KernelID:                                i.KernelId,
@@ -130,6 +164,7 @@ func GenerateInstanceObservation(i types.Instance) manualv1alpha1.InstanceObserv
 		StateTransitionReason:                   i.StateTransitionReason,
 		SubnetID:                                i.SubnetId,
 		Tags:                                    GenerateTags(i.Tags),
+		UserData:                                userData,
 		VirtualizationType:                      string(i.VirtualizationType),
 		VPCID:                                   i.VpcId,
 	}
@@ -177,30 +212,30 @@ const (
 
 // LateInitializeInstance fills the empty fields in *manualv1alpha1.InstanceParameters with
 // the values seen in ec2.Instance and ec2.DescribeInstanceAttributeOutput.
-func LateInitializeInstance(in *manualv1alpha1.InstanceParameters, instance *types.Instance, attributes *ec2.DescribeInstanceAttributeOutput) { // nolint:gocyclo
+func LateInitializeInstance(in *manualv1alpha1.InstanceParameters, instance *types.Instance, attributes *ec2.DescribeInstanceAttributeOutput) { //nolint:gocyclo
 	if instance == nil {
 		return
 	}
 
 	if attributes.DisableApiTermination != nil {
-		in.DisableAPITermination = awsclients.LateInitializeBoolPtr(in.DisableAPITermination, attributes.DisableApiTermination.Value)
+		in.DisableAPITermination = pointer.LateInitialize(in.DisableAPITermination, attributes.DisableApiTermination.Value)
 	}
 
 	if attributes.InstanceInitiatedShutdownBehavior != nil {
-		in.InstanceInitiatedShutdownBehavior = awsclients.LateInitializeString(in.InstanceInitiatedShutdownBehavior, attributes.InstanceInitiatedShutdownBehavior.Value)
+		in.InstanceInitiatedShutdownBehavior = pointer.LateInitializeValueFromPtr(in.InstanceInitiatedShutdownBehavior, attributes.InstanceInitiatedShutdownBehavior.Value)
 	}
 
-	if attributes.InstanceType != nil {
-		in.InstanceType = awsclients.LateInitializeString(in.InstanceType, attributes.InstanceType.Value)
+	if in.InstanceType == "" {
+		in.InstanceType = string(instance.InstanceType)
 	}
 
 	if attributes.UserData != nil {
-		in.UserData = awsclients.LateInitializeStringPtr(in.UserData, attributes.UserData.Value)
+		in.UserData = pointer.LateInitialize(in.UserData, attributes.UserData.Value)
 	}
 
-	in.EBSOptimized = awsclients.LateInitializeBoolPtr(in.EBSOptimized, instance.EbsOptimized)
-	in.KernelID = awsclients.LateInitializeStringPtr(in.KernelID, instance.KernelId)
-	in.RAMDiskID = awsclients.LateInitializeStringPtr(in.RAMDiskID, instance.RamdiskId)
+	in.EBSOptimized = pointer.LateInitialize(in.EBSOptimized, instance.EbsOptimized)
+	in.KernelID = pointer.LateInitialize(in.KernelID, instance.KernelId)
+	in.RAMDiskID = pointer.LateInitialize(in.RAMDiskID, instance.RamdiskId)
 
 	if len(in.SecurityGroupIDs) == 0 && len(instance.SecurityGroups) != 0 {
 		in.SecurityGroupIDs = make([]string, len(instance.SecurityGroups))
@@ -225,6 +260,7 @@ func GenerateEC2BlockDeviceMappings(mappings []manualv1alpha1.BlockDeviceMapping
 					DeleteOnTermination: bm.EBS.DeleteOnTermination,
 					Encrypted:           bm.EBS.Encrypted,
 					Iops:                bm.EBS.IOps,
+					Throughput:          bm.EBS.Throughput,
 					KmsKeyId:            bm.EBS.KmsKeyID,
 					SnapshotId:          bm.EBS.SnapshotID,
 					VolumeSize:          bm.EBS.VolumeSize,
@@ -503,6 +539,20 @@ func GenerateEC2InstanceIPV6Addresses(addrs []manualv1alpha1.InstanceIPv6Address
 	return nil
 }
 
+// GenerateEC2Ipv6PrefixSpecificationRequest coverts an internal slice of Ipv6PrefixSpecificationRequest into a slice of ec2.Ipv6PrefixSpecificationRequest
+func GenerateEC2Ipv6PrefixSpecificationRequest(prefixes []manualv1alpha1.Ipv6PrefixSpecificationRequest) []types.Ipv6PrefixSpecificationRequest {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	res := make([]types.Ipv6PrefixSpecificationRequest, len(prefixes))
+	for i, a := range prefixes {
+		res[i] = types.Ipv6PrefixSpecificationRequest{
+			Ipv6Prefix: aws.String(a.Ipv6Prefix),
+		}
+	}
+	return res
+}
+
 // GenerateInstanceIPV6Addresses coverts a slice of ec2.InstanceIpv6Address into a slice of internal InstanceIPv6Address
 func GenerateInstanceIPV6Addresses(addrs []types.InstanceIpv6Address) []manualv1alpha1.InstanceIPv6Address {
 	if addrs != nil {
@@ -592,6 +642,8 @@ func GenerateEC2InstanceNetworkInterfaceSpecs(specs []manualv1alpha1.InstanceNet
 				InterfaceType:                  s.InterfaceType,
 				Ipv6AddressCount:               s.IPv6AddressCount,
 				Ipv6Addresses:                  GenerateEC2InstanceIPV6Addresses(s.IPv6Addresses),
+				Ipv6PrefixCount:                s.Ipv6PrefixCount,
+				Ipv6Prefixes:                   GenerateEC2Ipv6PrefixSpecificationRequest(s.Ipv6Prefixes),
 				NetworkInterfaceId:             s.NetworkInterfaceID,
 				PrivateIpAddress:               s.PrivateIPAddress,
 				PrivateIpAddresses:             GenerateEC2PrivateIPAddressSpecs(s.PrivateIPAddresses),
@@ -895,7 +947,7 @@ func attributeBoolValue(v *types.AttributeBooleanValue) bool {
 	if v == nil {
 		return false
 	}
-	return awsclients.BoolValue(v.Value)
+	return pointer.BoolValue(v.Value)
 }
 
 // attributeValue helps will comparing string values against nested pointers
@@ -903,5 +955,5 @@ func attributeValue(v *types.AttributeValue) string {
 	if v == nil {
 		return ""
 	}
-	return awsclients.StringValue(v.Value)
+	return pointer.StringValue(v.Value)
 }

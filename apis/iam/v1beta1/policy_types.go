@@ -17,9 +17,8 @@ limitations under the License.
 package v1beta1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // PolicyParameters define the desired state of an AWS IAM Policy.
@@ -46,7 +45,7 @@ type PolicyParameters struct {
 	Tags []Tag `json:"tags,omitempty"`
 }
 
-// An PolicySpec defines the desired state of an Policy.
+// A PolicySpec defines the desired state of a Policy.
 type PolicySpec struct {
 	xpv1.ResourceSpec `json:",inline"`
 	ForProvider       PolicyParameters `json:"forProvider"`
@@ -75,7 +74,7 @@ type PolicyObservation struct {
 	PolicyID string `json:"policyId,omitempty"`
 }
 
-// An PolicyStatus represents the observed state of an Policy.
+// A PolicyStatus represents the observed state of a Policy.
 type PolicyStatus struct {
 	xpv1.ResourceStatus `json:",inline"`
 	AtProvider          PolicyObservation `json:"atProvider,omitempty"`
@@ -83,7 +82,7 @@ type PolicyStatus struct {
 
 // +kubebuilder:object:root=true
 
-// An Policy is a managed resource that represents an AWS IAM Policy.
+// A Policy is a managed resource that represents an AWS IAM Policy.
 // +kubebuilder:printcolumn:name="ARN",type="string",JSONPath=".status.atProvider.arn"
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"

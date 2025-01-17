@@ -5,22 +5,20 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/crossplane-contrib/provider-aws/apis/sns/v1beta1"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awssns "github.com/aws/aws-sdk-go-v2/service/sns"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/apis/sns/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/sns"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/sns/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -153,7 +151,7 @@ func TestCreate(t *testing.T) {
 			want: want{
 				cr: subscription(
 					withSubARN(&subName)),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -247,7 +245,7 @@ func TestUpdate(t *testing.T) {
 				cr: subscription(
 					withSubARN(&subName),
 				),
-				err: awsclient.Wrap(errBoom, errUpdate),
+				err: errorutils.Wrap(errBoom, errUpdate),
 			},
 		},
 		"ClientSetSubscriptionAttributeError": {
@@ -271,7 +269,7 @@ func TestUpdate(t *testing.T) {
 				cr: subscription(
 					withSubARN(&subName),
 				),
-				err: awsclient.Wrap(errBoom, errUpdate),
+				err: errorutils.Wrap(errBoom, errUpdate),
 			},
 		},
 	}
@@ -347,7 +345,7 @@ func TestDelete(t *testing.T) {
 					withSubARN(&subName),
 					withConditions(xpv1.Deleting()),
 				),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 		"ResourceDoesNotExist": {

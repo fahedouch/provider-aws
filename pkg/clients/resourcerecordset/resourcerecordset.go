@@ -26,15 +26,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
-	"github.com/crossplane-contrib/provider-aws/pkg/clients/hostedzone"
-
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-
 	"github.com/crossplane-contrib/provider-aws/apis/route53/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/clients/hostedzone"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -72,9 +71,11 @@ func NewClient(cfg aws.Config) Client {
 // GetResourceRecordSet returns recordSet if present or err
 func GetResourceRecordSet(ctx context.Context, name string, params v1alpha1.ResourceRecordSetParameters, c Client) (*route53types.ResourceRecordSet, error) {
 	res, err := c.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{
-		HostedZoneId:    params.ZoneID,
-		StartRecordName: &name,
-		StartRecordType: route53types.RRType(params.Type),
+		HostedZoneId:          params.ZoneID,
+		StartRecordName:       &name,
+		StartRecordType:       route53types.RRType(params.Type),
+		StartRecordIdentifier: params.SetIdentifier,
+		MaxItems:              aws.Int32(1),
 	})
 	if err != nil {
 		return nil, err
@@ -166,19 +167,23 @@ func LateInitialize(in *v1alpha1.ResourceRecordSetParameters, rrSet *route53type
 		return
 	}
 	if rrSet.AliasTarget != nil {
-		in.AliasTarget = &v1alpha1.AliasTarget{}
-		in.AliasTarget.HostedZoneID = awsclients.LateInitializeString(in.AliasTarget.HostedZoneID, rrSet.AliasTarget.HostedZoneId)
-		in.AliasTarget.DNSName = awsclients.LateInitializeString(in.AliasTarget.DNSName, rrSet.AliasTarget.DNSName)
+		if in.AliasTarget == nil {
+			in.AliasTarget = &v1alpha1.AliasTarget{}
+		}
+		in.AliasTarget.HostedZoneID = pointer.LateInitializeValueFromPtr(in.AliasTarget.HostedZoneID, rrSet.AliasTarget.HostedZoneId)
+		in.AliasTarget.DNSName = pointer.LateInitializeValueFromPtr(in.AliasTarget.DNSName, rrSet.AliasTarget.DNSName)
 		in.AliasTarget.EvaluateTargetHealth = rrSet.AliasTarget.EvaluateTargetHealth
 	}
 	rrType := string(rrSet.Type)
-	in.Type = awsclients.LateInitializeString(in.Type, &rrType)
-	in.TTL = awsclients.LateInitializeInt64Ptr(in.TTL, rrSet.TTL)
+	in.Type = pointer.LateInitializeValueFromPtr(in.Type, &rrType)
+	in.TTL = pointer.LateInitialize(in.TTL, rrSet.TTL)
+	in.MultiValueAnswer = pointer.LateInitialize(in.MultiValueAnswer, rrSet.MultiValueAnswer)
+	in.SetIdentifier = pointer.LateInitialize(in.SetIdentifier, rrSet.SetIdentifier)
 	if len(in.ResourceRecords) == 0 && len(rrSet.ResourceRecords) != 0 {
 		in.ResourceRecords = make([]v1alpha1.ResourceRecord, len(rrSet.ResourceRecords))
 		for i, val := range rrSet.ResourceRecords {
 			in.ResourceRecords[i] = v1alpha1.ResourceRecord{
-				Value: awsclients.StringValue(val.Value),
+				Value: pointer.StringValue(val.Value),
 			}
 		}
 	}
@@ -195,7 +200,7 @@ func CreatePatch(in *route53types.ResourceRecordSet, target *v1alpha1.ResourceRe
 	// skip its comparison.
 	currentParams.ZoneID = target.ZoneID
 
-	jsonPatch, err := awsclients.CreateJSONPatch(currentParams, target)
+	jsonPatch, err := jsonpatch.CreateJSONPatch(currentParams, target)
 	if err != nil {
 		return nil, err
 	}

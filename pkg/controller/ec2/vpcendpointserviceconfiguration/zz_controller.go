@@ -34,7 +34,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ec2/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -57,7 +58,7 @@ func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
@@ -80,7 +81,7 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeVpcEndpointServiceConfigurationsWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	resp = e.filterList(cr, resp)
 	if len(resp.ServiceConfigurations) == 0 {
@@ -91,14 +92,18 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateVPCEndpointServiceConfiguration(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
@@ -115,7 +120,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateVpcEndpointServiceConfigurationWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.ClientToken != nil {
@@ -209,19 +214,28 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 			}
 			f1.ServiceType = f1f12
 		}
-		if resp.ServiceConfiguration.Tags != nil {
-			f1f13 := []*svcapitypes.Tag{}
-			for _, f1f13iter := range resp.ServiceConfiguration.Tags {
-				f1f13elem := &svcapitypes.Tag{}
-				if f1f13iter.Key != nil {
-					f1f13elem.Key = f1f13iter.Key
-				}
-				if f1f13iter.Value != nil {
-					f1f13elem.Value = f1f13iter.Value
-				}
-				f1f13 = append(f1f13, f1f13elem)
+		if resp.ServiceConfiguration.SupportedIpAddressTypes != nil {
+			f1f13 := []*string{}
+			for _, f1f13iter := range resp.ServiceConfiguration.SupportedIpAddressTypes {
+				var f1f13elem string
+				f1f13elem = *f1f13iter
+				f1f13 = append(f1f13, &f1f13elem)
 			}
-			f1.Tags = f1f13
+			f1.SupportedIPAddressTypes = f1f13
+		}
+		if resp.ServiceConfiguration.Tags != nil {
+			f1f14 := []*svcapitypes.Tag{}
+			for _, f1f14iter := range resp.ServiceConfiguration.Tags {
+				f1f14elem := &svcapitypes.Tag{}
+				if f1f14iter.Key != nil {
+					f1f14elem.Key = f1f14iter.Key
+				}
+				if f1f14iter.Value != nil {
+					f1f14elem.Value = f1f14iter.Value
+				}
+				f1f14 = append(f1f14, f1f14elem)
+			}
+			f1.Tags = f1f14
 		}
 		cr.Status.AtProvider.ServiceConfiguration = f1
 	} else {
@@ -241,7 +255,7 @@ func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.E
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.ModifyVpcEndpointServiceConfigurationWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
 func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
@@ -284,7 +298,7 @@ type external struct {
 	postObserve    func(context.Context, *svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	filterList     func(*svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput) *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput
 	lateInitialize func(*svcapitypes.VPCEndpointServiceConfigurationParameters, *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput) error
-	isUpToDate     func(*svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.CreateVpcEndpointServiceConfigurationInput) error
 	postCreate     func(context.Context, *svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.CreateVpcEndpointServiceConfigurationOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	delete         func(context.Context, cpresource.Managed) error
@@ -305,8 +319,8 @@ func nopFilterList(_ *svcapitypes.VPCEndpointServiceConfiguration, list *svcsdk.
 func nopLateInitialize(*svcapitypes.VPCEndpointServiceConfigurationParameters, *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.DescribeVpcEndpointServiceConfigurationsOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.VPCEndpointServiceConfiguration, *svcsdk.CreateVpcEndpointServiceConfigurationInput) error {

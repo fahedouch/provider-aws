@@ -7,7 +7,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
@@ -34,18 +34,18 @@ func TestGenerateAddressObservation(t *testing.T) {
 	}{
 		"AllFilled": {
 			in: ec2types.Address{
-				AllocationId:            aws.String(allocationID),
-				AssociationId:           aws.String(associationID),
-				CustomerOwnedIp:         aws.String(testIPAddress),
-				CustomerOwnedIpv4Pool:   aws.String(poolName),
+				AllocationId:            pointer.ToOrNilIfZeroValue(allocationID),
+				AssociationId:           pointer.ToOrNilIfZeroValue(associationID),
+				CustomerOwnedIp:         pointer.ToOrNilIfZeroValue(testIPAddress),
+				CustomerOwnedIpv4Pool:   pointer.ToOrNilIfZeroValue(poolName),
 				Domain:                  ec2types.DomainType(domain),
-				InstanceId:              aws.String(instanceID),
-				NetworkBorderGroup:      aws.String(networkBorderGroup),
-				NetworkInterfaceId:      aws.String(networkInterfaceID),
-				NetworkInterfaceOwnerId: aws.String(networkInterfaceOwnerID),
-				PrivateIpAddress:        aws.String(testIPAddress),
-				PublicIp:                aws.String(testIPAddress),
-				PublicIpv4Pool:          aws.String(poolName),
+				InstanceId:              pointer.ToOrNilIfZeroValue(instanceID),
+				NetworkBorderGroup:      pointer.ToOrNilIfZeroValue(networkBorderGroup),
+				NetworkInterfaceId:      pointer.ToOrNilIfZeroValue(networkInterfaceID),
+				NetworkInterfaceOwnerId: pointer.ToOrNilIfZeroValue(networkInterfaceOwnerID),
+				PrivateIpAddress:        pointer.ToOrNilIfZeroValue(testIPAddress),
+				PublicIp:                pointer.ToOrNilIfZeroValue(testIPAddress),
+				PublicIpv4Pool:          pointer.ToOrNilIfZeroValue(poolName),
 				Tags:                    []ec2types.Tag{ec2tag},
 			},
 			out: v1beta1.AddressObservation{

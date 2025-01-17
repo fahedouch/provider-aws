@@ -18,14 +18,13 @@ package job
 
 import (
 	svcsdk "github.com/aws/aws-sdk-go/service/batch"
-
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/batch/manualv1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
-func generateJob(resp *svcsdk.DescribeJobsOutput) *svcapitypes.Job { // nolint:gocyclo
+func generateJob(resp *svcsdk.DescribeJobsOutput) *svcapitypes.Job { //nolint:gocyclo
 	cr := &svcapitypes.Job{}
 
 	for _, elem := range resp.Jobs {
@@ -115,10 +114,10 @@ func generateJob(resp *svcsdk.DescribeJobsOutput) *svcapitypes.Job { // nolint:g
 			cr.Spec.ForProvider.DependsOn = nil
 		}
 		if elem.JobDefinition != nil {
-			cr.Spec.ForProvider.JobDefinition = awsclient.StringValue(elem.JobDefinition)
+			cr.Spec.ForProvider.JobDefinition = pointer.StringValue(elem.JobDefinition)
 		}
 		if elem.JobQueue != nil {
-			cr.Spec.ForProvider.JobQueue = awsclient.StringValue(elem.JobQueue)
+			cr.Spec.ForProvider.JobQueue = pointer.StringValue(elem.JobQueue)
 		}
 		np := elem.NodeProperties
 		if np != nil {
@@ -130,7 +129,7 @@ func generateJob(resp *svcsdk.DescribeJobsOutput) *svcapitypes.Job { // nolint:g
 					if noRaProp.Container != nil {
 						apiNoProOver.ContainerOverrides = getContainerOverridesFromProperties(noRaProp.Container)
 					}
-					apiNoProOver.TargetNodes = awsclient.StringValue(noRaProp.TargetNodes)
+					apiNoProOver.TargetNodes = pointer.StringValue(noRaProp.TargetNodes)
 					noProOver = append(noProOver, apiNoProOver)
 				}
 				nodeOvers.NodePropertyOverrides = noProOver
@@ -153,7 +152,7 @@ func generateJob(resp *svcsdk.DescribeJobsOutput) *svcapitypes.Job { // nolint:g
 				eoes := []*svcapitypes.EvaluateOnExit{}
 				for _, eoe := range elem.RetryStrategy.EvaluateOnExit {
 					eoes = append(eoes, &svcapitypes.EvaluateOnExit{
-						Action:         awsclient.StringValue(eoe.Action),
+						Action:         pointer.StringValue(eoe.Action),
 						OnExitCode:     eoe.OnExitCode,
 						OnReason:       eoe.OnReason,
 						OnStatusReason: eoe.OnStatusReason,
@@ -198,8 +197,8 @@ func getContainerOverridesFromDetail(co *svcsdk.ContainerDetail) *svcapitypes.Co
 			resReqs := []*svcapitypes.ResourceRequirement{}
 			for _, resReq := range co.ResourceRequirements {
 				resReqs = append(resReqs, &svcapitypes.ResourceRequirement{
-					ResourceType: awsclient.StringValue(resReq.Type),
-					Value:        awsclient.StringValue(resReq.Value),
+					ResourceType: pointer.StringValue(resReq.Type),
+					Value:        pointer.StringValue(resReq.Value),
 				})
 			}
 			specco.ResourceRequirements = resReqs
@@ -232,8 +231,8 @@ func getContainerOverridesFromProperties(co *svcsdk.ContainerProperties) *svcapi
 			resReqs := []*svcapitypes.ResourceRequirement{}
 			for _, resReq := range co.ResourceRequirements {
 				resReqs = append(resReqs, &svcapitypes.ResourceRequirement{
-					ResourceType: awsclient.StringValue(resReq.Type),
-					Value:        awsclient.StringValue(resReq.Value),
+					ResourceType: pointer.StringValue(resReq.Type),
+					Value:        pointer.StringValue(resReq.Value),
 				})
 			}
 			specco.ResourceRequirements = resReqs
@@ -242,9 +241,9 @@ func getContainerOverridesFromProperties(co *svcsdk.ContainerProperties) *svcapi
 	return specco
 }
 
-func generateSubmitJobInput(cr *svcapitypes.Job) *svcsdk.SubmitJobInput { // nolint:gocyclo
+func generateSubmitJobInput(cr *svcapitypes.Job) *svcsdk.SubmitJobInput { //nolint:gocyclo
 	res := &svcsdk.SubmitJobInput{}
-	res.JobName = awsclient.String(cr.Name)
+	res.JobName = pointer.ToOrNilIfZeroValue(cr.Name)
 
 	if cr.Spec.ForProvider.ArrayProperties != nil {
 		res.ArrayProperties = &svcsdk.ArrayProperties{Size: cr.Spec.ForProvider.ArrayProperties.Size}
@@ -267,8 +266,8 @@ func generateSubmitJobInput(cr *svcapitypes.Job) *svcsdk.SubmitJobInput { // nol
 		res.DependsOn = nil
 	}
 
-	res.JobDefinition = awsclient.String(cr.Spec.ForProvider.JobDefinition)
-	res.JobQueue = awsclient.String(cr.Spec.ForProvider.JobQueue)
+	res.JobDefinition = pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.JobDefinition)
+	res.JobQueue = pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.JobQueue)
 
 	np := cr.Spec.ForProvider.NodeOverrides
 	if np != nil {
@@ -280,7 +279,7 @@ func generateSubmitJobInput(cr *svcapitypes.Job) *svcsdk.SubmitJobInput { // nol
 				if noProOvers.ContainerOverrides != nil {
 					sdkNoProOver.ContainerOverrides = assignContainerOverrides(noProOvers.ContainerOverrides)
 				}
-				sdkNoProOver.TargetNodes = awsclient.String(noProOvers.TargetNodes)
+				sdkNoProOver.TargetNodes = pointer.ToOrNilIfZeroValue(noProOvers.TargetNodes)
 				noProOver = append(noProOver, sdkNoProOver)
 			}
 			nodeOvers.NodePropertyOverrides = noProOver
@@ -306,7 +305,7 @@ func generateSubmitJobInput(cr *svcapitypes.Job) *svcsdk.SubmitJobInput { // nol
 			eoes := []*svcsdk.EvaluateOnExit{}
 			for _, eoe := range cr.Spec.ForProvider.RetryStrategy.EvaluateOnExit {
 				eoes = append(eoes, &svcsdk.EvaluateOnExit{
-					Action:         awsclient.String(eoe.Action),
+					Action:         pointer.ToOrNilIfZeroValue(eoe.Action),
 					OnExitCode:     eoe.OnExitCode,
 					OnReason:       eoe.OnReason,
 					OnStatusReason: eoe.OnStatusReason,
@@ -352,8 +351,8 @@ func assignContainerOverrides(co *svcapitypes.ContainerOverrides) *svcsdk.Contai
 			resReqs := []*svcsdk.ResourceRequirement{}
 			for _, resReq := range co.ResourceRequirements {
 				resReqs = append(resReqs, &svcsdk.ResourceRequirement{
-					Type:  awsclient.String(resReq.ResourceType),
-					Value: awsclient.String(resReq.Value),
+					Type:  pointer.ToOrNilIfZeroValue(resReq.ResourceType),
+					Value: pointer.ToOrNilIfZeroValue(resReq.Value),
 				})
 			}
 			specco.ResourceRequirements = resReqs
@@ -364,7 +363,7 @@ func assignContainerOverrides(co *svcapitypes.ContainerOverrides) *svcsdk.Contai
 
 func generateTerminateJobInput(cr *svcapitypes.Job, msg *string) *svcsdk.TerminateJobInput {
 	res := &svcsdk.TerminateJobInput{
-		JobId:  awsclient.String(meta.GetExternalName(cr)),
+		JobId:  pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		Reason: msg,
 	}
 

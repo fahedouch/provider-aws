@@ -5,10 +5,10 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/google/go-cmp/cmp"
 
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	apigwclient "github.com/crossplane-contrib/provider-aws/pkg/clients/apigateway"
 )
 
@@ -26,7 +26,7 @@ func normalizePolicy(p *string) (*string, error) {
 }
 
 type wrapper struct {
-	Data string
+	Data string `json:"data,omitempty"`
 }
 
 func policyEscapedStringToMap(p *string) (map[string]interface{}, error) {

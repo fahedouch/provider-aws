@@ -28,6 +28,11 @@ var (
 )
 
 // +kubebuilder:skipversion
+type AmazonMskCluster struct {
+	MskClusterARN *string `json:"mskClusterARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type BrokerEBSVolumeInfo struct {
 	KafkaBrokerNodeID *string `json:"kafkaBrokerNodeID,omitempty"`
 	// Contains information about provisioned throughput for EBS storage volumes
@@ -64,6 +69,8 @@ type BrokerNodeGroupInfo struct {
 	SecurityGroups []*string `json:"securityGroups,omitempty"`
 	// Contains information about storage volumes attached to MSK broker nodes.
 	StorageInfo *StorageInfo `json:"storageInfo,omitempty"`
+
+	ZoneIDs []*string `json:"zoneIDs,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -90,11 +97,22 @@ type BrokerSoftwareInfo struct {
 
 // +kubebuilder:skipversion
 type ClientAuthentication struct {
-	Sasl *Sasl `json:"sasl,omitempty"`
+	SASL *SASL `json:"sasl,omitempty"`
 	// Details for client authentication using TLS.
 	TLS *TLS `json:"tls,omitempty"`
 	// Contains information about unauthenticated traffic to the cluster.
 	Unauthenticated *Unauthenticated `json:"unauthenticated,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ClientVPCConnection struct {
+	Authentication *string `json:"authentication,omitempty"`
+
+	CreationTime *metav1.Time `json:"creationTime,omitempty"`
+
+	Owner *string `json:"owner,omitempty"`
+
+	VPCConnectionARN *string `json:"vpcConnectionARN,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -142,6 +160,8 @@ type ClusterInfo struct {
 	State *string `json:"state,omitempty"`
 	// Contains information about the state of the Amazon MSK cluster.
 	StateInfo *StateInfo `json:"stateInfo,omitempty"`
+	// Controls storage mode for various supported storage tiers.
+	StorageMode *string `json:"storageMode,omitempty"`
 
 	Tags map[string]*string `json:"tags,omitempty"`
 
@@ -175,6 +195,36 @@ type ClusterOperationStep struct {
 // +kubebuilder:skipversion
 type ClusterOperationStepInfo struct {
 	StepStatus *string `json:"stepStatus,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ClusterOperationV2 struct {
+	ClusterARN *string `json:"clusterARN,omitempty"`
+
+	EndTime *metav1.Time `json:"endTime,omitempty"`
+
+	OperationARN *string `json:"operationARN,omitempty"`
+
+	OperationState *string `json:"operationState,omitempty"`
+
+	OperationType *string `json:"operationType,omitempty"`
+
+	StartTime *metav1.Time `json:"startTime,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ClusterOperationV2Summary struct {
+	ClusterARN *string `json:"clusterARN,omitempty"`
+
+	EndTime *metav1.Time `json:"endTime,omitempty"`
+
+	OperationARN *string `json:"operationARN,omitempty"`
+
+	OperationState *string `json:"operationState,omitempty"`
+
+	OperationType *string `json:"operationType,omitempty"`
+
+	StartTime *metav1.Time `json:"startTime,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -240,6 +290,22 @@ type Configuration_SDK struct {
 type ConnectivityInfo struct {
 	// Broker public access control.
 	PublicAccess *PublicAccess `json:"publicAccess,omitempty"`
+	// Broker VPC connectivity access control.
+	VPCConnectivity *VPCConnectivity `json:"vpcConnectivity,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ConsumerGroupReplication struct {
+	DetectAndCopyNewConsumerGroups *bool `json:"detectAndCopyNewConsumerGroups,omitempty"`
+
+	SynchroniseConsumerGroupOffsets *bool `json:"synchroniseConsumerGroupOffsets,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ConsumerGroupReplicationUpdate struct {
+	DetectAndCopyNewConsumerGroups *bool `json:"detectAndCopyNewConsumerGroups,omitempty"`
+
+	SynchroniseConsumerGroupOffsets *bool `json:"synchroniseConsumerGroupOffsets,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -302,6 +368,23 @@ type JmxExporterInfo struct {
 }
 
 // +kubebuilder:skipversion
+type KafkaClusterClientVPCConfig struct {
+	SecurityGroupIDs []*string `json:"securityGroupIDs,omitempty"`
+
+	SubnetIDs []*string `json:"subnetIDs,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type KafkaClusterDescription struct {
+	KafkaClusterAlias *string `json:"kafkaClusterAlias,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type KafkaClusterSummary struct {
+	KafkaClusterAlias *string `json:"kafkaClusterAlias,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type KafkaVersion struct {
 	Version *string `json:"version,omitempty"`
 }
@@ -339,6 +422,8 @@ type MutableClusterInfo struct {
 	NumberOfBrokerNodes *int64 `json:"numberOfBrokerNodes,omitempty"`
 	// JMX and Node monitoring for the MSK cluster.
 	OpenMonitoring *OpenMonitoring `json:"openMonitoring,omitempty"`
+	// Controls storage mode for various supported storage tiers.
+	StorageMode *string `json:"storageMode,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -413,6 +498,8 @@ type Provisioned struct {
 	NumberOfBrokerNodes *int64 `json:"numberOfBrokerNodes,omitempty"`
 	// JMX and Node monitoring for the MSK cluster.
 	OpenMonitoring *OpenMonitoringInfo `json:"openMonitoring,omitempty"`
+	// Controls storage mode for various supported storage tiers.
+	StorageMode *string `json:"storageMode,omitempty"`
 
 	ZookeeperConnectString *string `json:"zookeeperConnectString,omitempty"`
 
@@ -444,6 +531,8 @@ type ProvisionedRequest struct {
 	NumberOfBrokerNodes *int64 `json:"numberOfBrokerNodes,omitempty"`
 	// JMX and Node monitoring for the MSK cluster.
 	OpenMonitoring *OpenMonitoringInfo `json:"openMonitoring,omitempty"`
+	// Controls storage mode for various supported storage tiers.
+	StorageMode *string `json:"storageMode,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -459,6 +548,49 @@ type PublicAccess struct {
 }
 
 // +kubebuilder:skipversion
+type ReplicationInfo struct {
+	SourceKafkaClusterARN *string `json:"sourceKafkaClusterARN,omitempty"`
+
+	TargetKafkaClusterARN *string `json:"targetKafkaClusterARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ReplicationInfoDescription struct {
+	SourceKafkaClusterAlias *string `json:"sourceKafkaClusterAlias,omitempty"`
+
+	TargetKafkaClusterAlias *string `json:"targetKafkaClusterAlias,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ReplicationInfoSummary struct {
+	SourceKafkaClusterAlias *string `json:"sourceKafkaClusterAlias,omitempty"`
+
+	TargetKafkaClusterAlias *string `json:"targetKafkaClusterAlias,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ReplicationStateInfo struct {
+	Code *string `json:"code,omitempty"`
+
+	Message *string `json:"message,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ReplicatorSummary struct {
+	CreationTime *metav1.Time `json:"creationTime,omitempty"`
+
+	CurrentVersion *string `json:"currentVersion,omitempty"`
+
+	IsReplicatorReference *bool `json:"isReplicatorReference,omitempty"`
+
+	ReplicatorARN *string `json:"replicatorARN,omitempty"`
+
+	ReplicatorName *string `json:"replicatorName,omitempty"`
+
+	ReplicatorResourceARN *string `json:"replicatorResourceARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type S3 struct {
 	Bucket *string `json:"bucket,omitempty"`
 
@@ -468,19 +600,19 @@ type S3 struct {
 }
 
 // +kubebuilder:skipversion
-type Sasl struct {
+type SASL struct {
 	IAM *IAM `json:"iam,omitempty"`
 
-	Scram *Scram `json:"scram,omitempty"`
+	SCRAM *SCRAM `json:"scram,omitempty"`
 }
 
 // +kubebuilder:skipversion
-type Scram struct {
+type SCRAM struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // +kubebuilder:skipversion
-type ServerlessSasl struct {
+type ServerlessSASL struct {
 	IAM *IAM `json:"iam,omitempty"`
 }
 
@@ -506,12 +638,30 @@ type TLS struct {
 }
 
 // +kubebuilder:skipversion
+type TopicReplication struct {
+	CopyAccessControlListsForTopics *bool `json:"copyAccessControlListsForTopics,omitempty"`
+
+	CopyTopicConfigurations *bool `json:"copyTopicConfigurations,omitempty"`
+
+	DetectAndCopyNewTopics *bool `json:"detectAndCopyNewTopics,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type TopicReplicationUpdate struct {
+	CopyAccessControlListsForTopics *bool `json:"copyAccessControlListsForTopics,omitempty"`
+
+	CopyTopicConfigurations *bool `json:"copyTopicConfigurations,omitempty"`
+
+	DetectAndCopyNewTopics *bool `json:"detectAndCopyNewTopics,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type Unauthenticated struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // +kubebuilder:skipversion
-type UnprocessedScramSecret struct {
+type UnprocessedSCRAMSecret struct {
 	ErrorCode *string `json:"errorCode,omitempty"`
 
 	ErrorMessage *string `json:"errorMessage,omitempty"`
@@ -520,10 +670,80 @@ type UnprocessedScramSecret struct {
 }
 
 // +kubebuilder:skipversion
+type UserIdentity struct {
+	PrincipalID *string `json:"principalID,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type VPCConfig struct {
 	SecurityGroupIDs []*string `json:"securityGroupIDs,omitempty"`
 
 	SubnetIDs []*string `json:"subnetIDs,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnection struct {
+	Authentication *string `json:"authentication,omitempty"`
+
+	CreationTime *metav1.Time `json:"creationTime,omitempty"`
+
+	TargetClusterARN *string `json:"targetClusterARN,omitempty"`
+
+	VPCConnectionARN *string `json:"vpcConnectionARN,omitempty"`
+
+	VPCID *string `json:"vpcID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnectionInfo struct {
+	CreationTime *metav1.Time `json:"creationTime,omitempty"`
+
+	Owner *string `json:"owner,omitempty"`
+
+	VPCConnectionARN *string `json:"vpcConnectionARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnectionInfoServerless struct {
+	CreationTime *metav1.Time `json:"creationTime,omitempty"`
+
+	Owner *string `json:"owner,omitempty"`
+
+	VPCConnectionARN *string `json:"vpcConnectionARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnectivity struct {
+	ClientAuthentication *VPCConnectivityClientAuthentication `json:"clientAuthentication,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnectivityClientAuthentication struct {
+	SASL *VPCConnectivitySASL `json:"sasl,omitempty"`
+
+	TLS *VPCConnectivityTLS `json:"tls,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnectivityIAM struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnectivitySASL struct {
+	IAM *VPCConnectivityIAM `json:"iam,omitempty"`
+
+	SCRAM *VPCConnectivitySCRAM `json:"scram,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnectivitySCRAM struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VPCConnectivityTLS struct {
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // +kubebuilder:skipversion
