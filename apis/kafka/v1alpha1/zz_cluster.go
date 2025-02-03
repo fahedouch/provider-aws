@@ -49,6 +49,8 @@ type ClusterParameters struct {
 	NumberOfBrokerNodes *int64 `json:"numberOfBrokerNodes"`
 	// The settings for open monitoring.
 	OpenMonitoring *OpenMonitoringInfo `json:"openMonitoring,omitempty"`
+	// This controls storage mode for supported storage tiers.
+	StorageMode *string `json:"storageMode,omitempty"`
 	// Create tags when creating the cluster.
 	Tags                    map[string]*string `json:"tags,omitempty"`
 	CustomClusterParameters `json:",inline"`
@@ -62,11 +64,17 @@ type ClusterSpec struct {
 
 // ClusterObservation defines the observed state of Cluster
 type ClusterObservation struct {
+	// Information about the brokers.
+	BrokerNodeGroupInfo *BrokerNodeGroupInfo `json:"brokerNodeGroupInfo,omitempty"`
 	// The Amazon Resource Name (ARN) of the cluster.
 	ClusterARN *string `json:"clusterARN,omitempty"`
+	// Cluster policy version.
+	ClusterPolicyVersion *string `json:"clusterPolicyVersion,omitempty"`
 	// The state of the cluster. The possible states are ACTIVE, CREATING, DELETING,
 	// FAILED, HEALING, MAINTENANCE, REBOOTING_BROKER, and UPDATING.
 	State *string `json:"state,omitempty"`
+
+	CustomClusterObservation `json:",inline"`
 }
 
 // ClusterStatus defines the observed state of Cluster.
@@ -81,6 +89,7 @@ type ClusterStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

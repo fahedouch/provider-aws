@@ -148,6 +148,20 @@ const (
 	ExportStatus_FAILED      ExportStatus = "FAILED"
 )
 
+type ExportType string
+
+const (
+	ExportType_FULL_EXPORT        ExportType = "FULL_EXPORT"
+	ExportType_INCREMENTAL_EXPORT ExportType = "INCREMENTAL_EXPORT"
+)
+
+type ExportViewType string
+
+const (
+	ExportViewType_NEW_IMAGE          ExportViewType = "NEW_IMAGE"
+	ExportViewType_NEW_AND_OLD_IMAGES ExportViewType = "NEW_AND_OLD_IMAGES"
+)
+
 type GlobalTableStatus_SDK string
 
 const (
@@ -157,6 +171,16 @@ const (
 	GlobalTableStatus_SDK_UPDATING GlobalTableStatus_SDK = "UPDATING"
 )
 
+type ImportStatus string
+
+const (
+	ImportStatus_IN_PROGRESS ImportStatus = "IN_PROGRESS"
+	ImportStatus_COMPLETED   ImportStatus = "COMPLETED"
+	ImportStatus_CANCELLING  ImportStatus = "CANCELLING"
+	ImportStatus_CANCELLED   ImportStatus = "CANCELLED"
+	ImportStatus_FAILED      ImportStatus = "FAILED"
+)
+
 type IndexStatus string
 
 const (
@@ -164,6 +188,22 @@ const (
 	IndexStatus_UPDATING IndexStatus = "UPDATING"
 	IndexStatus_DELETING IndexStatus = "DELETING"
 	IndexStatus_ACTIVE   IndexStatus = "ACTIVE"
+)
+
+type InputCompressionType string
+
+const (
+	InputCompressionType_GZIP InputCompressionType = "GZIP"
+	InputCompressionType_ZSTD InputCompressionType = "ZSTD"
+	InputCompressionType_NONE InputCompressionType = "NONE"
+)
+
+type InputFormat string
+
+const (
+	InputFormat_DYNAMODB_JSON InputFormat = "DYNAMODB_JSON"
+	InputFormat_ION           InputFormat = "ION"
+	InputFormat_CSV           InputFormat = "CSV"
 )
 
 type KeyType string

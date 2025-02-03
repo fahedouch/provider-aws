@@ -3,7 +3,6 @@ package ec2
 import (
 	"context"
 	"errors"
-	"sort"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -11,7 +10,7 @@ import (
 	"github.com/aws/smithy-go"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -56,15 +55,15 @@ func GenerateAddressObservation(address ec2types.Address) v1beta1.AddressObserva
 
 // LateInitializeAddress fills the empty fields in *v1beta1.AddressParameters with
 // the values seen in ec2types.Address.
-func LateInitializeAddress(in *v1beta1.AddressParameters, a *ec2types.Address) { // nolint:gocyclo
+func LateInitializeAddress(in *v1beta1.AddressParameters, a *ec2types.Address) {
 	if a == nil {
 		return
 	}
-	in.Address = awsclients.LateInitializeStringPtr(in.Address, a.PublicIp)
-	in.Domain = awsclients.LateInitializeStringPtr(in.Domain, aws.String(string(a.Domain)))
-	in.CustomerOwnedIPv4Pool = awsclients.LateInitializeStringPtr(in.CustomerOwnedIPv4Pool, a.CustomerOwnedIpv4Pool)
-	in.NetworkBorderGroup = awsclients.LateInitializeStringPtr(in.NetworkBorderGroup, a.NetworkBorderGroup)
-	in.PublicIPv4Pool = awsclients.LateInitializeStringPtr(in.PublicIPv4Pool, a.PublicIpv4Pool)
+	in.Address = pointer.LateInitialize(in.Address, a.PublicIp)
+	in.Domain = pointer.LateInitialize(in.Domain, aws.String(string(a.Domain)))
+	in.CustomerOwnedIPv4Pool = pointer.LateInitialize(in.CustomerOwnedIPv4Pool, a.CustomerOwnedIpv4Pool)
+	in.NetworkBorderGroup = pointer.LateInitialize(in.NetworkBorderGroup, a.NetworkBorderGroup)
+	in.PublicIPv4Pool = pointer.LateInitialize(in.PublicIPv4Pool, a.PublicIpv4Pool)
 	if len(in.Tags) == 0 && len(a.Tags) != 0 {
 		in.Tags = BuildFromEC2Tags(a.Tags)
 	}
@@ -100,32 +99,4 @@ func BuildFromEC2Tags(tags []ec2types.Tag) []v1beta1.Tag {
 	}
 
 	return res
-}
-
-// CompareTags compares arrays of v1beta1.Tag and ec2types.Tag
-func CompareTags(tags []v1beta1.Tag, ec2Tags []ec2types.Tag) bool {
-	if len(tags) != len(ec2Tags) {
-		return false
-	}
-
-	SortTags(tags, ec2Tags)
-
-	for i, t := range tags {
-		if t.Key != *ec2Tags[i].Key || t.Value != *ec2Tags[i].Value {
-			return false
-		}
-	}
-
-	return true
-}
-
-// SortTags sorts array of v1beta1.Tag and ec2types.Tag on 'Key'
-func SortTags(tags []v1beta1.Tag, ec2Tags []ec2types.Tag) {
-	sort.Slice(tags, func(i, j int) bool {
-		return tags[i].Key < tags[j].Key
-	})
-
-	sort.Slice(ec2Tags, func(i, j int) bool {
-		return *ec2Tags[i].Key < *ec2Tags[j].Key
-	})
 }

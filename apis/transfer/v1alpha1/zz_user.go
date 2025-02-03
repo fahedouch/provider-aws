@@ -33,15 +33,16 @@ type UserParameters struct {
 	// using the client.
 	//
 	// A HomeDirectory example is /bucket_name/home/mydirectory.
+	//
+	// The HomeDirectory parameter is only used if HomeDirectoryType is set to PATH.
 	HomeDirectory *string `json:"homeDirectory,omitempty"`
 	// Logical directory mappings that specify what Amazon S3 or Amazon EFS paths
 	// and keys should be visible to your user and how you want to make them visible.
 	// You must specify the Entry and Target pair, where Entry shows how the path
 	// is made visible and Target is the actual Amazon S3 or Amazon EFS path. If
 	// you only specify a target, it is displayed as is. You also must ensure that
-	// your Amazon Web Services Identity and Access Management (IAM) role provides
-	// access to paths in Target. This value can only be set when HomeDirectoryType
-	// is set to LOGICAL.
+	// your Identity and Access Management (IAM) role provides access to paths in
+	// Target. This value can be set only when HomeDirectoryType is set to LOGICAL.
 	//
 	// The following is an Entry and Target pair example.
 	//
@@ -49,30 +50,37 @@ type UserParameters struct {
 	//
 	// In most cases, you can use this value instead of the session policy to lock
 	// your user down to the designated home directory ("chroot"). To do this, you
-	// can set Entry to / and set Target to the HomeDirectory parameter value.
+	// can set Entry to / and set Target to the value the user should see for their
+	// home directory when they log in.
 	//
 	// The following is an Entry and Target pair example for chroot.
 	//
 	// [ { "Entry": "/", "Target": "/bucket_name/home/mydirectory" } ]
 	HomeDirectoryMappings []*HomeDirectoryMapEntry `json:"homeDirectoryMappings,omitempty"`
-	// The type of landing directory (folder) you want your users' home directory
-	// to be when they log into the server. If you set it to PATH, the user will
-	// see the absolute Amazon S3 bucket or EFS paths as is in their file transfer
-	// protocol clients. If you set it LOGICAL, you need to provide mappings in
-	// the HomeDirectoryMappings for how you want to make Amazon S3 or EFS paths
-	// visible to your users.
+	// The type of landing directory (folder) that you want your users' home directory
+	// to be when they log in to the server. If you set it to PATH, the user will
+	// see the absolute Amazon S3 bucket or Amazon EFS path as is in their file
+	// transfer protocol clients. If you set it to LOGICAL, you need to provide
+	// mappings in the HomeDirectoryMappings for how you want to make Amazon S3
+	// or Amazon EFS paths visible to your users.
+	//
+	// If HomeDirectoryType is LOGICAL, you must provide mappings, using the HomeDirectoryMappings
+	// parameter. If, on the other hand, HomeDirectoryType is PATH, you provide
+	// an absolute path using the HomeDirectory parameter. You cannot have both
+	// HomeDirectory and HomeDirectoryMappings in your template.
 	HomeDirectoryType *string `json:"homeDirectoryType,omitempty"`
-	// A session policy for your user so that you can use the same IAM role across
-	// multiple users. This policy scopes down user access to portions of their
-	// Amazon S3 bucket. Variables that you can use inside this policy include ${Transfer:UserName},
-	// ${Transfer:HomeDirectory}, and ${Transfer:HomeBucket}.
+	// A session policy for your user so that you can use the same Identity and
+	// Access Management (IAM) role across multiple users. This policy scopes down
+	// a user's access to portions of their Amazon S3 bucket. Variables that you
+	// can use inside this policy include ${Transfer:UserName}, ${Transfer:HomeDirectory},
+	// and ${Transfer:HomeBucket}.
 	//
-	// This only applies when the domain of ServerId is S3. EFS does not use session
-	// policies.
+	// This policy applies only when the domain of ServerId is Amazon S3. Amazon
+	// EFS does not use session policies.
 	//
-	// For session policies, Amazon Web Services Transfer Family stores the policy
-	// as a JSON blob, instead of the Amazon Resource Name (ARN) of the policy.
-	// You save the policy as a JSON blob and pass it in the Policy argument.
+	// For session policies, Transfer Family stores the policy as a JSON blob, instead
+	// of the Amazon Resource Name (ARN) of the policy. You save the policy as a
+	// JSON blob and pass it in the Policy argument.
 	//
 	// For an example of a session policy, see Example session policy (https://docs.aws.amazon.com/transfer/latest/userguide/session-policy.html).
 	//
@@ -85,12 +93,6 @@ type UserParameters struct {
 	// and directories in Amazon EFS determine the level of access your users get
 	// when transferring files into and out of your Amazon EFS file systems.
 	PosixProfile *PosixProfile `json:"posixProfile,omitempty"`
-	// The public portion of the Secure Shell (SSH) key used to authenticate the
-	// user to the server.
-	//
-	// Currently, Transfer Family does not accept elliptical curve keys (keys beginning
-	// with ecdsa).
-	SshPublicKeyBody *string `json:"sshPublicKeyBody,omitempty"`
 	// Key-value pairs that can be used to group and search for users. Tags are
 	// metadata attached to users for any purpose.
 	Tags                 []*Tag `json:"tags,omitempty"`
@@ -105,10 +107,18 @@ type UserSpec struct {
 
 // UserObservation defines the observed state of User
 type UserObservation struct {
-	// The ID of the server that the user is attached to.
+	// Specifies the unique Amazon Resource Name (ARN) for the user that was requested
+	// to be described.
+	ARN *string `json:"arn,omitempty"`
+	// The identifier of the server that the user is attached to.
 	ServerID *string `json:"serverID,omitempty"`
-	// A unique string that identifies a user account associated with a server.
+	// Specifies the public key portion of the Secure Shell (SSH) keys stored for
+	// the described user.
+	SshPublicKeys []*SshPublicKey `json:"sshPublicKeys,omitempty"`
+	// A unique string that identifies a Transfer Family user.
 	UserName *string `json:"userName,omitempty"`
+
+	CustomUserObservation `json:",inline"`
 }
 
 // UserStatus defines the observed state of User.
@@ -123,6 +133,7 @@ type UserStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

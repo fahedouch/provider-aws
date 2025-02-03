@@ -41,6 +41,9 @@ type TableParameters struct {
 	//    * PAY_PER_REQUEST - We recommend using PAY_PER_REQUEST for unpredictable
 	//    workloads. PAY_PER_REQUEST sets the billing mode to On-Demand Mode (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadWriteCapacityMode.html#HowItWorks.OnDemand).
 	BillingMode *string `json:"billingMode,omitempty"`
+	// Indicates whether deletion protection is to be enabled (true) or disabled
+	// (false) on the table.
+	DeletionProtectionEnabled *bool `json:"deletionProtectionEnabled,omitempty"`
 	// One or more global secondary indexes (the maximum is 20) to be created on
 	// the table. Each global secondary index in the array includes the following:
 	//
@@ -125,6 +128,9 @@ type TableParameters struct {
 	//    the same attribute into two different indexes, this counts as two distinct
 	//    attributes when determining the total.
 	LocalSecondaryIndexes []*LocalSecondaryIndex `json:"localSecondaryIndexes,omitempty"`
+	// Indicates whether point in time recovery is enabled (true) or disabled (false)
+	// on the table.
+	PointInTimeRecoveryEnabled *bool `json:"pointInTimeRecoveryEnabled,omitempty"`
 	// Represents the provisioned throughput settings for a specified table or index.
 	// The settings can be modified using the UpdateTable operation.
 	//
@@ -218,7 +224,8 @@ type TableObservation struct {
 	//
 	//    * CREATING - The table is being created.
 	//
-	//    * UPDATING - The table is being updated.
+	//    * UPDATING - The table/index configuration is being updated. The table/index
+	//    remains available for data operations when UPDATING.
 	//
 	//    * DELETING - The table is being deleted.
 	//
@@ -235,6 +242,8 @@ type TableObservation struct {
 	//    * ARCHIVED - The table has been archived. See the ArchivalReason for more
 	//    information.
 	TableStatus *string `json:"tableStatus,omitempty"`
+
+	CustomTableObservation `json:",inline"`
 }
 
 // TableStatus defines the observed state of Table.
@@ -249,6 +258,7 @@ type TableStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

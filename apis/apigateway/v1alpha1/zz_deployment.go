@@ -31,8 +31,8 @@ type DeploymentParameters struct {
 	Region string `json:"region"`
 	// Enables a cache cluster for the Stage resource specified in the input.
 	CacheClusterEnabled *bool `json:"cacheClusterEnabled,omitempty"`
-	// Specifies the cache cluster size for the Stage resource specified in the
-	// input, if a cache cluster is enabled.
+	// The stage's cache capacity in GB. For more information about choosing a cache
+	// size, see Enabling API caching to enhance responsiveness (https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-caching.html).
 	CacheClusterSize *string `json:"cacheClusterSize,omitempty"`
 	// The input configuration for the canary deployment when the deployment is
 	// a canary release deployment.
@@ -67,6 +67,8 @@ type DeploymentObservation struct {
 	CreatedDate *metav1.Time `json:"createdDate,omitempty"`
 	// The identifier for the deployment resource.
 	ID *string `json:"id,omitempty"`
+
+	CustomDeploymentObservation `json:",inline"`
 }
 
 // DeploymentStatus defines the observed state of Deployment.
@@ -81,6 +83,7 @@ type DeploymentStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

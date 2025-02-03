@@ -20,10 +20,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go/document"
+	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-
-	"github.com/crossplane/crossplane-runtime/pkg/test"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/manualv1alpha1"
 )
@@ -33,57 +32,59 @@ const (
 	managedKind           = "instance.ec2.aws.crossplane.io"
 	managedProviderConfig = "example"
 
-	arch                  = "x86_64"
-	assocID               = "assocId"
-	assocState            = "assocState"
-	attachmentID          = "attachId"
-	blockDeviceName       = "/dev/xvda"
-	capacityReservationID = "capResId"
-	clientToken           = "clientToken"
-	cpuCredits            = "cpuCredits"
-	description           = "desc"
-	elasticInferAccARN    = "inferArn"
-	elasticInferAccID     = "inferId"
-	elasticInferAccState  = "inferState"
-	gpuID                 = "gpuId"
-	gpuType               = "gpuType"
-	groupID               = "groupId"
-	groupName             = "groupName"
-	hostID                = "hostId"
-	hostGroupARN          = "hostGroupArn"
-	iamARN                = "iamArn"
-	iamID                 = "iamId"
-	imageID               = "imageId"
-	interfaceType         = "intType"
-	ipOwnerID             = "ipOwnerId"
-	ipv6Address           = "ipv6Address"
-	kernelID              = "kernelId"
-	keyName               = "keyName"
-	launchTemplateID      = "launchTemplateId"
-	launchTemplateName    = "launchTemplateName"
-	licenseConfig         = "licenseConfig"
-	macAddress            = "macAddress"
-	outpostARN            = "outpostArn"
-	placementAff          = "affinity"
-	privateDNSName        = "privDnsName"
-	privateIPAddress      = "privIpAddress"
-	productCodeID         = "productCodeId"
-	publicDNSName         = "publicDnsName"
-	publicIPAddress       = "publicIp"
-	ramDiskID             = "ramDiskId"
-	rootDeviceName        = "rootDeviceName"
-	snapshotID            = "snapshotId"
-	spotInstanceReqID     = "spotInstacneId"
-	spotMarketType        = "spotMarketType"
-	spreadDomain          = "spreadDomain"
-	sriovNetSupport       = "sriovNetSupport"
-	stateReason           = "stateReason"
-	tagResourceType       = "instance"
-	tagsKey               = "key"
-	tagsVal               = "value"
-	userData              = "userData"
-	volumeID              = "volId"
-	volumeType            = "gp2"
+	arch                              = "x86_64"
+	assocID                           = "assocId"
+	assocState                        = "assocState"
+	attachmentID                      = "attachId"
+	blockDeviceName                   = "/dev/xvda"
+	capacityReservationID             = "capResId"
+	clientToken                       = "clientToken"
+	cpuCredits                        = "cpuCredits"
+	description                       = "desc"
+	elasticInferAccARN                = "inferArn"
+	elasticInferAccID                 = "inferId"
+	elasticInferAccState              = "inferState"
+	gpuID                             = "gpuId"
+	gpuType                           = "gpuType"
+	groupID                           = "groupId"
+	groupName                         = "groupName"
+	hostID                            = "hostId"
+	hostGroupARN                      = "hostGroupArn"
+	iamARN                            = "iamArn"
+	iamID                             = "iamId"
+	imageID                           = "imageId"
+	instanceInitiatedShutdownBehavior = "stop"
+	interfaceType                     = "intType"
+	ipOwnerID                         = "ipOwnerId"
+	ipv6Address                       = "ipv6Address"
+	ipv6Prefix                        = "ipv6Prefix"
+	kernelID                          = "kernelId"
+	keyName                           = "keyName"
+	launchTemplateID                  = "launchTemplateId"
+	launchTemplateName                = "launchTemplateName"
+	licenseConfig                     = "licenseConfig"
+	macAddress                        = "macAddress"
+	outpostARN                        = "outpostArn"
+	placementAff                      = "affinity"
+	privateDNSName                    = "privDnsName"
+	privateIPAddress                  = "privIpAddress"
+	productCodeID                     = "productCodeId"
+	publicDNSName                     = "publicDnsName"
+	publicIPAddress                   = "publicIp"
+	ramDiskID                         = "ramDiskId"
+	rootDeviceName                    = "rootDeviceName"
+	snapshotID                        = "snapshotId"
+	spotInstanceReqID                 = "spotInstacneId"
+	spotMarketType                    = "spotMarketType"
+	spreadDomain                      = "spreadDomain"
+	sriovNetSupport                   = "sriovNetSupport"
+	stateReason                       = "stateReason"
+	tagResourceType                   = "instance"
+	tagsKey                           = "key"
+	tagsVal                           = "value"
+	userData                          = "userData"
+	volumeID                          = "volId"
+	volumeType                        = "gp2"
 )
 
 func TestGenerateInstanceConditions(t *testing.T) {
@@ -195,8 +196,9 @@ func TestGenerateDescribeInstancesByExternalTags(t *testing.T) {
 
 func TestGenerateInstanceObservation(t *testing.T) {
 	cases := map[string]struct {
-		in  types.Instance
-		out manualv1alpha1.InstanceObservation
+		in         types.Instance
+		attributes ec2.DescribeInstanceAttributeOutput
+		out        manualv1alpha1.InstanceObservation
 	}{
 		"AllFilled": {
 			in: types.Instance{
@@ -368,6 +370,13 @@ func TestGenerateInstanceObservation(t *testing.T) {
 				VirtualizationType: types.VirtualizationTypeHvm,
 				VpcId:              aws.String(vpcID),
 			},
+			attributes: ec2.DescribeInstanceAttributeOutput{
+				DisableApiTermination:             &types.AttributeBooleanValue{Value: aws.Bool(true)},
+				InstanceInitiatedShutdownBehavior: &types.AttributeValue{Value: aws.String(instanceInitiatedShutdownBehavior)},
+				KernelId:                          &types.AttributeValue{Value: aws.String(kernelID)},
+				RamdiskId:                         &types.AttributeValue{Value: aws.String(ramDiskID)},
+				UserData:                          &types.AttributeValue{Value: aws.String(userData)},
+			},
 			out: manualv1alpha1.InstanceObservation{
 				AmiLaunchIndex: aws.Int32(0),
 				Architecture:   arch,
@@ -394,8 +403,9 @@ func TestGenerateInstanceObservation(t *testing.T) {
 					CoreCount:      aws.Int32(1),
 					ThreadsPerCore: aws.Int32(1),
 				},
-				EBSOptimized: aws.Bool(false),
-				EnaSupport:   aws.Bool(false),
+				DisableAPITermination: aws.Bool(true),
+				EBSOptimized:          aws.Bool(false),
+				EnaSupport:            aws.Bool(false),
 				ElasticGPUAssociations: []manualv1alpha1.ElasticGPUAssociation{
 					{
 						ElasticGPUAssociationID:    aws.String(assocID),
@@ -420,11 +430,12 @@ func TestGenerateInstanceObservation(t *testing.T) {
 					ARN: aws.String(iamARN),
 					ID:  aws.String(iamID),
 				},
-				ImageID:           aws.String(imageID),
-				InstanceID:        aws.String(instanceID),
-				InstanceLifecycle: string(types.InstanceLifecycleTypeScheduled),
-				InstanceType:      string(types.InstanceTypeM1Small),
-				KernelID:          aws.String(kernelID),
+				ImageID:                           aws.String(imageID),
+				InstanceID:                        aws.String(instanceID),
+				InstanceInitiatedShutdownBehavior: aws.String(instanceInitiatedShutdownBehavior),
+				InstanceLifecycle:                 string(types.InstanceLifecycleTypeScheduled),
+				InstanceType:                      string(types.InstanceTypeM1Small),
+				KernelID:                          aws.String(kernelID),
 				Licenses: []manualv1alpha1.LicenseConfigurationRequest{
 					{
 						LicenseConfigurationARN: aws.String(licenseConfig),
@@ -530,6 +541,7 @@ func TestGenerateInstanceObservation(t *testing.T) {
 						Value: tagsVal,
 					},
 				},
+				UserData:           aws.String(userData),
 				VirtualizationType: string(types.VirtualizationTypeHvm),
 				VPCID:              aws.String(vpcID),
 			},
@@ -538,7 +550,7 @@ func TestGenerateInstanceObservation(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			r := GenerateInstanceObservation(tc.in)
+			r := GenerateInstanceObservation(tc.in, &tc.attributes)
 			if diff := cmp.Diff(tc.out, r); diff != "" {
 				t.Errorf("GenerateInstanceObservation(...): -want, +got:\n%s", diff)
 			}
@@ -573,6 +585,7 @@ func TestGenerateEC2RunInstancesInput(t *testing.T) {
 							DeleteOnTermination: aws.Bool(false),
 							Encrypted:           aws.Bool(false),
 							IOps:                aws.Int32(1),
+							Throughput:          aws.Int32(100),
 							KmsKeyID:            aws.String(keyName),
 							SnapshotID:          aws.String(snapshotID),
 							VolumeSize:          aws.Int32(1),
@@ -668,6 +681,12 @@ func TestGenerateEC2RunInstancesInput(t *testing.T) {
 								IPv6Address: aws.String(ipv6Address),
 							},
 						},
+						Ipv6PrefixCount: aws.Int32(1),
+						Ipv6Prefixes: []manualv1alpha1.Ipv6PrefixSpecificationRequest{
+							{
+								Ipv6Prefix: ipv6Prefix,
+							},
+						},
 						NetworkInterfaceID: aws.String(networkInterfaceID),
 						PrivateIPAddress:   aws.String(privateIPAddress),
 						PrivateIPAddresses: []manualv1alpha1.PrivateIPAddressSpecification{
@@ -716,6 +735,7 @@ func TestGenerateEC2RunInstancesInput(t *testing.T) {
 							DeleteOnTermination: aws.Bool(false),
 							Encrypted:           aws.Bool(false),
 							Iops:                aws.Int32(1),
+							Throughput:          aws.Int32(100),
 							KmsKeyId:            aws.String(keyName),
 							SnapshotId:          aws.String(snapshotID),
 							VolumeSize:          aws.Int32(1),
@@ -813,6 +833,10 @@ func TestGenerateEC2RunInstancesInput(t *testing.T) {
 								Ipv6Address: aws.String(ipv6Address),
 							},
 						},
+						Ipv6PrefixCount: aws.Int32(1),
+						Ipv6Prefixes: []types.Ipv6PrefixSpecificationRequest{{
+							Ipv6Prefix: aws.String(ipv6Prefix),
+						}},
 						NetworkInterfaceId: aws.String(networkInterfaceID),
 						PrivateIpAddress:   aws.String(privateIPAddress),
 						PrivateIpAddresses: []types.PrivateIpAddressSpecification{

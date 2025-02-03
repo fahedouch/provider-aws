@@ -10,6 +10,7 @@ ignore:
     - MonitoringSubscription
     - FieldLevelEncryptionConfig
     - Function
+    - ContinuousDeploymentPolicy
   field_paths:
     - Origins.Quantity
     - Aliases.Quantity

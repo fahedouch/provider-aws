@@ -18,7 +18,6 @@ package v1beta1
 
 import (
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -58,6 +57,10 @@ type SubscriptionParameters struct {
 	//  to the topic.
 	// +optional
 	FilterPolicy *string `json:"filterPolicy,omitempty"`
+
+	//  FilterPolicyScope can be MessageAttributes or MessageBody
+	// +optional
+	FilterPolicyScope *string `json:"filterPolicyScope,omitempty"`
 
 	//  When set to true, enables raw message delivery
 	//  to Amazon SQS or HTTP/S endpoints. This eliminates the need for the endpoints

@@ -44,3 +44,12 @@ type CustomLogGroupParameters struct {
 	// +optional
 	KMSKeyIDSelector *xpv1.Selector `json:"kmsKeyIDSelector,omitempty"`
 }
+
+// CustomLogGroupObservation contains the additional status fields for LogGroup.
+type CustomLogGroupObservation struct{}
+
+// CustomResourcePolicyParameters includes the custom fields of ResourcePolicy.
+type CustomResourcePolicyParameters struct{}
+
+// CustomResourcePolicyObservation contains the additional status fields for ResourcePolicy.
+type CustomResourcePolicyObservation struct{}

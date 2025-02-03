@@ -44,6 +44,9 @@ type ResourceShareParameters struct {
 	//
 	// If you don't provide this value, then Amazon Web Services generates a random
 	// one for you.
+	//
+	// If you retry the operation with the same ClientToken, but with different
+	// parameters, the retry fails with an IdempotentParameterMismatch error.
 	ClientToken *string `json:"clientToken,omitempty"`
 	// Specifies the name of the resource share.
 	// +kubebuilder:validation:Required
@@ -61,7 +64,7 @@ type ResourceShareParameters struct {
 	//
 	//    * An Amazon Web Services account ID, for example: 123456789012
 	//
-	//    * An Amazon Resoure Name (ARN) (https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html)
+	//    * An Amazon Resource Name (ARN) (https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html)
 	//    of an organization in Organizations, for example: organizations::123456789012:organization/o-exampleorgid
 	//
 	//    * An ARN of an organizational unit (OU) in Organizations, for example:
@@ -78,6 +81,9 @@ type ResourceShareParameters struct {
 	// Specifies a list of one or more ARNs of the resources to associate with the
 	// resource share.
 	ResourceARNs []*string `json:"resourceARNs,omitempty"`
+	// Specifies from which source accounts the service principal has access to
+	// the resources in this resource share.
+	Sources []*string `json:"sources,omitempty"`
 	// Specifies one or more tags to attach to the resource share itself. It doesn't
 	// attach the tags to the resources associated with the resource share.
 	Tags                          []*Tag `json:"tags,omitempty"`
@@ -94,6 +100,8 @@ type ResourceShareSpec struct {
 type ResourceShareObservation struct {
 	// An object with information about the new resource share.
 	ResourceShare *ResourceShare_SDK `json:"resourceShare,omitempty"`
+
+	CustomResourceShareObservation `json:",inline"`
 }
 
 // ResourceShareStatus defines the observed state of ResourceShare.
@@ -108,6 +116,7 @@ type ResourceShareStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

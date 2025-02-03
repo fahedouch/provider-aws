@@ -15,75 +15,88 @@ package server
 
 import (
 	"context"
+	"fmt"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	ctrl "sigs.k8s.io/controller-runtime"
-
+	"github.com/aws/aws-sdk-go/service/ec2"
 	svcsdk "github.com/aws/aws-sdk-go/service/transfer"
+	svcsdkapitransfer "github.com/aws/aws-sdk-go/service/transfer/transferiface"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
+	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/transfer/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
+
+type custom struct {
+	kube              client.Client
+	client            svcsdkapitransfer.TransferAPI
+	external          *external
+	vpcEndpointClient vpcEndpointClient
+}
 
 // SetupServer adds a controller that reconciles Server.
 func SetupServer(mgr ctrl.Manager, o controller.Options) error {
 	name := managed.ControllerName(svcapitypes.ServerGroupKind)
-
-	opts := []option{
-		func(e *external) {
-			e.postObserve = postObserve
-			e.postCreate = postCreate
-			e.preObserve = preObserve
-			e.preDelete = preDelete
-			e.preCreate = preCreate
-		},
-	}
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
 	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithInitializers(),
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&customConnector{connector: &connector{kube: mgr.GetClient()}, newClientFn: newVPCClient}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.ServerGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Server{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.ServerGroupVersionKind),
-			managed.WithInitializers(),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Server, obj *svcsdk.DescribeServerInput) error {
 	if meta.GetExternalName(cr) != "" {
-		obj.ServerId = awsclients.String(meta.GetExternalName(cr))
+		obj.ServerId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	}
 	return nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Server, obj *svcsdk.DeleteServerInput) (bool, error) {
-	obj.ServerId = awsclients.String(meta.GetExternalName(cr))
+	obj.ServerId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
-func postObserve(_ context.Context, cr *svcapitypes.Server, obj *svcsdk.DescribeServerOutput, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) {
+func (c *custom) postObserve(_ context.Context, cr *svcapitypes.Server, obj *svcsdk.DescribeServerOutput, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) { //nolint:gocyclo
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
 
-	switch awsclients.StringValue(obj.Server.State) {
+	switch pointer.StringValue(obj.Server.State) {
 	case string(svcapitypes.State_OFFLINE):
 		cr.SetConditions(xpv1.Unavailable())
 	case string(svcapitypes.State_ONLINE):
@@ -97,9 +110,24 @@ func postObserve(_ context.Context, cr *svcapitypes.Server, obj *svcsdk.Describe
 	case string(svcapitypes.State_STOP_FAILED):
 		cr.SetConditions(xpv1.ReconcileError(err))
 	}
-
 	obs.ConnectionDetails = managed.ConnectionDetails{
-		"HostKeyFingerprint": []byte(awsclients.StringValue(obj.Server.HostKeyFingerprint)),
+		"HostKeyFingerprint": []byte(pointer.StringValue(obj.Server.HostKeyFingerprint)),
+	}
+	// fetch endpoint details for EndpointType VPC only
+	// for EndpointType 'PUBLIC' neither endpoint id nor endpoint name is present in the describe output/aws cli v2 output
+	// endpoint name can only be found in the console
+	if pointer.StringValue(cr.Spec.ForProvider.EndpointType) == "VPC" {
+		vpcEndpointsResults, err := c.DescribeVpcEndpoint(obj)
+		if err != nil {
+			return managed.ExternalObservation{}, err
+		}
+
+		for i, vep := range vpcEndpointsResults {
+			for j, dnsEntry := range vep.DnsEntries {
+				key := fmt.Sprintf("endpoint.%d.dns.%d", i, j)
+				obs.ConnectionDetails[key] = []byte(pointer.StringValue(dnsEntry.DnsName))
+			}
+		}
 	}
 
 	return obs, nil
@@ -109,7 +137,7 @@ func postCreate(_ context.Context, cr *svcapitypes.Server, obj *svcsdk.CreateSer
 	if err != nil {
 		return managed.ExternalCreation{}, err
 	}
-	meta.SetExternalName(cr, awsclients.StringValue(obj.ServerId))
+	meta.SetExternalName(cr, pointer.StringValue(obj.ServerId))
 	return managed.ExternalCreation{}, nil
 }
 
@@ -142,4 +170,19 @@ func preCreate(_ context.Context, cr *svcapitypes.Server, obj *svcsdk.CreateServ
 	}
 
 	return nil
+}
+
+func (c *custom) DescribeVpcEndpoint(obj *svcsdk.DescribeServerOutput) (dnsEntries []*ec2.VpcEndpoint, err error) {
+	if obj.Server != nil && obj.Server.EndpointDetails != nil && obj.Server.EndpointDetails.VpcEndpointId != nil {
+		describeEndpointOutput, err := c.vpcEndpointClient.DescribeVpcEndpoints(&ec2.DescribeVpcEndpointsInput{
+			VpcEndpointIds: []*string{
+				obj.Server.EndpointDetails.VpcEndpointId,
+			},
+		})
+		if err != nil {
+			return []*ec2.VpcEndpoint{}, err
+		}
+		return describeEndpointOutput.VpcEndpoints, nil
+	}
+	return []*ec2.VpcEndpoint{}, nil
 }

@@ -8,10 +8,13 @@ ignore:
     - StartJobRunInput.VirtualClusterId
     - StartJobRunInput.ConfigurationOverrides
     - CancelJobRunInput.VirtualClusterId
+    - Configuration.Configurations
   resource_names:
     - ManagedEndpoint
+    - JobTemplate
   shape_names: null
-model_name: emr-containers
+sdk_names:
+  model_name: emr-containers
 operations:
   DescribeVirtualCluster:
     output_wrapper_field_path: VirtualCluster

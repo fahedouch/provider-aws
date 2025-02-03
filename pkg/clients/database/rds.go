@@ -19,27 +19,29 @@ package rds
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-
 	"github.com/crossplane-contrib/provider-aws/apis/database/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/controller/rds/utils"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -56,6 +58,7 @@ type Client interface {
 	ModifyDBInstance(context.Context, *rds.ModifyDBInstanceInput, ...func(*rds.Options)) (*rds.ModifyDBInstanceOutput, error)
 	DeleteDBInstance(context.Context, *rds.DeleteDBInstanceInput, ...func(*rds.Options)) (*rds.DeleteDBInstanceOutput, error)
 	AddTagsToResource(context.Context, *rds.AddTagsToResourceInput, ...func(*rds.Options)) (*rds.AddTagsToResourceOutput, error)
+	RemoveTagsFromResource(context.Context, *rds.RemoveTagsFromResourceInput, ...func(*rds.Options)) (*rds.RemoveTagsFromResourceOutput, error)
 }
 
 // NewClient creates new RDS RDSClient with provided AWS Configurations/Credentials
@@ -75,10 +78,11 @@ func GenerateCreateRDSInstanceInput(name, password string, p *v1beta1.RDSInstanc
 	// Make sure any relevant changes are applied there too.
 	c := &rds.CreateDBInstanceInput{
 		DBInstanceIdentifier:               aws.String(name),
-		AllocatedStorage:                   awsclients.Int32Address(p.AllocatedStorage),
+		AllocatedStorage:                   pointer.ToIntAsInt32Ptr(p.AllocatedStorage),
 		AutoMinorVersionUpgrade:            p.AutoMinorVersionUpgrade,
 		AvailabilityZone:                   p.AvailabilityZone,
-		BackupRetentionPeriod:              awsclients.Int32Address(p.BackupRetentionPeriod),
+		BackupRetentionPeriod:              pointer.ToIntAsInt32Ptr(p.BackupRetentionPeriod),
+		CACertificateIdentifier:            p.CACertificateIdentifier,
 		CharacterSetName:                   p.CharacterSetName,
 		CopyTagsToSnapshot:                 p.CopyTagsToSnapshot,
 		DBClusterIdentifier:                p.DBClusterIdentifier,
@@ -95,22 +99,21 @@ func GenerateCreateRDSInstanceInput(name, password string, p *v1beta1.RDSInstanc
 		EnablePerformanceInsights:          p.EnablePerformanceInsights,
 		Engine:                             aws.String(p.Engine),
 		EngineVersion:                      p.EngineVersion,
-		Iops:                               awsclients.Int32Address(p.IOPS),
 		KmsKeyId:                           p.KMSKeyID,
 		LicenseModel:                       p.LicenseModel,
-		MasterUserPassword:                 awsclients.String(password),
+		MasterUserPassword:                 pointer.ToOrNilIfZeroValue(password),
 		MasterUsername:                     p.MasterUsername,
-		MaxAllocatedStorage:                awsclients.Int32Address(p.MaxAllocatedStorage),
-		MonitoringInterval:                 awsclients.Int32Address(p.MonitoringInterval),
+		MaxAllocatedStorage:                pointer.ToIntAsInt32Ptr(p.MaxAllocatedStorage),
+		MonitoringInterval:                 pointer.ToIntAsInt32Ptr(p.MonitoringInterval),
 		MonitoringRoleArn:                  p.MonitoringRoleARN,
 		MultiAZ:                            p.MultiAZ,
 		OptionGroupName:                    p.OptionGroupName,
 		PerformanceInsightsKMSKeyId:        p.PerformanceInsightsKMSKeyID,
-		PerformanceInsightsRetentionPeriod: awsclients.Int32Address(p.PerformanceInsightsRetentionPeriod),
-		Port:                               awsclients.Int32Address(p.Port),
+		PerformanceInsightsRetentionPeriod: pointer.ToIntAsInt32Ptr(p.PerformanceInsightsRetentionPeriod),
+		Port:                               pointer.ToIntAsInt32Ptr(p.Port),
 		PreferredBackupWindow:              p.PreferredBackupWindow,
 		PreferredMaintenanceWindow:         p.PreferredMaintenanceWindow,
-		PromotionTier:                      awsclients.Int32Address(p.PromotionTier),
+		PromotionTier:                      pointer.ToIntAsInt32Ptr(p.PromotionTier),
 		PubliclyAccessible:                 p.PubliclyAccessible,
 		StorageEncrypted:                   p.StorageEncrypted,
 		Timezone:                           p.Timezone,
@@ -135,6 +138,13 @@ func GenerateCreateRDSInstanceInput(name, password string, p *v1beta1.RDSInstanc
 			}
 		}
 	}
+	// for storageType gp3 below engine specific allocatedStorage threshold, do not send iops and storageThroughput
+	// to avoid errors like "You can't specify IOPS or storage throughput for engine postgres and a storage size less than 400."
+	// This allows users to set iops/storageThroughput to the default values themselves.
+	if !IsStorageTypeGP3BelowAllocatedStorageThreshold(p) {
+		c.Iops = pointer.ToIntAsInt32Ptr(p.IOPS)
+		c.StorageThroughput = pointer.ToIntAsInt32Ptr(p.StorageThroughput)
+	}
 	return c
 }
 
@@ -143,10 +153,10 @@ func GenerateRestoreRDSInstanceFromS3Input(name, password string, p *v1beta1.RDS
 	// Partially duplicates GenerateCreateDBInstanceInput - make sure any relevant changes are applied there too.
 	c := &rds.RestoreDBInstanceFromS3Input{
 		DBInstanceIdentifier:               aws.String(name),
-		AllocatedStorage:                   awsclients.Int32Address(p.AllocatedStorage),
+		AllocatedStorage:                   pointer.ToIntAsInt32Ptr(p.AllocatedStorage),
 		AutoMinorVersionUpgrade:            p.AutoMinorVersionUpgrade,
 		AvailabilityZone:                   p.AvailabilityZone,
-		BackupRetentionPeriod:              awsclients.Int32Address(p.BackupRetentionPeriod),
+		BackupRetentionPeriod:              pointer.ToIntAsInt32Ptr(p.BackupRetentionPeriod),
 		CopyTagsToSnapshot:                 p.CopyTagsToSnapshot,
 		DBInstanceClass:                    aws.String(p.DBInstanceClass),
 		DBName:                             p.DBName,
@@ -159,18 +169,18 @@ func GenerateRestoreRDSInstanceFromS3Input(name, password string, p *v1beta1.RDS
 		EnablePerformanceInsights:          p.EnablePerformanceInsights,
 		Engine:                             aws.String(p.Engine),
 		EngineVersion:                      p.EngineVersion,
-		Iops:                               awsclients.Int32Address(p.IOPS),
+		Iops:                               pointer.ToIntAsInt32Ptr(p.IOPS),
 		KmsKeyId:                           p.KMSKeyID,
 		LicenseModel:                       p.LicenseModel,
-		MasterUserPassword:                 awsclients.String(password),
+		MasterUserPassword:                 pointer.ToOrNilIfZeroValue(password),
 		MasterUsername:                     p.MasterUsername,
-		MonitoringInterval:                 awsclients.Int32Address(p.MonitoringInterval),
+		MonitoringInterval:                 pointer.ToIntAsInt32Ptr(p.MonitoringInterval),
 		MonitoringRoleArn:                  p.MonitoringRoleARN,
 		MultiAZ:                            p.MultiAZ,
 		OptionGroupName:                    p.OptionGroupName,
 		PerformanceInsightsKMSKeyId:        p.PerformanceInsightsKMSKeyID,
-		PerformanceInsightsRetentionPeriod: awsclients.Int32Address(p.PerformanceInsightsRetentionPeriod),
-		Port:                               awsclients.Int32Address(p.Port),
+		PerformanceInsightsRetentionPeriod: pointer.ToIntAsInt32Ptr(p.PerformanceInsightsRetentionPeriod),
+		Port:                               pointer.ToIntAsInt32Ptr(p.Port),
 		PreferredBackupWindow:              p.PreferredBackupWindow,
 		PreferredMaintenanceWindow:         p.PreferredMaintenanceWindow,
 		PubliclyAccessible:                 p.PubliclyAccessible,
@@ -180,6 +190,7 @@ func GenerateRestoreRDSInstanceFromS3Input(name, password string, p *v1beta1.RDS
 		SourceEngine:                       p.RestoreFrom.S3.SourceEngine,
 		SourceEngineVersion:                p.RestoreFrom.S3.SourceEngineVersion,
 		StorageEncrypted:                   p.StorageEncrypted,
+		StorageThroughput:                  pointer.ToIntAsInt32Ptr(p.StorageThroughput),
 		StorageType:                        p.StorageType,
 		VpcSecurityGroupIds:                p.VPCSecurityGroupIDs,
 	}
@@ -223,12 +234,13 @@ func GenerateRestoreRDSInstanceFromSnapshotInput(name string, p *v1beta1.RDSInst
 		EnableCloudwatchLogsExports:     p.EnableCloudwatchLogsExports,
 		EnableIAMDatabaseAuthentication: p.EnableIAMDatabaseAuthentication,
 		Engine:                          aws.String(p.Engine),
-		Iops:                            awsclients.Int32Address(p.IOPS),
+		Iops:                            pointer.ToIntAsInt32Ptr(p.IOPS),
 		LicenseModel:                    p.LicenseModel,
 		MultiAZ:                         p.MultiAZ,
 		OptionGroupName:                 p.OptionGroupName,
-		Port:                            awsclients.Int32Address(p.Port),
+		Port:                            pointer.ToIntAsInt32Ptr(p.Port),
 		PubliclyAccessible:              p.PubliclyAccessible,
+		StorageThroughput:               pointer.ToIntAsInt32Ptr(p.StorageThroughput),
 		StorageType:                     p.StorageType,
 		VpcSecurityGroupIds:             p.VPCSecurityGroupIDs,
 	}
@@ -276,18 +288,19 @@ func GenerateRestoreRDSInstanceToPointInTimeInput(name string, p *v1beta1.RDSIns
 		EnableCloudwatchLogsExports:     p.EnableCloudwatchLogsExports,
 		EnableIAMDatabaseAuthentication: p.EnableIAMDatabaseAuthentication,
 		Engine:                          aws.String(p.Engine),
-		Iops:                            awsclients.Int32Address(p.IOPS),
+		Iops:                            pointer.ToIntAsInt32Ptr(p.IOPS),
 		LicenseModel:                    p.LicenseModel,
 		MultiAZ:                         p.MultiAZ,
 		OptionGroupName:                 p.OptionGroupName,
-		Port:                            awsclients.Int32Address(p.Port),
+		Port:                            pointer.ToIntAsInt32Ptr(p.Port),
 		PubliclyAccessible:              p.PubliclyAccessible,
+		StorageThroughput:               pointer.ToIntAsInt32Ptr(p.StorageThroughput),
 		StorageType:                     p.StorageType,
 		VpcSecurityGroupIds:             p.VPCSecurityGroupIDs,
 
 		TargetDBInstanceIdentifier:          aws.String(name),
 		RestoreTime:                         restoreTime,
-		UseLatestRestorableTime:             p.RestoreFrom.PointInTime.UseLatestRestorableTime,
+		UseLatestRestorableTime:             &p.RestoreFrom.PointInTime.UseLatestRestorableTime,
 		SourceDBInstanceAutomatedBackupsArn: p.RestoreFrom.PointInTime.SourceDBInstanceAutomatedBackupsArn,
 		SourceDBInstanceIdentifier:          p.RestoreFrom.PointInTime.SourceDBInstanceIdentifier,
 		SourceDbiResourceId:                 p.RestoreFrom.PointInTime.SourceDbiResourceID,
@@ -316,9 +329,19 @@ func GenerateRestoreRDSInstanceToPointInTimeInput(name string, p *v1beta1.RDSIns
 // CreatePatch creates a *v1beta1.RDSInstanceParameters that has only the changed
 // values between the target *v1beta1.RDSInstanceParameters and the current
 // *rds.DBInstance
-func CreatePatch(in *rdstypes.DBInstance, target *v1beta1.RDSInstanceParameters) (*v1beta1.RDSInstanceParameters, error) {
+func CreatePatch(in *rdstypes.DBInstance, spec *v1beta1.RDSInstanceParameters) (*v1beta1.RDSInstanceParameters, error) { //nolint:gocyclo
+	target := spec.DeepCopy()
 	currentParams := &v1beta1.RDSInstanceParameters{}
 	LateInitialize(currentParams, in)
+
+	// AvailabilityZone parameters is not allowed for MultiAZ deployments.
+	// So set this to nil if that is the case to avoid unnecessary diffs.
+	if ptr.Deref(target.MultiAZ, false) {
+		target.AvailabilityZone = nil
+	}
+	if ptr.Deref(currentParams.MultiAZ, false) {
+		currentParams.AvailabilityZone = nil
+	}
 
 	// Don't attempt to scale down storage if autoscaling is enabled,
 	// and the current storage is larger than what was once
@@ -346,7 +369,15 @@ func CreatePatch(in *rdstypes.DBInstance, target *v1beta1.RDSInstanceParameters)
 		}
 	}
 
-	jsonPatch, err := awsclients.CreateJSONPatch(currentParams, target)
+	// Depending on whether the instance was created as gp2 or modified from another type (e.g. gp3) to gp2,
+	// AWS provides different responses for IOPS/StorageThroughput (either 0 or nil).
+	// Therefore, we consider both 0 and nil to be equivalent.
+	if aws.ToInt(target.IOPS) == aws.ToInt(currentParams.IOPS) {
+		currentParams.IOPS = target.IOPS
+		currentParams.StorageThroughput = target.StorageThroughput
+	}
+
+	jsonPatch, err := jsonpatch.CreateJSONPatch(currentParams, target)
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +389,7 @@ func CreatePatch(in *rdstypes.DBInstance, target *v1beta1.RDSInstanceParameters)
 }
 
 // GenerateModifyDBInstanceInput from RDSInstanceSpec
-func GenerateModifyDBInstanceInput(name string, p *v1beta1.RDSInstanceParameters) *rds.ModifyDBInstanceInput {
+func GenerateModifyDBInstanceInput(name string, p *v1beta1.RDSInstanceParameters, db *rdstypes.DBInstance) *rds.ModifyDBInstanceInput {
 	// NOTE(muvaf): MasterUserPassword is not used here. So, password is set once
 	// and kept that way.
 	// NOTE(muvaf): Change of DBInstanceIdentifier is supported by AWS but
@@ -366,16 +397,16 @@ func GenerateModifyDBInstanceInput(name string, p *v1beta1.RDSInstanceParameters
 	// it.
 	m := &rds.ModifyDBInstanceInput{
 		DBInstanceIdentifier:               aws.String(name),
-		AllocatedStorage:                   awsclients.Int32Address(p.AllocatedStorage),
-		AllowMajorVersionUpgrade:           aws.ToBool(p.AllowMajorVersionUpgrade),
-		ApplyImmediately:                   aws.ToBool(p.ApplyModificationsImmediately),
+		AllocatedStorage:                   pointer.ToIntAsInt32Ptr(p.AllocatedStorage),
+		AllowMajorVersionUpgrade:           p.AllowMajorVersionUpgrade,
+		ApplyImmediately:                   p.ApplyModificationsImmediately,
 		AutoMinorVersionUpgrade:            p.AutoMinorVersionUpgrade,
-		BackupRetentionPeriod:              awsclients.Int32Address(p.BackupRetentionPeriod),
+		BackupRetentionPeriod:              pointer.ToIntAsInt32Ptr(p.BackupRetentionPeriod),
 		CACertificateIdentifier:            p.CACertificateIdentifier,
 		CopyTagsToSnapshot:                 p.CopyTagsToSnapshot,
-		DBInstanceClass:                    awsclients.String(p.DBInstanceClass),
+		DBInstanceClass:                    pointer.ToOrNilIfZeroValue(p.DBInstanceClass),
 		DBParameterGroupName:               p.DBParameterGroupName,
-		DBPortNumber:                       awsclients.Int32Address(p.Port),
+		DBPortNumber:                       pointer.ToIntAsInt32Ptr(p.Port),
 		DBSecurityGroups:                   p.DBSecurityGroups,
 		DBSubnetGroupName:                  p.DBSubnetGroupName,
 		DeletionProtection:                 p.DeletionProtection,
@@ -384,19 +415,20 @@ func GenerateModifyDBInstanceInput(name string, p *v1beta1.RDSInstanceParameters
 		EnableIAMDatabaseAuthentication:    p.EnableIAMDatabaseAuthentication,
 		EnablePerformanceInsights:          p.EnablePerformanceInsights,
 		EngineVersion:                      p.EngineVersion,
-		Iops:                               awsclients.Int32Address(p.IOPS),
+		Iops:                               pointer.ToIntAsInt32Ptr(p.IOPS),
 		LicenseModel:                       p.LicenseModel,
-		MaxAllocatedStorage:                awsclients.Int32Address(p.MaxAllocatedStorage),
-		MonitoringInterval:                 awsclients.Int32Address(p.MonitoringInterval),
+		MaxAllocatedStorage:                pointer.ToIntAsInt32Ptr(p.MaxAllocatedStorage),
+		MonitoringInterval:                 pointer.ToIntAsInt32Ptr(p.MonitoringInterval),
 		MonitoringRoleArn:                  p.MonitoringRoleARN,
 		MultiAZ:                            p.MultiAZ,
 		OptionGroupName:                    p.OptionGroupName,
 		PerformanceInsightsKMSKeyId:        p.PerformanceInsightsKMSKeyID,
-		PerformanceInsightsRetentionPeriod: awsclients.Int32Address(p.PerformanceInsightsRetentionPeriod),
+		PerformanceInsightsRetentionPeriod: pointer.ToIntAsInt32Ptr(p.PerformanceInsightsRetentionPeriod),
 		PreferredBackupWindow:              p.PreferredBackupWindow,
 		PreferredMaintenanceWindow:         p.PreferredMaintenanceWindow,
-		PromotionTier:                      awsclients.Int32Address(p.PromotionTier),
+		PromotionTier:                      pointer.ToIntAsInt32Ptr(p.PromotionTier),
 		PubliclyAccessible:                 p.PubliclyAccessible,
+		StorageThroughput:                  pointer.ToIntAsInt32Ptr(p.StorageThroughput),
 		StorageType:                        p.StorageType,
 		UseDefaultProcessorFeatures:        p.UseDefaultProcessorFeatures,
 		VpcSecurityGroupIds:                p.VPCSecurityGroupIDs,
@@ -410,26 +442,27 @@ func GenerateModifyDBInstanceInput(name string, p *v1beta1.RDSInstanceParameters
 			}
 		}
 	}
-	if p.CloudwatchLogsExportConfiguration != nil {
-		m.CloudwatchLogsExportConfiguration = &rdstypes.CloudwatchLogsExportConfiguration{
-			DisableLogTypes: p.CloudwatchLogsExportConfiguration.DisableLogTypes,
-			EnableLogTypes:  p.CloudwatchLogsExportConfiguration.EnableLogTypes,
-		}
-	}
+
+	m.CloudwatchLogsExportConfiguration = generateCloudWatchExportConfiguration(
+		p.EnableCloudwatchLogsExports,
+		db.EnabledCloudwatchLogsExports)
+
 	return m
 }
 
 // GenerateObservation is used to produce v1alpha3.RDSInstanceObservation from
 // rds.DBInstance.
-func GenerateObservation(db rdstypes.DBInstance) v1beta1.RDSInstanceObservation { // nolint:gocyclo
+func GenerateObservation(db rdstypes.DBInstance) v1beta1.RDSInstanceObservation { //nolint:gocyclo
 	o := v1beta1.RDSInstanceObservation{
-		AllocatedStorage:                      int(db.AllocatedStorage),
+		AllocatedStorage:                      int(ptr.Deref(db.AllocatedStorage, 0)),
 		AWSBackupRecoveryPointARN:             aws.ToString(db.AwsBackupRecoveryPointArn),
-		BackupRetentionPeriod:                 int(db.BackupRetentionPeriod),
+		BackupRetentionPeriod:                 int(ptr.Deref(db.BackupRetentionPeriod, 0)),
 		DBInstanceStatus:                      aws.ToString(db.DBInstanceStatus),
 		DBInstanceArn:                         aws.ToString(db.DBInstanceArn),
-		DBInstancePort:                        int(db.DbInstancePort),
+		DBInstancePort:                        int(ptr.Deref(db.DbInstancePort, 0)),
 		DBResourceID:                          aws.ToString(db.DbiResourceId),
+		EnabledCloudwatchLogsExports:          db.EnabledCloudwatchLogsExports,
+		EngineVersion:                         db.EngineVersion,
 		EnhancedMonitoringResourceArn:         aws.ToString(db.EnhancedMonitoringResourceArn),
 		PerformanceInsightsEnabled:            aws.ToBool(db.PerformanceInsightsEnabled),
 		ReadReplicaDBClusterIdentifiers:       db.ReadReplicaDBClusterIdentifiers,
@@ -501,7 +534,7 @@ func GenerateObservation(db rdstypes.DBInstance) v1beta1.RDSInstanceObservation 
 		o.Endpoint = v1beta1.Endpoint{
 			Address:      aws.ToString(db.Endpoint.Address),
 			HostedZoneID: aws.ToString(db.Endpoint.HostedZoneId),
-			Port:         int(db.Endpoint.Port),
+			Port:         int(ptr.Deref(db.Endpoint.Port, 0)),
 		}
 	}
 	if len(db.OptionGroupMemberships) != 0 {
@@ -524,6 +557,7 @@ func GenerateObservation(db rdstypes.DBInstance) v1beta1.RDSInstanceObservation 
 			LicenseModel:            aws.ToString(db.PendingModifiedValues.LicenseModel),
 			MultiAZ:                 aws.ToBool(db.PendingModifiedValues.MultiAZ),
 			Port:                    int(aws.ToInt32(db.PendingModifiedValues.Port)),
+			StorageThroughput:       int(aws.ToInt32(db.PendingModifiedValues.StorageThroughput)),
 			StorageType:             aws.ToString(db.PendingModifiedValues.StorageType),
 		}
 		if db.PendingModifiedValues.PendingCloudwatchLogsExports != nil {
@@ -549,7 +583,7 @@ func GenerateObservation(db rdstypes.DBInstance) v1beta1.RDSInstanceObservation 
 				Message:    aws.ToString(val.Message),
 				Status:     aws.ToString(val.Status),
 				StatusType: aws.ToString(val.StatusType),
-				Normal:     val.Normal,
+				Normal:     ptr.Deref(val.Normal, false),
 			}
 		}
 	}
@@ -567,48 +601,49 @@ func GenerateObservation(db rdstypes.DBInstance) v1beta1.RDSInstanceObservation 
 
 // LateInitialize fills the empty fields in *v1beta1.RDSInstanceParameters with
 // the values seen in rds.DBInstance.
-func LateInitialize(in *v1beta1.RDSInstanceParameters, db *rdstypes.DBInstance) { // nolint:gocyclo
+func LateInitialize(in *v1beta1.RDSInstanceParameters, db *rdstypes.DBInstance) { //nolint:gocyclo
 	if db == nil {
 		return
 	}
-	in.DBInstanceClass = awsclients.LateInitializeString(in.DBInstanceClass, db.DBInstanceClass)
-	in.Engine = awsclients.LateInitializeString(in.Engine, db.Engine)
+	in.DBInstanceClass = pointer.LateInitializeValueFromPtr(in.DBInstanceClass, db.DBInstanceClass)
+	in.Engine = pointer.LateInitializeValueFromPtr(in.Engine, db.Engine)
 
-	in.AllocatedStorage = awsclients.LateInitializeIntFrom32Ptr(in.AllocatedStorage, &db.AllocatedStorage)
-	in.AutoMinorVersionUpgrade = awsclients.LateInitializeBoolPtr(in.AutoMinorVersionUpgrade, awsclients.Bool(db.AutoMinorVersionUpgrade, awsclients.FieldRequired))
-	in.AvailabilityZone = awsclients.LateInitializeStringPtr(in.AvailabilityZone, db.AvailabilityZone)
-	in.BackupRetentionPeriod = awsclients.LateInitializeIntFromInt32Ptr(in.BackupRetentionPeriod, &db.BackupRetentionPeriod)
-	in.CACertificateIdentifier = awsclients.LateInitializeStringPtr(in.CACertificateIdentifier, db.CACertificateIdentifier)
-	in.CharacterSetName = awsclients.LateInitializeStringPtr(in.CharacterSetName, db.CharacterSetName)
-	in.CopyTagsToSnapshot = awsclients.LateInitializeBoolPtr(in.CopyTagsToSnapshot, awsclients.Bool(db.CopyTagsToSnapshot, awsclients.FieldRequired))
-	in.DBClusterIdentifier = awsclients.LateInitializeStringPtr(in.DBClusterIdentifier, db.DBClusterIdentifier)
-	in.DBName = awsclients.LateInitializeStringPtr(in.DBName, db.DBName)
-	in.DeletionProtection = awsclients.LateInitializeBoolPtr(in.DeletionProtection, awsclients.Bool(db.DeletionProtection, awsclients.FieldRequired))
-	in.EnableIAMDatabaseAuthentication = awsclients.LateInitializeBoolPtr(in.EnableIAMDatabaseAuthentication, awsclients.Bool(db.IAMDatabaseAuthenticationEnabled, awsclients.FieldRequired))
-	in.EnablePerformanceInsights = awsclients.LateInitializeBoolPtr(in.EnablePerformanceInsights, db.PerformanceInsightsEnabled)
-	in.IOPS = awsclients.LateInitializeIntFrom32Ptr(in.IOPS, db.Iops)
-	in.KMSKeyID = awsclients.LateInitializeStringPtr(in.KMSKeyID, db.KmsKeyId)
-	in.LicenseModel = awsclients.LateInitializeStringPtr(in.LicenseModel, db.LicenseModel)
-	in.MasterUsername = awsclients.LateInitializeStringPtr(in.MasterUsername, db.MasterUsername)
-	in.MaxAllocatedStorage = awsclients.LateInitializeIntFrom32Ptr(in.MaxAllocatedStorage, db.MaxAllocatedStorage)
-	in.MonitoringInterval = awsclients.LateInitializeIntFrom32Ptr(in.MonitoringInterval, db.MonitoringInterval)
-	in.MonitoringRoleARN = awsclients.LateInitializeStringPtr(in.MonitoringRoleARN, db.MonitoringRoleArn)
-	in.MultiAZ = awsclients.LateInitializeBoolPtr(in.MultiAZ, awsclients.Bool(db.MultiAZ, awsclients.FieldRequired))
-	in.PerformanceInsightsKMSKeyID = awsclients.LateInitializeStringPtr(in.PerformanceInsightsKMSKeyID, db.PerformanceInsightsKMSKeyId)
-	in.PerformanceInsightsRetentionPeriod = awsclients.LateInitializeIntFrom32Ptr(in.PerformanceInsightsRetentionPeriod, db.PerformanceInsightsRetentionPeriod)
-	in.PreferredBackupWindow = awsclients.LateInitializeStringPtr(in.PreferredBackupWindow, db.PreferredBackupWindow)
-	in.PreferredMaintenanceWindow = awsclients.LateInitializeStringPtr(in.PreferredMaintenanceWindow, db.PreferredMaintenanceWindow)
-	in.PromotionTier = awsclients.LateInitializeIntFrom32Ptr(in.PromotionTier, db.PromotionTier)
-	in.PubliclyAccessible = awsclients.LateInitializeBoolPtr(in.PubliclyAccessible, awsclients.Bool(db.PubliclyAccessible, awsclients.FieldRequired))
-	in.StorageEncrypted = awsclients.LateInitializeBoolPtr(in.StorageEncrypted, awsclients.Bool(db.StorageEncrypted, awsclients.FieldRequired))
-	in.StorageType = awsclients.LateInitializeStringPtr(in.StorageType, db.StorageType)
-	in.Timezone = awsclients.LateInitializeStringPtr(in.Timezone, db.Timezone)
+	in.AllocatedStorage = pointer.LateInitializeIntFrom32Ptr(in.AllocatedStorage, db.AllocatedStorage)
+	in.AutoMinorVersionUpgrade = pointer.LateInitialize(in.AutoMinorVersionUpgrade, db.AutoMinorVersionUpgrade)
+	in.AvailabilityZone = pointer.LateInitialize(in.AvailabilityZone, db.AvailabilityZone)
+	in.BackupRetentionPeriod = pointer.LateInitializeIntFromInt32Ptr(in.BackupRetentionPeriod, db.BackupRetentionPeriod)
+	in.CACertificateIdentifier = pointer.LateInitialize(in.CACertificateIdentifier, db.CACertificateIdentifier)
+	in.CharacterSetName = pointer.LateInitialize(in.CharacterSetName, db.CharacterSetName)
+	in.CopyTagsToSnapshot = pointer.LateInitialize(in.CopyTagsToSnapshot, db.CopyTagsToSnapshot)
+	in.DBClusterIdentifier = pointer.LateInitialize(in.DBClusterIdentifier, db.DBClusterIdentifier)
+	in.DBName = pointer.LateInitialize(in.DBName, db.DBName)
+	in.DeletionProtection = pointer.LateInitialize(in.DeletionProtection, db.DeletionProtection)
+	in.EnableIAMDatabaseAuthentication = pointer.LateInitialize(in.EnableIAMDatabaseAuthentication, db.IAMDatabaseAuthenticationEnabled)
+	in.EnablePerformanceInsights = pointer.LateInitialize(in.EnablePerformanceInsights, db.PerformanceInsightsEnabled)
+	in.IOPS = pointer.LateInitializeIntFrom32Ptr(in.IOPS, db.Iops)
+	in.KMSKeyID = pointer.LateInitialize(in.KMSKeyID, db.KmsKeyId)
+	in.LicenseModel = pointer.LateInitialize(in.LicenseModel, db.LicenseModel)
+	in.MasterUsername = pointer.LateInitialize(in.MasterUsername, db.MasterUsername)
+	in.MaxAllocatedStorage = pointer.LateInitializeIntFrom32Ptr(in.MaxAllocatedStorage, db.MaxAllocatedStorage)
+	in.MonitoringInterval = pointer.LateInitializeIntFrom32Ptr(in.MonitoringInterval, db.MonitoringInterval)
+	in.MonitoringRoleARN = pointer.LateInitialize(in.MonitoringRoleARN, db.MonitoringRoleArn)
+	in.MultiAZ = pointer.LateInitialize(in.MultiAZ, db.MultiAZ)
+	in.PerformanceInsightsKMSKeyID = pointer.LateInitialize(in.PerformanceInsightsKMSKeyID, db.PerformanceInsightsKMSKeyId)
+	in.PerformanceInsightsRetentionPeriod = pointer.LateInitializeIntFrom32Ptr(in.PerformanceInsightsRetentionPeriod, db.PerformanceInsightsRetentionPeriod)
+	in.PreferredBackupWindow = pointer.LateInitialize(in.PreferredBackupWindow, db.PreferredBackupWindow)
+	in.PreferredMaintenanceWindow = pointer.LateInitialize(in.PreferredMaintenanceWindow, db.PreferredMaintenanceWindow)
+	in.PromotionTier = pointer.LateInitializeIntFrom32Ptr(in.PromotionTier, db.PromotionTier)
+	in.PubliclyAccessible = pointer.LateInitialize(in.PubliclyAccessible, db.PubliclyAccessible)
+	in.StorageEncrypted = pointer.LateInitialize(in.StorageEncrypted, db.StorageEncrypted)
+	in.StorageThroughput = pointer.LateInitializeIntFrom32Ptr(in.StorageThroughput, db.StorageThroughput)
+	in.StorageType = pointer.LateInitialize(in.StorageType, db.StorageType)
+	in.Timezone = pointer.LateInitialize(in.Timezone, db.Timezone)
 
 	// NOTE(muvaf): Do not use db.DbInstancePort as that always returns 0 for
 	// some reason. See the bug here:
 	// https://github.com/aws/aws-sdk-java/issues/924#issuecomment-658089792
 	if db.Endpoint != nil {
-		in.Port = awsclients.LateInitializeIntFrom32Ptr(in.Port, &db.Endpoint.Port)
+		in.Port = pointer.LateInitializeIntFrom32Ptr(in.Port, db.Endpoint.Port)
 	}
 
 	if len(in.DBSecurityGroups) == 0 && len(db.DBSecurityGroups) != 0 {
@@ -619,9 +654,6 @@ func LateInitialize(in *v1beta1.RDSInstanceParameters, db *rdstypes.DBInstance) 
 	}
 	if aws.ToString(in.DBSubnetGroupName) == "" && db.DBSubnetGroup != nil {
 		in.DBSubnetGroupName = db.DBSubnetGroup.DBSubnetGroupName
-	}
-	if len(in.EnableCloudwatchLogsExports) == 0 && len(db.EnabledCloudwatchLogsExports) != 0 {
-		in.EnableCloudwatchLogsExports = db.EnabledCloudwatchLogsExports
 	}
 	if len(in.ProcessorFeatures) == 0 && len(db.ProcessorFeatures) != 0 {
 		in.ProcessorFeatures = make([]v1beta1.ProcessorFeature, len(db.ProcessorFeatures))
@@ -638,13 +670,7 @@ func LateInitialize(in *v1beta1.RDSInstanceParameters, db *rdstypes.DBInstance) 
 			in.VPCSecurityGroupIDs[i] = aws.ToString(val.VpcSecurityGroupId)
 		}
 	}
-	in.EngineVersion = awsclients.LateInitializeStringPtr(in.EngineVersion, db.EngineVersion)
-	// When version 5.6 is chosen, AWS creates 5.6.41 and that's totally valid.
-	// But we detect as if we need to update it all the time. Here, we assign
-	// the actual full version to our spec to avoid unnecessary update signals.
-	if strings.HasPrefix(aws.ToString(db.EngineVersion), aws.ToString(in.EngineVersion)) {
-		in.EngineVersion = db.EngineVersion
-	}
+	in.EngineVersion = pointer.LateInitialize(in.EngineVersion, db.EngineVersion)
 	if in.DBParameterGroupName == nil {
 		for i := range db.DBParameterGroups {
 			if db.DBParameterGroups[i].DBParameterGroupName != nil {
@@ -653,37 +679,137 @@ func LateInitialize(in *v1beta1.RDSInstanceParameters, db *rdstypes.DBInstance) 
 			}
 		}
 	}
+	// TODO: remove deprecated field + code. Mapping to EnableCloudwatchLogsExports while in deprecation.
+	//nolint:staticcheck
+	if in.EnableCloudwatchLogsExports == nil && in.CloudwatchLogsExportConfiguration != nil {
+		in.EnableCloudwatchLogsExports = in.CloudwatchLogsExportConfiguration.EnableLogTypes
+	}
+	if in.EnableCloudwatchLogsExports == nil {
+		in.EnableCloudwatchLogsExports = db.EnabledCloudwatchLogsExports
+	}
+	in.OptionGroupName = lateInitializeOptionGroupName(in.OptionGroupName, db.OptionGroupMemberships)
+}
+
+func lateInitializeOptionGroupName(inOptionGroupName *string, members []rdstypes.OptionGroupMembership) *string {
+
+	if inOptionGroupName == nil && len(members) != 0 {
+
+		for _, group := range members {
+			if group.OptionGroupName != nil && group.Status != nil {
+
+				// find the OptionGroup that is applied or will be applied to the DB
+				switch pointer.StringValue(group.Status) {
+				case "in-sync", "applying", "pending-apply", "pending-maintenance-apply":
+					return group.OptionGroupName
+				}
+			}
+		}
+	}
+	return inOptionGroupName
 }
 
 // IsUpToDate checks whether there is a change in any of the modifiable fields.
-func IsUpToDate(ctx context.Context, kube client.Client, r *v1beta1.RDSInstance, db rdstypes.DBInstance) (bool, string, error) { // nolint:gocyclo
+func IsUpToDate(ctx context.Context, kube client.Client, r *v1beta1.RDSInstance, db rdstypes.DBInstance) (bool, string, []rdstypes.Tag, []string, error) { //nolint:gocyclo
+
+	addTags := []rdstypes.Tag{}
+	removeTags := []string{}
+
 	_, pwdChanged, err := GetPassword(ctx, kube, r.Spec.ForProvider.MasterPasswordSecretRef, r.Spec.WriteConnectionSecretToReference)
 	if err != nil {
-		return false, "", err
+		return false, "", addTags, removeTags, err
 	}
 	patch, err := CreatePatch(&db, &r.Spec.ForProvider)
 	if err != nil {
-		return false, "", err
+		return false, "", addTags, removeTags, err
 	}
 	diff := cmp.Diff(&v1beta1.RDSInstanceParameters{}, patch, cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(&xpv1.Reference{}, &xpv1.Selector{}, []xpv1.Reference{}),
 		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "Region"),
 		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "Tags"),
+		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "DBName"),
+		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "RestoreFrom"),
+		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "EngineVersion"),
 		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "SkipFinalSnapshotBeforeDeletion"),
 		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "FinalDBSnapshotIdentifier"),
 		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "DeleteAutomatedBackups"),
 		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "ApplyModificationsImmediately"),
 		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "AllowMajorVersionUpgrade"),
 		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "MasterPasswordSecretRef"),
+		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "OptionGroupName"),
+		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "KMSKeyID"),
+		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "EnableCloudwatchLogsExports"),
+		// TODO: remove deprecated field + code. Mapping to EnableCloudwatchLogsExports while in deprecation.
+		cmpopts.IgnoreFields(v1beta1.RDSInstanceParameters{}, "CloudwatchLogsExportConfiguration"),
 	)
 
-	if diff == "" && !pwdChanged {
-		return true, "", nil
+	addTags, removeTags = DiffTags(r.Spec.ForProvider.Tags, db.TagList)
+	tagsChanged := len(addTags) != 0 || len(removeTags) != 0
+
+	engineVersionChanged := !isEngineVersionUpToDate(r, db)
+
+	optionGroupChanged := !isOptionGroupUpToDate(r, db)
+
+	cloudwatchLogsExportChanged := false
+	// only check CloudwatchLogsExports if there are no pending cloudwatchlogs exports (ignores the apply immediately setting)
+	// (to avoid: "api error InvalidParameterCombination: You cannot configure CloudWatch Logs while a previous configuration is in progress.")
+	if db.PendingModifiedValues == nil || (db.PendingModifiedValues != nil && db.PendingModifiedValues.PendingCloudwatchLogsExports == nil) {
+		cloudwatchLogsExportChanged = !areSameElements(r.Spec.ForProvider.EnableCloudwatchLogsExports, db.EnabledCloudwatchLogsExports)
+	}
+
+	if diff == "" && !pwdChanged && !engineVersionChanged && !optionGroupChanged && !cloudwatchLogsExportChanged && !tagsChanged {
+		return true, "", addTags, removeTags, nil
 	}
 
 	diff = "Found observed difference in rds\n" + diff
 
-	return false, diff, nil
+	if tagsChanged {
+		diff += fmt.Sprintf("\nadd %d tag(s) and remove %d tag(s)", len(addTags), len(removeTags))
+	}
+
+	return false, diff, addTags, removeTags, nil
+}
+
+func isEngineVersionUpToDate(cr *v1beta1.RDSInstance, db rdstypes.DBInstance) bool {
+	// If EngineVersion is not set, AWS sets a default value,
+	// so we do not try to update in this case
+	if cr.Spec.ForProvider.EngineVersion != nil {
+		if db.EngineVersion == nil {
+			return false
+		}
+
+		// Upgrade is only necessary if the spec version is higher.
+		// Downgrades are not possible in AWS.
+		c := utils.CompareEngineVersions(*cr.Spec.ForProvider.EngineVersion, *db.EngineVersion)
+		return c <= 0
+	}
+	return true
+}
+
+func isOptionGroupUpToDate(cr *v1beta1.RDSInstance, db rdstypes.DBInstance) bool {
+	// If OptionGroupName is not set, AWS sets a default OptionGroup,
+	// so we do not try to update in this case
+	if cr.Spec.ForProvider.OptionGroupName != nil {
+		for _, group := range db.OptionGroupMemberships {
+			if group.OptionGroupName != nil && (pointer.StringValue(group.OptionGroupName) == pointer.StringValue(cr.Spec.ForProvider.OptionGroupName)) {
+
+				switch pointer.StringValue(group.Status) {
+				case "pending-maintenance-apply":
+					// If ApplyModificationsImmediately was turned on after the OptionGroup change was requested,
+					// we can make a new Modify request
+					if pointer.BoolValue(cr.Spec.ForProvider.ApplyModificationsImmediately) {
+						return false
+					}
+					return true
+				case "pending-maintenance-removal":
+					return false
+				default: // "in-sync", "applying", "pending-apply", "pending-removal", "removing", "failed"
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return true
 }
 
 // GetPassword fetches the referenced input password for an RDSInstance CRD and determines whether it has changed or not
@@ -729,4 +855,112 @@ func GetConnectionDetails(in v1beta1.RDSInstance) managed.ConnectionDetails {
 		xpv1.ResourceCredentialsSecretEndpointKey: []byte(in.Status.AtProvider.Endpoint.Address),
 		xpv1.ResourceCredentialsSecretPortKey:     []byte(strconv.Itoa(in.Status.AtProvider.Endpoint.Port)),
 	}
+}
+
+func generateCloudWatchExportConfiguration(spec, current []string) *rdstypes.CloudwatchLogsExportConfiguration {
+	toEnable := []string{}
+	toDisable := []string{}
+
+	currentMap := make(map[string]struct{}, len(current))
+	for _, currentID := range current {
+		currentMap[currentID] = struct{}{}
+	}
+
+	specMap := make(map[string]struct{}, len(spec))
+	for _, specID := range spec {
+		specMap[specID] = struct{}{}
+
+		if _, exists := currentMap[specID]; !exists {
+			toEnable = append(toEnable, specID)
+		}
+	}
+
+	for _, currentID := range current {
+		if _, exists := specMap[currentID]; !exists {
+			toDisable = append(toDisable, currentID)
+		}
+	}
+
+	if len(toEnable) == 0 && len(toDisable) == 0 {
+		return nil
+	}
+
+	return &rdstypes.CloudwatchLogsExportConfiguration{
+		EnableLogTypes:  toEnable,
+		DisableLogTypes: toDisable,
+	}
+}
+
+func areSameElements(a1, a2 []string) bool {
+	if len(a1) != len(a2) {
+		return false
+	}
+
+	m2 := make(map[string]struct{}, len(a2))
+	for _, s2 := range a2 {
+		m2[s2] = struct{}{}
+	}
+
+	for _, s1 := range a1 {
+		if _, exists := m2[s1]; !exists {
+			return false
+		}
+	}
+
+	return true
+}
+
+// DiffTags between spec and current
+func DiffTags(spec []v1beta1.Tag, current []rdstypes.Tag) (addTags []rdstypes.Tag, removeTags []string) {
+	currentMap := make(map[string]string, len(current))
+	for _, t := range current {
+		currentMap[pointer.StringValue(t.Key)] = pointer.StringValue(t.Value)
+	}
+
+	specMap := make(map[string]string, len(spec))
+	for _, t := range spec {
+		key := t.Key
+		val := t.Value
+		specMap[key] = t.Value
+
+		if currentVal, exists := currentMap[key]; exists {
+			if currentVal != val {
+				addTags = append(addTags, rdstypes.Tag{
+					Key:   pointer.ToOrNilIfZeroValue(key),
+					Value: pointer.ToOrNilIfZeroValue(val),
+				})
+			}
+		} else {
+			addTags = append(addTags, rdstypes.Tag{
+				Key:   pointer.ToOrNilIfZeroValue(key),
+				Value: pointer.ToOrNilIfZeroValue(val),
+			})
+		}
+	}
+
+	for _, t := range current {
+		key := pointer.StringValue(t.Key)
+		if _, exists := specMap[key]; !exists {
+			removeTags = append(removeTags, key)
+		}
+	}
+
+	return addTags, removeTags
+}
+
+// IsStorageTypeGP3BelowAllocatedStorageThreshold returns true if storageType is gp3 and allocatedStorage is below engine specific threshold
+// See also https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage.
+func IsStorageTypeGP3BelowAllocatedStorageThreshold(p *v1beta1.RDSInstanceParameters) bool {
+	if pointer.StringValue(p.StorageType) != "gp3" {
+		return false
+	}
+
+	switch allocatedStorage, engine := aws.ToInt(p.AllocatedStorage), p.Engine; engine {
+	case "mariadb", "mysql", "postgres":
+		return allocatedStorage < 400
+	case "oracle-ee", "oracle-ee-cdb", "oracle-se2", "oracle-se2-cdb":
+		return allocatedStorage < 200
+	}
+
+	return false
 }

@@ -24,9 +24,10 @@ import (
 	"github.com/aws/smithy-go/document"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/acmpca/v1beta1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
@@ -56,25 +57,25 @@ func TestGenerateCreateCertificateAuthorityInput(t *testing.T) {
 	}{
 		"Filled_Input": {
 			in: &v1beta1.CertificateAuthorityParameters{
-				Type: types.CertificateAuthorityTypeRoot,
+				Type: string(types.CertificateAuthorityTypeRoot),
 				CertificateAuthorityConfiguration: v1beta1.CertificateAuthorityConfiguration{
-					SigningAlgorithm: types.SigningAlgorithmSha256withecdsa,
-					KeyAlgorithm:     types.KeyAlgorithmRsa2048,
+					SigningAlgorithm: string(types.SigningAlgorithmSha256withecdsa),
+					KeyAlgorithm:     string(types.KeyAlgorithmRsa2048),
 					Subject: v1beta1.Subject{
 						CommonName:                 commonName,
 						Country:                    country,
-						DistinguishedNameQualifier: aws.String(distinguishedNameQualifier),
-						GenerationQualifier:        aws.String(generationQualifier),
-						GivenName:                  aws.String(givenName),
-						Initials:                   aws.String(initials),
+						DistinguishedNameQualifier: pointer.ToOrNilIfZeroValue(distinguishedNameQualifier),
+						GenerationQualifier:        pointer.ToOrNilIfZeroValue(generationQualifier),
+						GivenName:                  pointer.ToOrNilIfZeroValue(givenName),
+						Initials:                   pointer.ToOrNilIfZeroValue(initials),
 						Locality:                   locality,
 						Organization:               organization,
 						OrganizationalUnit:         organizationalUnit,
-						Pseudonym:                  aws.String(pseudonym),
-						SerialNumber:               aws.String(serialNumber),
+						Pseudonym:                  pointer.ToOrNilIfZeroValue(pseudonym),
+						SerialNumber:               pointer.ToOrNilIfZeroValue(serialNumber),
 						State:                      state,
-						Surname:                    aws.String(surname),
-						Title:                      aws.String(title),
+						Surname:                    pointer.ToOrNilIfZeroValue(surname),
+						Title:                      pointer.ToOrNilIfZeroValue(title),
 					},
 				},
 				Tags: []v1beta1.Tag{{
@@ -87,26 +88,26 @@ func TestGenerateCreateCertificateAuthorityInput(t *testing.T) {
 					SigningAlgorithm: types.SigningAlgorithmSha256withecdsa,
 					KeyAlgorithm:     types.KeyAlgorithmRsa2048,
 					Subject: &types.ASN1Subject{
-						CommonName:                 aws.String(commonName),
-						Country:                    aws.String(country),
-						DistinguishedNameQualifier: aws.String(distinguishedNameQualifier),
-						GenerationQualifier:        aws.String(generationQualifier),
-						GivenName:                  aws.String(givenName),
-						Initials:                   aws.String(initials),
-						Locality:                   aws.String(locality),
-						Organization:               aws.String(organization),
-						OrganizationalUnit:         aws.String(organizationalUnit),
-						Pseudonym:                  aws.String(pseudonym),
-						SerialNumber:               aws.String(serialNumber),
-						State:                      aws.String(state),
-						Surname:                    aws.String(surname),
-						Title:                      aws.String(title),
+						CommonName:                 pointer.ToOrNilIfZeroValue(commonName),
+						Country:                    pointer.ToOrNilIfZeroValue(country),
+						DistinguishedNameQualifier: pointer.ToOrNilIfZeroValue(distinguishedNameQualifier),
+						GenerationQualifier:        pointer.ToOrNilIfZeroValue(generationQualifier),
+						GivenName:                  pointer.ToOrNilIfZeroValue(givenName),
+						Initials:                   pointer.ToOrNilIfZeroValue(initials),
+						Locality:                   pointer.ToOrNilIfZeroValue(locality),
+						Organization:               pointer.ToOrNilIfZeroValue(organization),
+						OrganizationalUnit:         pointer.ToOrNilIfZeroValue(organizationalUnit),
+						Pseudonym:                  pointer.ToOrNilIfZeroValue(pseudonym),
+						SerialNumber:               pointer.ToOrNilIfZeroValue(serialNumber),
+						State:                      pointer.ToOrNilIfZeroValue(state),
+						Surname:                    pointer.ToOrNilIfZeroValue(surname),
+						Title:                      pointer.ToOrNilIfZeroValue(title),
 					},
 				},
 				CertificateAuthorityType: types.CertificateAuthorityTypeRoot,
 				Tags: []types.Tag{{
-					Key:   aws.String("key1"),
-					Value: aws.String("value1"),
+					Key:   pointer.ToOrNilIfZeroValue("key1"),
+					Value: pointer.ToOrNilIfZeroValue("value1"),
 				}},
 			},
 		},
@@ -129,43 +130,43 @@ func TestGenerateCertificateAuthorityConfiguration(t *testing.T) {
 	}{
 		"Filled_Input": {
 			in: v1beta1.CertificateAuthorityConfiguration{
-				SigningAlgorithm: types.SigningAlgorithmSha256withecdsa,
-				KeyAlgorithm:     types.KeyAlgorithmRsa2048,
+				SigningAlgorithm: string(types.SigningAlgorithmSha256withecdsa),
+				KeyAlgorithm:     string(types.KeyAlgorithmRsa2048),
 				Subject: v1beta1.Subject{
 					CommonName:                 commonName,
 					Country:                    country,
-					DistinguishedNameQualifier: aws.String(distinguishedNameQualifier),
-					GenerationQualifier:        aws.String(generationQualifier),
-					GivenName:                  aws.String(givenName),
-					Initials:                   aws.String(initials),
+					DistinguishedNameQualifier: pointer.ToOrNilIfZeroValue(distinguishedNameQualifier),
+					GenerationQualifier:        pointer.ToOrNilIfZeroValue(generationQualifier),
+					GivenName:                  pointer.ToOrNilIfZeroValue(givenName),
+					Initials:                   pointer.ToOrNilIfZeroValue(initials),
 					Locality:                   locality,
 					Organization:               organization,
 					OrganizationalUnit:         organizationalUnit,
-					Pseudonym:                  aws.String(pseudonym),
-					SerialNumber:               aws.String(serialNumber),
+					Pseudonym:                  pointer.ToOrNilIfZeroValue(pseudonym),
+					SerialNumber:               pointer.ToOrNilIfZeroValue(serialNumber),
 					State:                      state,
-					Surname:                    aws.String(surname),
-					Title:                      aws.String(title),
+					Surname:                    pointer.ToOrNilIfZeroValue(surname),
+					Title:                      pointer.ToOrNilIfZeroValue(title),
 				},
 			},
 			out: &types.CertificateAuthorityConfiguration{
 				SigningAlgorithm: types.SigningAlgorithmSha256withecdsa,
 				KeyAlgorithm:     types.KeyAlgorithmRsa2048,
 				Subject: &types.ASN1Subject{
-					CommonName:                 aws.String(commonName),
-					Country:                    aws.String(country),
-					DistinguishedNameQualifier: aws.String(distinguishedNameQualifier),
-					GenerationQualifier:        aws.String(generationQualifier),
-					GivenName:                  aws.String(givenName),
-					Initials:                   aws.String(initials),
-					Locality:                   aws.String(locality),
-					Organization:               aws.String(organization),
-					OrganizationalUnit:         aws.String(organizationalUnit),
-					Pseudonym:                  aws.String(pseudonym),
-					SerialNumber:               aws.String(serialNumber),
-					State:                      aws.String(state),
-					Surname:                    aws.String(surname),
-					Title:                      aws.String(title),
+					CommonName:                 pointer.ToOrNilIfZeroValue(commonName),
+					Country:                    pointer.ToOrNilIfZeroValue(country),
+					DistinguishedNameQualifier: pointer.ToOrNilIfZeroValue(distinguishedNameQualifier),
+					GenerationQualifier:        pointer.ToOrNilIfZeroValue(generationQualifier),
+					GivenName:                  pointer.ToOrNilIfZeroValue(givenName),
+					Initials:                   pointer.ToOrNilIfZeroValue(initials),
+					Locality:                   pointer.ToOrNilIfZeroValue(locality),
+					Organization:               pointer.ToOrNilIfZeroValue(organization),
+					OrganizationalUnit:         pointer.ToOrNilIfZeroValue(organizationalUnit),
+					Pseudonym:                  pointer.ToOrNilIfZeroValue(pseudonym),
+					SerialNumber:               pointer.ToOrNilIfZeroValue(serialNumber),
+					State:                      pointer.ToOrNilIfZeroValue(state),
+					Surname:                    pointer.ToOrNilIfZeroValue(surname),
+					Title:                      pointer.ToOrNilIfZeroValue(title),
 				},
 			},
 		},
@@ -188,15 +189,15 @@ func TestGenerateRevocationConfiguration(t *testing.T) {
 	}{
 		"Filled_Input": {
 			in: &v1beta1.RevocationConfiguration{
-				CustomCname:  aws.String(customCname),
+				CustomCname:  pointer.ToOrNilIfZeroValue(customCname),
 				Enabled:      revocationConfigurationEnabled,
-				S3BucketName: aws.String(s3BucketName),
+				S3BucketName: pointer.ToOrNilIfZeroValue(s3BucketName),
 			},
 			out: &types.RevocationConfiguration{
 				CrlConfiguration: &types.CrlConfiguration{
-					CustomCname:  aws.String(customCname),
-					Enabled:      revocationConfigurationEnabled,
-					S3BucketName: aws.String(s3BucketName),
+					CustomCname:  pointer.ToOrNilIfZeroValue(customCname),
+					Enabled:      &revocationConfigurationEnabled,
+					S3BucketName: pointer.ToOrNilIfZeroValue(s3BucketName),
 				},
 			},
 		},
@@ -227,29 +228,29 @@ func TestLateInitializeCertificateAuthority(t *testing.T) {
 		"AllFilledNoDiff": {
 			args: args{
 				spec: &v1beta1.CertificateAuthorityParameters{
-					Type: types.CertificateAuthorityTypeRoot,
+					Type: string(types.CertificateAuthorityTypeRoot),
 				},
 				in: &types.CertificateAuthority{
 					Type:   types.CertificateAuthorityTypeRoot,
 					Status: types.CertificateAuthorityStatus(status),
 					CertificateAuthorityConfiguration: &types.CertificateAuthorityConfiguration{
 						Subject: &types.ASN1Subject{
-							SerialNumber: aws.String(serialNumber),
+							SerialNumber: pointer.ToOrNilIfZeroValue(serialNumber),
 						},
 					},
 					RevocationConfiguration: &types.RevocationConfiguration{
 						CrlConfiguration: &types.CrlConfiguration{
-							Enabled: false,
+							Enabled: ptr.To(false),
 						},
 					},
 				},
 			},
 			want: &v1beta1.CertificateAuthorityParameters{
-				Type:   types.CertificateAuthorityTypeRoot,
+				Type:   string(types.CertificateAuthorityTypeRoot),
 				Status: &status,
 				CertificateAuthorityConfiguration: v1beta1.CertificateAuthorityConfiguration{
 					Subject: v1beta1.Subject{
-						SerialNumber: aws.String(serialNumber),
+						SerialNumber: pointer.ToOrNilIfZeroValue(serialNumber),
 					},
 				},
 			},
@@ -283,9 +284,9 @@ func TestIsCertificateAuthorityUpToDate(t *testing.T) {
 				cd: types.CertificateAuthority{
 					RevocationConfiguration: &types.RevocationConfiguration{
 						CrlConfiguration: &types.CrlConfiguration{
-							CustomCname:  aws.String(customCname),
-							S3BucketName: aws.String(s3BucketName),
-							Enabled:      true,
+							CustomCname:  pointer.ToOrNilIfZeroValue(customCname),
+							S3BucketName: pointer.ToOrNilIfZeroValue(s3BucketName),
+							Enabled:      ptr.To(true),
 						},
 					},
 					Status: types.CertificateAuthorityStatus(status),
@@ -294,8 +295,8 @@ func TestIsCertificateAuthorityUpToDate(t *testing.T) {
 					Spec: v1beta1.CertificateAuthoritySpec{
 						ForProvider: v1beta1.CertificateAuthorityParameters{
 							RevocationConfiguration: &v1beta1.RevocationConfiguration{
-								CustomCname:  aws.String(customCname),
-								S3BucketName: aws.String(s3BucketName),
+								CustomCname:  pointer.ToOrNilIfZeroValue(customCname),
+								S3BucketName: pointer.ToOrNilIfZeroValue(s3BucketName),
 								Enabled:      true,
 							},
 							Tags: []v1beta1.Tag{{
@@ -307,8 +308,8 @@ func TestIsCertificateAuthorityUpToDate(t *testing.T) {
 					},
 				},
 				tags: []types.Tag{{
-					Key:   aws.String("key1"),
-					Value: aws.String("value1"),
+					Key:   pointer.ToOrNilIfZeroValue("key1"),
+					Value: pointer.ToOrNilIfZeroValue("value1"),
 				}},
 			},
 			want: true,
@@ -318,8 +319,8 @@ func TestIsCertificateAuthorityUpToDate(t *testing.T) {
 				cd: types.CertificateAuthority{
 					RevocationConfiguration: &types.RevocationConfiguration{
 						CrlConfiguration: &types.CrlConfiguration{
-							CustomCname:  aws.String(customCname),
-							S3BucketName: aws.String(s3BucketName),
+							CustomCname:  pointer.ToOrNilIfZeroValue(customCname),
+							S3BucketName: pointer.ToOrNilIfZeroValue(s3BucketName),
 						},
 					},
 				},
@@ -327,15 +328,15 @@ func TestIsCertificateAuthorityUpToDate(t *testing.T) {
 					Spec: v1beta1.CertificateAuthoritySpec{
 						ForProvider: v1beta1.CertificateAuthorityParameters{
 							RevocationConfiguration: &v1beta1.RevocationConfiguration{
-								CustomCname:  aws.String(customCname),
-								S3BucketName: aws.String(s3BucketName),
+								CustomCname:  pointer.ToOrNilIfZeroValue(customCname),
+								S3BucketName: pointer.ToOrNilIfZeroValue(s3BucketName),
 							},
 						},
 					},
 				},
 				tags: []types.Tag{{
-					Key:   aws.String("key1"),
-					Value: aws.String("value1"),
+					Key:   pointer.ToOrNilIfZeroValue("key1"),
+					Value: pointer.ToOrNilIfZeroValue("value1"),
 				}},
 			},
 			want: false,

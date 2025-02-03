@@ -20,14 +20,13 @@ import (
 	"context"
 	"errors"
 
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	route53resolver "github.com/aws/aws-sdk-go-v2/service/route53resolver"
 	route53resolvertypes "github.com/aws/aws-sdk-go-v2/service/route53resolver/types"
+	"github.com/crossplane/crossplane-runtime/pkg/meta"
 
 	"github.com/crossplane-contrib/provider-aws/apis/route53resolver/manualv1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // Client defines AssociateResolverRule operations
@@ -45,7 +44,7 @@ func NewRoute53ResolverClient(cfg aws.Config) Client {
 // GenerateCreateAssociateResolverRuleInput returns a route53resolver AssociateResolverRuleOutput
 func GenerateCreateAssociateResolverRuleInput(cr *manualv1alpha1.ResolverRuleAssociation) *route53resolver.AssociateResolverRuleInput {
 	reqInput := &route53resolver.AssociateResolverRuleInput{
-		Name:           awsclients.String(meta.GetExternalName(cr)),
+		Name:           pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		VPCId:          cr.Spec.ForProvider.VPCId,
 		ResolverRuleId: cr.Spec.ForProvider.ResolverRuleID,
 	}

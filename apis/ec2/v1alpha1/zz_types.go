@@ -80,7 +80,7 @@ type ActiveInstance struct {
 }
 
 // +kubebuilder:skipversion
-type AddIPamOperatingRegion struct {
+type AddIPAMOperatingRegion struct {
 	RegionName *string `json:"regionName,omitempty"`
 }
 
@@ -92,8 +92,19 @@ type AddPrefixListEntry struct {
 }
 
 // +kubebuilder:skipversion
+type AddedPrincipal struct {
+	Principal *string `json:"principal,omitempty"`
+
+	ServiceID *string `json:"serviceID,omitempty"`
+
+	ServicePermissionID *string `json:"servicePermissionID,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type AdditionalDetail struct {
 	AdditionalDetailType *string `json:"additionalDetailType,omitempty"`
+
+	ServiceName *string `json:"serviceName,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -131,8 +142,27 @@ type AddressAttribute struct {
 }
 
 // +kubebuilder:skipversion
+type AddressTransfer struct {
+	AllocationID *string `json:"allocationID,omitempty"`
+
+	PublicIP *string `json:"publicIP,omitempty"`
+
+	TransferAccountID *string `json:"transferAccountID,omitempty"`
+
+	TransferOfferAcceptedTimestamp *metav1.Time `json:"transferOfferAcceptedTimestamp,omitempty"`
+
+	TransferOfferExpirationTimestamp *metav1.Time `json:"transferOfferExpirationTimestamp,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type AllowedPrincipal struct {
 	Principal *string `json:"principal,omitempty"`
+
+	ServiceID *string `json:"serviceID,omitempty"`
+
+	ServicePermissionID *string `json:"servicePermissionID,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -176,6 +206,8 @@ type AnalysisPacketHeader struct {
 
 // +kubebuilder:skipversion
 type AnalysisRouteTableRoute struct {
+	CarrierGatewayID *string `json:"carrierGatewayID,omitempty"`
+
 	DestinationCIDR *string `json:"destinationCIDR,omitempty"`
 
 	DestinationPrefixListID *string `json:"destinationPrefixListID,omitempty"`
@@ -186,11 +218,15 @@ type AnalysisRouteTableRoute struct {
 
 	InstanceID *string `json:"instanceID,omitempty"`
 
+	LocalGatewayID *string `json:"localGatewayID,omitempty"`
+
 	NATGatewayID *string `json:"natGatewayID,omitempty"`
 
 	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
 
 	Origin *string `json:"origin,omitempty"`
+
+	State *string `json:"state,omitempty"`
 
 	TransitGatewayID *string `json:"transitGatewayID,omitempty"`
 
@@ -241,6 +277,16 @@ type AthenaIntegration struct {
 	PartitionEndDate *metav1.Time `json:"partitionEndDate,omitempty"`
 
 	PartitionStartDate *metav1.Time `json:"partitionStartDate,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type AttachmentENASrdSpecification struct {
+	ENASrdEnabled *bool `json:"enaSrdEnabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type AttachmentENASrdUDPSpecification struct {
+	ENASrdUDPEnabled *bool `json:"enaSrdUDPEnabled,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -361,6 +407,8 @@ type CIDRBlock struct {
 
 // +kubebuilder:skipversion
 type CPUOptions struct {
+	AmdSevSnp *string `json:"amdSevSnp,omitempty"`
+
 	CoreCount *int64 `json:"coreCount,omitempty"`
 
 	ThreadsPerCore *int64 `json:"threadsPerCore,omitempty"`
@@ -368,6 +416,8 @@ type CPUOptions struct {
 
 // +kubebuilder:skipversion
 type CPUOptionsRequest struct {
+	AmdSevSnp *string `json:"amdSevSnp,omitempty"`
+
 	CoreCount *int64 `json:"coreCount,omitempty"`
 
 	ThreadsPerCore *int64 `json:"threadsPerCore,omitempty"`
@@ -391,6 +441,30 @@ type CancelSpotFleetRequestsSuccessItem struct {
 // +kubebuilder:skipversion
 type CancelledSpotInstanceRequest struct {
 	SpotInstanceRequestID *string `json:"spotInstanceRequestID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type CapacityAllocation struct {
+	Count *int64 `json:"count,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type CapacityBlockOffering struct {
+	AvailabilityZone *string `json:"availabilityZone,omitempty"`
+
+	CapacityBlockDurationHours *int64 `json:"capacityBlockDurationHours,omitempty"`
+
+	CurrencyCode *string `json:"currencyCode,omitempty"`
+
+	EndDate *metav1.Time `json:"endDate,omitempty"`
+
+	InstanceCount *int64 `json:"instanceCount,omitempty"`
+
+	InstanceType *string `json:"instanceType,omitempty"`
+
+	StartDate *metav1.Time `json:"startDate,omitempty"`
+
+	UpfrontFee *string `json:"upfrontFee,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -661,6 +735,22 @@ type ClientVPNRouteStatus struct {
 }
 
 // +kubebuilder:skipversion
+type CloudWatchLogOptions struct {
+	LogEnabled *bool `json:"logEnabled,omitempty"`
+
+	LogGroupARN *string `json:"logGroupARN,omitempty"`
+
+	LogOutputFormat *string `json:"logOutputFormat,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type CloudWatchLogOptionsSpecification struct {
+	LogEnabled *bool `json:"logEnabled,omitempty"`
+
+	LogOutputFormat *string `json:"logOutputFormat,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type CoipAddressUsage struct {
 	AllocationID *string `json:"allocationID,omitempty"`
 
@@ -669,6 +759,13 @@ type CoipAddressUsage struct {
 	AWSService *string `json:"awsService,omitempty"`
 
 	CoIP *string `json:"coIP,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type CoipCIDR struct {
+	CIDR *string `json:"cidr,omitempty"`
+
+	LocalGatewayRouteTableID *string `json:"localGatewayRouteTableID,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -742,6 +839,31 @@ type CreateTransitGatewayVPCAttachmentRequestOptions struct {
 }
 
 // +kubebuilder:skipversion
+type CreateVerifiedAccessEndpointEniOptions struct {
+	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type CreateVerifiedAccessTrustProviderDeviceOptions struct {
+	TenantID *string `json:"tenantID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type CreateVerifiedAccessTrustProviderOIDCOptions struct {
+	AuthorizationEndpoint *string `json:"authorizationEndpoint,omitempty"`
+
+	ClientID *string `json:"clientID,omitempty"`
+
+	Issuer *string `json:"issuer,omitempty"`
+
+	Scope *string `json:"scope,omitempty"`
+
+	TokenEndpoint *string `json:"tokenEndpoint,omitempty"`
+
+	UserInfoEndpoint *string `json:"userInfoEndpoint,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type CreateVolumePermission struct {
 	UserID *string `json:"userID,omitempty"`
 }
@@ -797,10 +919,42 @@ type DNSEntry struct {
 }
 
 // +kubebuilder:skipversion
+type DNSOptions struct {
+	DNSRecordIPType *string `json:"dnsRecordIPType,omitempty"`
+
+	PrivateDNSOnlyForInboundResolverEndpoint *bool `json:"privateDNSOnlyForInboundResolverEndpoint,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DNSOptionsSpecification struct {
+	DNSRecordIPType *string `json:"dnsRecordIPType,omitempty"`
+
+	PrivateDNSOnlyForInboundResolverEndpoint *bool `json:"privateDNSOnlyForInboundResolverEndpoint,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type DNSServersOptionsModifyStructure struct {
 	CustomDNSServers []*string `json:"customDNSServers,omitempty"`
 
 	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DataQuery struct {
+	Destination *string `json:"destination,omitempty"`
+
+	ID *string `json:"id,omitempty"`
+
+	Source *string `json:"source,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DataResponse struct {
+	Destination *string `json:"destination,omitempty"`
+
+	ID *string `json:"id,omitempty"`
+
+	Source *string `json:"source,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -903,6 +1057,11 @@ type DestinationOptionsResponse struct {
 }
 
 // +kubebuilder:skipversion
+type DeviceOptions struct {
+	TenantID *string `json:"tenantID,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type DirectoryServiceAuthentication struct {
 	DirectoryID *string `json:"directoryID,omitempty"`
 }
@@ -961,16 +1120,12 @@ type DiskImage struct {
 type DiskImageDescription struct {
 	Checksum *string `json:"checksum,omitempty"`
 
-	ImportManifestURL *string `json:"importManifestURL,omitempty"`
-
 	Size *int64 `json:"size,omitempty"`
 }
 
 // +kubebuilder:skipversion
 type DiskImageDetail struct {
 	Bytes *int64 `json:"bytes,omitempty"`
-
-	ImportManifestURL *string `json:"importManifestURL,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -1015,6 +1170,49 @@ type EBSInstanceBlockDeviceSpecification struct {
 	DeleteOnTermination *bool `json:"deleteOnTermination,omitempty"`
 
 	VolumeID *string `json:"volumeID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type EC2InstanceConnectEndpoint struct {
+	AvailabilityZone *string `json:"availabilityZone,omitempty"`
+
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+
+	DNSName *string `json:"dnsName,omitempty"`
+
+	FipsDNSName *string `json:"fipsDNSName,omitempty"`
+
+	OwnerID *string `json:"ownerID,omitempty"`
+
+	PreserveClientIP *bool `json:"preserveClientIP,omitempty"`
+
+	StateMessage *string `json:"stateMessage,omitempty"`
+
+	SubnetID *string `json:"subnetID,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ENASrdSpecification struct {
+	ENASrdEnabled *bool `json:"enaSrdEnabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ENASrdSpecificationRequest struct {
+	ENASrdEnabled *bool `json:"enaSrdEnabled,omitempty"`
+	// Configures ENA Express for UDP network traffic from your launch template.
+	ENASrdUDPSpecification *ENASrdUDPSpecificationRequest `json:"enaSrdUDPSpecification,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ENASrdUDPSpecification struct {
+	ENASrdUDPEnabled *bool `json:"enaSrdUDPEnabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ENASrdUDPSpecificationRequest struct {
+	ENASrdUDPEnabled *bool `json:"enaSrdUDPEnabled,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -1300,6 +1498,28 @@ type Filter struct {
 }
 
 // +kubebuilder:skipversion
+type FirewallStatefulRule struct {
+	Destinations []*string `json:"destinations,omitempty"`
+
+	Direction *string `json:"direction,omitempty"`
+
+	Protocol *string `json:"protocol,omitempty"`
+
+	RuleAction *string `json:"ruleAction,omitempty"`
+
+	Sources []*string `json:"sources,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type FirewallStatelessRule struct {
+	Destinations []*string `json:"destinations,omitempty"`
+
+	RuleAction *string `json:"ruleAction,omitempty"`
+
+	Sources []*string `json:"sources,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type FleetCapacityReservation struct {
 	AvailabilityZone *string `json:"availabilityZone,omitempty"`
 
@@ -1344,18 +1564,40 @@ type FleetData struct {
 // +kubebuilder:skipversion
 type FleetLaunchTemplateOverrides struct {
 	AvailabilityZone *string `json:"availabilityZone,omitempty"`
+
+	ImageID *string `json:"imageID,omitempty"`
 	// The attributes for the instance types. When you specify instance attributes,
 	// Amazon EC2 will identify instance types with these attributes.
 	//
-	// When you specify multiple parameters, you get instance types that satisfy
-	// all of the specified parameters. If you specify multiple values for a parameter,
+	// You must specify VCpuCount and MemoryMiB. All other attributes are optional.
+	// Any unspecified optional attribute is set to its default.
+	//
+	// When you specify multiple attributes, you get instance types that satisfy
+	// all of the specified attributes. If you specify multiple values for an attribute,
 	// you get instance types that satisfy any of the specified values.
 	//
-	// You must specify VCpuCount and MemoryMiB. All other parameters are optional.
-	// Any unspecified optional parameter is set to its default.
+	// To limit the list of instance types from which Amazon EC2 can identify matching
+	// instance types, you can use one of the following parameters, but not both
+	// in the same request:
 	//
-	// For more information, see Attribute-based instance type selection for EC2
-	// Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
+	//    * AllowedInstanceTypes - The instance types to include in the list. All
+	//    other instance types are ignored, even if they match your specified attributes.
+	//
+	//    * ExcludedInstanceTypes - The instance types to exclude from the list,
+	//    even if they match your specified attributes.
+	//
+	// If you specify InstanceRequirements, you can't specify InstanceType.
+	//
+	// Attribute-based instance type selection is only supported when using Auto
+	// Scaling groups, EC2 Fleet, and Spot Fleet to launch instances. If you plan
+	// to use the launch template in the launch instance wizard (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-instance-wizard.html)
+	// or with the RunInstances API (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html),
+	// you can't specify InstanceRequirements.
+	//
+	// For more information, see Create a mixed instances group using attribute-based
+	// instance type selection (https://docs.aws.amazon.com/autoscaling/ec2/userguide/create-mixed-instances-group-attribute-based-instance-type-selection.html)
+	// in the Amazon EC2 Auto Scaling User Guide, and also Attribute-based instance
+	// type selection for EC2 Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
 	// Attribute-based instance type selection for Spot Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-fleet-attribute-based-instance-type-selection.html),
 	// and Spot placement score (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-placement-score.html)
 	// in the Amazon EC2 User Guide.
@@ -1375,15 +1617,36 @@ type FleetLaunchTemplateOverrides struct {
 // +kubebuilder:skipversion
 type FleetLaunchTemplateOverridesRequest struct {
 	AvailabilityZone *string `json:"availabilityZone,omitempty"`
+
+	ImageID *string `json:"imageID,omitempty"`
 	// The attributes for the instance types. When you specify instance attributes,
 	// Amazon EC2 will identify instance types with these attributes.
 	//
-	// When you specify multiple parameters, you get instance types that satisfy
-	// all of the specified parameters. If you specify multiple values for a parameter,
+	// You must specify VCpuCount and MemoryMiB. All other attributes are optional.
+	// Any unspecified optional attribute is set to its default.
+	//
+	// When you specify multiple attributes, you get instance types that satisfy
+	// all of the specified attributes. If you specify multiple values for an attribute,
 	// you get instance types that satisfy any of the specified values.
 	//
-	// You must specify VCpuCount and MemoryMiB. All other parameters are optional.
-	// Any unspecified optional parameter is set to its default.
+	// To limit the list of instance types from which Amazon EC2 can identify matching
+	// instance types, you can use one of the following parameters, but not both
+	// in the same request:
+	//
+	//    * AllowedInstanceTypes - The instance types to include in the list. All
+	//    other instance types are ignored, even if they match your specified attributes.
+	//
+	//    * ExcludedInstanceTypes - The instance types to exclude from the list,
+	//    even if they match your specified attributes.
+	//
+	// If you specify InstanceRequirements, you can't specify InstanceType.
+	//
+	// Attribute-based instance type selection is only supported when using Auto
+	// Scaling groups, EC2 Fleet, and Spot Fleet to launch instances. If you plan
+	// to use the launch template in the launch instance wizard (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-instance-wizard.html),
+	// or with the RunInstances (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html)
+	// API or AWS::EC2::Instance (https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-instance.html)
+	// Amazon Web Services CloudFormation resource, you can't specify InstanceRequirements.
 	//
 	// For more information, see Attribute-based instance type selection for EC2
 	// Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
@@ -1434,6 +1697,8 @@ type FleetSpotCapacityRebalanceRequest struct {
 // +kubebuilder:skipversion
 type FlowLog_SDK struct {
 	CreationTime *metav1.Time `json:"creationTime,omitempty"`
+
+	DeliverCrossAccountRole *string `json:"deliverCrossAccountRole,omitempty"`
 
 	DeliverLogsErrorMessage *string `json:"deliverLogsErrorMessage,omitempty"`
 
@@ -1506,6 +1771,8 @@ type Host struct {
 	HostReservationID *string `json:"hostReservationID,omitempty"`
 
 	MemberOfServiceLinkedResourceGroup *bool `json:"memberOfServiceLinkedResourceGroup,omitempty"`
+
+	OutpostARN *string `json:"outpostARN,omitempty"`
 
 	OwnerID *string `json:"ownerID,omitempty"`
 
@@ -1616,28 +1883,14 @@ type IKEVersionsRequestListValue struct {
 }
 
 // +kubebuilder:skipversion
-type IPPermission struct {
-	FromPort *int64 `json:"fromPort,omitempty"`
-
-	IPProtocol *string `json:"ipProtocol,omitempty"`
-
-	ToPort *int64 `json:"toPort,omitempty"`
-}
-
-// +kubebuilder:skipversion
-type IPRange struct {
-	CIDRIP *string `json:"cidrIP,omitempty"`
-
-	Description *string `json:"description,omitempty"`
-}
-
-// +kubebuilder:skipversion
-type IPam struct {
+type IPAM struct {
 	Description *string `json:"description,omitempty"`
 
-	IPamRegion *string `json:"ipamRegion,omitempty"`
+	IPAMRegion *string `json:"ipamRegion,omitempty"`
 
 	OwnerID *string `json:"ownerID,omitempty"`
+
+	ResourceDiscoveryAssociationCount *int64 `json:"resourceDiscoveryAssociationCount,omitempty"`
 
 	ScopeCount *int64 `json:"scopeCount,omitempty"`
 
@@ -1645,7 +1898,7 @@ type IPam struct {
 }
 
 // +kubebuilder:skipversion
-type IPamAddressHistoryRecord struct {
+type IPAMAddressHistoryRecord struct {
 	ResourceCIDR *string `json:"resourceCIDR,omitempty"`
 
 	ResourceID *string `json:"resourceID,omitempty"`
@@ -1664,24 +1917,55 @@ type IPamAddressHistoryRecord struct {
 }
 
 // +kubebuilder:skipversion
-type IPamCIDRAuthorizationContext struct {
+type IPAMCIDRAuthorizationContext struct {
 	Message *string `json:"message,omitempty"`
 
 	Signature *string `json:"signature,omitempty"`
 }
 
 // +kubebuilder:skipversion
-type IPamOperatingRegion struct {
+type IPAMDiscoveredAccount struct {
+	AccountID *string `json:"accountID,omitempty"`
+
+	DiscoveryRegion *string `json:"discoveryRegion,omitempty"`
+
+	LastAttemptedDiscoveryTime *metav1.Time `json:"lastAttemptedDiscoveryTime,omitempty"`
+
+	LastSuccessfulDiscoveryTime *metav1.Time `json:"lastSuccessfulDiscoveryTime,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type IPAMDiscoveredResourceCIDR struct {
+	ResourceCIDR *string `json:"resourceCIDR,omitempty"`
+
+	ResourceID *string `json:"resourceID,omitempty"`
+
+	ResourceOwnerID *string `json:"resourceOwnerID,omitempty"`
+
+	ResourceRegion *string `json:"resourceRegion,omitempty"`
+
+	SampleTime *metav1.Time `json:"sampleTime,omitempty"`
+
+	VPCID *string `json:"vpcID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type IPAMDiscoveryFailureReason struct {
+	Message *string `json:"message,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type IPAMOperatingRegion struct {
 	RegionName *string `json:"regionName,omitempty"`
 }
 
 // +kubebuilder:skipversion
-type IPamPool struct {
+type IPAMPool struct {
 	AutoImport *bool `json:"autoImport,omitempty"`
 
 	Description *string `json:"description,omitempty"`
 
-	IPamRegion *string `json:"ipamRegion,omitempty"`
+	IPAMRegion *string `json:"ipamRegion,omitempty"`
 
 	Locale *string `json:"locale,omitempty"`
 
@@ -1697,7 +1981,7 @@ type IPamPool struct {
 }
 
 // +kubebuilder:skipversion
-type IPamPoolAllocation struct {
+type IPAMPoolAllocation struct {
 	CIDR *string `json:"cidr,omitempty"`
 
 	Description *string `json:"description,omitempty"`
@@ -1710,17 +1994,19 @@ type IPamPoolAllocation struct {
 }
 
 // +kubebuilder:skipversion
-type IPamPoolCIDR struct {
+type IPAMPoolCIDR struct {
 	CIDR *string `json:"cidr,omitempty"`
+
+	NetmaskLength *int64 `json:"netmaskLength,omitempty"`
 }
 
 // +kubebuilder:skipversion
-type IPamPoolCIDRFailureReason struct {
+type IPAMPoolCIDRFailureReason struct {
 	Message *string `json:"message,omitempty"`
 }
 
 // +kubebuilder:skipversion
-type IPamResourceCIDR struct {
+type IPAMResourceCIDR struct {
 	ResourceCIDR *string `json:"resourceCIDR,omitempty"`
 
 	ResourceID *string `json:"resourceID,omitempty"`
@@ -1735,17 +2021,45 @@ type IPamResourceCIDR struct {
 }
 
 // +kubebuilder:skipversion
-type IPamResourceTag struct {
+type IPAMResourceDiscovery struct {
+	Description *string `json:"description,omitempty"`
+
+	IPAMResourceDiscoveryARN *string `json:"ipamResourceDiscoveryARN,omitempty"`
+
+	IPAMResourceDiscoveryRegion *string `json:"ipamResourceDiscoveryRegion,omitempty"`
+
+	IsDefault *bool `json:"isDefault,omitempty"`
+
+	OwnerID *string `json:"ownerID,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type IPAMResourceDiscoveryAssociation struct {
+	IPAMRegion *string `json:"ipamRegion,omitempty"`
+
+	IPAMResourceDiscoveryAssociationARN *string `json:"ipamResourceDiscoveryAssociationARN,omitempty"`
+
+	IsDefault *bool `json:"isDefault,omitempty"`
+
+	OwnerID *string `json:"ownerID,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type IPAMResourceTag struct {
 	Key *string `json:"key,omitempty"`
 
 	Value *string `json:"value,omitempty"`
 }
 
 // +kubebuilder:skipversion
-type IPamScope struct {
+type IPAMScope struct {
 	Description *string `json:"description,omitempty"`
 
-	IPamRegion *string `json:"ipamRegion,omitempty"`
+	IPAMRegion *string `json:"ipamRegion,omitempty"`
 
 	IsDefault *bool `json:"isDefault,omitempty"`
 
@@ -1754,6 +2068,22 @@ type IPamScope struct {
 	PoolCount *int64 `json:"poolCount,omitempty"`
 
 	Tags []*Tag `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type IPPermission struct {
+	FromPort *int64 `json:"fromPort,omitempty"`
+
+	IPProtocol *string `json:"ipProtocol,omitempty"`
+
+	ToPort *int64 `json:"toPort,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type IPRange struct {
+	CIDRIP *string `json:"cidrIP,omitempty"`
+
+	Description *string `json:"description,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -1844,6 +2174,8 @@ type Image struct {
 
 	RootDeviceName *string `json:"rootDeviceName,omitempty"`
 
+	SourceInstanceID *string `json:"sourceInstanceID,omitempty"`
+
 	SRIOVNetSupport *string `json:"sriovNetSupport,omitempty"`
 
 	Tags []*Tag `json:"tags,omitempty"`
@@ -1860,8 +2192,6 @@ type ImageDiskContainer struct {
 	Format *string `json:"format,omitempty"`
 
 	SnapshotID *string `json:"snapshotID,omitempty"`
-
-	URL *string `json:"url,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -1976,6 +2306,16 @@ type ImportVolumeTaskDetails struct {
 }
 
 // +kubebuilder:skipversion
+type InstanceAttachmentENASrdSpecification struct {
+	ENASrdEnabled *bool `json:"enaSrdEnabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type InstanceAttachmentENASrdUDPSpecification struct {
+	ENASrdUDPEnabled *bool `json:"enaSrdUDPEnabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type InstanceBlockDeviceMapping struct {
 	DeviceName *string `json:"deviceName,omitempty"`
 }
@@ -2055,6 +2395,8 @@ type InstanceIPv4Prefix struct {
 // +kubebuilder:skipversion
 type InstanceIPv6Address struct {
 	IPv6Address *string `json:"ipv6Address,omitempty"`
+
+	IsPrimaryIPv6 *bool `json:"isPrimaryIPv6,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -2149,6 +2491,8 @@ type InstanceNetworkInterfaceSpecification struct {
 	Description *string `json:"description,omitempty"`
 
 	DeviceIndex *int64 `json:"deviceIndex,omitempty"`
+	// Launch instances with ENA Express settings configured from your launch template.
+	ENASrdSpecification *ENASrdSpecificationRequest `json:"enaSrdSpecification,omitempty"`
 
 	Groups []*string `json:"groups,omitempty"`
 
@@ -2169,6 +2513,8 @@ type InstanceNetworkInterfaceSpecification struct {
 	NetworkCardIndex *int64 `json:"networkCardIndex,omitempty"`
 
 	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
+
+	PrimaryIPv6 *bool `json:"primaryIPv6,omitempty"`
 
 	PrivateIPAddress *string `json:"privateIPAddress,omitempty"`
 
@@ -2202,6 +2548,8 @@ type InstanceRequirements struct {
 
 	AcceleratorTypes []*string `json:"acceleratorTypes,omitempty"`
 
+	AllowedInstanceTypes []*string `json:"allowedInstanceTypes,omitempty"`
+
 	BareMetal *string `json:"bareMetal,omitempty"`
 	// The minimum and maximum baseline bandwidth to Amazon EBS, in Mbps. For more
 	// information, see Amazon EBS–optimized instances (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-optimized.html)
@@ -2223,6 +2571,16 @@ type InstanceRequirements struct {
 	MemoryGiBPerVCPU *MemoryGiBPerVCPU `json:"memoryGiBPerVCPU,omitempty"`
 	// The minimum and maximum amount of memory, in MiB.
 	MemoryMiB *MemoryMiB `json:"memoryMiB,omitempty"`
+	// The minimum and maximum amount of network bandwidth, in gigabits per second
+	// (Gbps).
+	//
+	// Setting the minimum bandwidth does not guarantee that your instance will
+	// achieve the minimum bandwidth. Amazon EC2 will identify instance types that
+	// support the specified minimum bandwidth, but the actual bandwidth of your
+	// instance might go below the specified minimum at times. For more information,
+	// see Available instance bandwidth (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-network-bandwidth.html#available-instance-bandwidth)
+	// in the Amazon EC2 User Guide.
+	NetworkBandwidthGbps *NetworkBandwidthGbps `json:"networkBandwidthGbps,omitempty"`
 	// The minimum and maximum number of network interfaces.
 	NetworkInterfaceCount *NetworkInterfaceCount `json:"networkInterfaceCount,omitempty"`
 
@@ -2252,6 +2610,8 @@ type InstanceRequirementsRequest struct {
 
 	AcceleratorTypes []*string `json:"acceleratorTypes,omitempty"`
 
+	AllowedInstanceTypes []*string `json:"allowedInstanceTypes,omitempty"`
+
 	BareMetal *string `json:"bareMetal,omitempty"`
 	// The minimum and maximum baseline bandwidth to Amazon EBS, in Mbps. For more
 	// information, see Amazon EBS–optimized instances (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-optimized.html)
@@ -2273,6 +2633,16 @@ type InstanceRequirementsRequest struct {
 	MemoryGiBPerVCPU *MemoryGiBPerVCPURequest `json:"memoryGiBPerVCPU,omitempty"`
 	// The minimum and maximum amount of memory, in MiB.
 	MemoryMiB *MemoryMiBRequest `json:"memoryMiB,omitempty"`
+	// The minimum and maximum amount of network bandwidth, in gigabits per second
+	// (Gbps).
+	//
+	// Setting the minimum bandwidth does not guarantee that your instance will
+	// achieve the minimum bandwidth. Amazon EC2 will identify instance types that
+	// support the specified minimum bandwidth, but the actual bandwidth of your
+	// instance might go below the specified minimum at times. For more information,
+	// see Available instance bandwidth (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-network-bandwidth.html#available-instance-bandwidth)
+	// in the Amazon EC2 User Guide.
+	NetworkBandwidthGbps *NetworkBandwidthGbpsRequest `json:"networkBandwidthGbps,omitempty"`
 	// The minimum and maximum number of network interfaces.
 	NetworkInterfaceCount *NetworkInterfaceCountRequest `json:"networkInterfaceCount,omitempty"`
 
@@ -2292,12 +2662,31 @@ type InstanceRequirementsWithMetadataRequest struct {
 	// The attributes for the instance types. When you specify instance attributes,
 	// Amazon EC2 will identify instance types with these attributes.
 	//
-	// When you specify multiple parameters, you get instance types that satisfy
-	// all of the specified parameters. If you specify multiple values for a parameter,
+	// You must specify VCpuCount and MemoryMiB. All other attributes are optional.
+	// Any unspecified optional attribute is set to its default.
+	//
+	// When you specify multiple attributes, you get instance types that satisfy
+	// all of the specified attributes. If you specify multiple values for an attribute,
 	// you get instance types that satisfy any of the specified values.
 	//
-	// You must specify VCpuCount and MemoryMiB. All other parameters are optional.
-	// Any unspecified optional parameter is set to its default.
+	// To limit the list of instance types from which Amazon EC2 can identify matching
+	// instance types, you can use one of the following parameters, but not both
+	// in the same request:
+	//
+	//    * AllowedInstanceTypes - The instance types to include in the list. All
+	//    other instance types are ignored, even if they match your specified attributes.
+	//
+	//    * ExcludedInstanceTypes - The instance types to exclude from the list,
+	//    even if they match your specified attributes.
+	//
+	// If you specify InstanceRequirements, you can't specify InstanceType.
+	//
+	// Attribute-based instance type selection is only supported when using Auto
+	// Scaling groups, EC2 Fleet, and Spot Fleet to launch instances. If you plan
+	// to use the launch template in the launch instance wizard (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-instance-wizard.html),
+	// or with the RunInstances (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html)
+	// API or AWS::EC2::Instance (https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-instance.html)
+	// Amazon Web Services CloudFormation resource, you can't specify InstanceRequirements.
 	//
 	// For more information, see Attribute-based instance type selection for EC2
 	// Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
@@ -2310,6 +2699,8 @@ type InstanceRequirementsWithMetadataRequest struct {
 // +kubebuilder:skipversion
 type InstanceSpecification struct {
 	ExcludeBootVolume *bool `json:"excludeBootVolume,omitempty"`
+
+	ExcludeDataVolumeIDs []*string `json:"excludeDataVolumeIDs,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -2353,6 +2744,19 @@ type InstanceTagNotificationAttribute struct {
 }
 
 // +kubebuilder:skipversion
+type InstanceTopology struct {
+	AvailabilityZone *string `json:"availabilityZone,omitempty"`
+
+	GroupName *string `json:"groupName,omitempty"`
+
+	InstanceID *string `json:"instanceID,omitempty"`
+
+	InstanceType *string `json:"instanceType,omitempty"`
+
+	ZoneID *string `json:"zoneID,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type InstanceTypeInfo struct {
 	InstanceType *string `json:"instanceType,omitempty"`
 }
@@ -2390,11 +2794,15 @@ type InternetGatewayAttachment struct {
 
 // +kubebuilder:skipversion
 type KeyPairInfo struct {
+	CreateTime *metav1.Time `json:"createTime,omitempty"`
+
 	KeyFingerprint *string `json:"keyFingerprint,omitempty"`
 
 	KeyName *string `json:"keyName,omitempty"`
 
 	KeyPairID *string `json:"keyPairID,omitempty"`
+
+	PublicKey *string `json:"publicKey,omitempty"`
 
 	Tags []*Tag `json:"tags,omitempty"`
 }
@@ -2460,6 +2868,8 @@ type LaunchTemplateBlockDeviceMappingRequest struct {
 
 // +kubebuilder:skipversion
 type LaunchTemplateCPUOptions struct {
+	AmdSevSnp *string `json:"amdSevSnp,omitempty"`
+
 	CoreCount *int64 `json:"coreCount,omitempty"`
 
 	ThreadsPerCore *int64 `json:"threadsPerCore,omitempty"`
@@ -2467,6 +2877,8 @@ type LaunchTemplateCPUOptions struct {
 
 // +kubebuilder:skipversion
 type LaunchTemplateCPUOptionsRequest struct {
+	AmdSevSnp *string `json:"amdSevSnp,omitempty"`
+
 	CoreCount *int64 `json:"coreCount,omitempty"`
 
 	ThreadsPerCore *int64 `json:"threadsPerCore,omitempty"`
@@ -2522,6 +2934,23 @@ type LaunchTemplateEBSBlockDeviceRequest struct {
 	VolumeSize *int64 `json:"volumeSize,omitempty"`
 
 	VolumeType *string `json:"volumeType,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type LaunchTemplateENASrdSpecification struct {
+	ENASrdEnabled *bool `json:"enaSrdEnabled,omitempty"`
+	// ENA Express is compatible with both TCP and UDP transport protocols. When
+	// it's enabled, TCP traffic automatically uses it. However, some UDP-based
+	// applications are designed to handle network packets that are out of order,
+	// without a need for retransmission, such as live video broadcasting or other
+	// near-real-time applications. For UDP traffic, you can specify whether to
+	// use ENA Express, based on your application environment needs.
+	ENASrdUDPSpecification *LaunchTemplateENASrdUDPSpecification `json:"enaSrdUDPSpecification,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type LaunchTemplateENASrdUDPSpecification struct {
+	ENASrdUDPEnabled *bool `json:"enaSrdUDPEnabled,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -2635,6 +3064,19 @@ type LaunchTemplateInstanceNetworkInterfaceSpecification struct {
 	Description *string `json:"description,omitempty"`
 
 	DeviceIndex *int64 `json:"deviceIndex,omitempty"`
+	// ENA Express uses Amazon Web Services Scalable Reliable Datagram (SRD) technology
+	// to increase the maximum bandwidth used per stream and minimize tail latency
+	// of network traffic between EC2 instances. With ENA Express, you can communicate
+	// between two EC2 instances in the same subnet within the same account, or
+	// in different accounts. Both sending and receiving instances must have ENA
+	// Express enabled.
+	//
+	// To improve the reliability of network packet delivery, ENA Express reorders
+	// network packets on the receiving end by default. However, some UDP-based
+	// applications are designed to handle network packets that are out of order
+	// to reduce the overhead for packet delivery at the network layer. When ENA
+	// Express is enabled, you can specify whether UDP network traffic uses it.
+	ENASrdSpecification *LaunchTemplateENASrdSpecification `json:"enaSrdSpecification,omitempty"`
 
 	Groups []*string `json:"groups,omitempty"`
 
@@ -2656,6 +3098,8 @@ type LaunchTemplateInstanceNetworkInterfaceSpecification struct {
 
 	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
 
+	PrimaryIPv6 *bool `json:"primaryIPv6,omitempty"`
+
 	PrivateIPAddress *string `json:"privateIPAddress,omitempty"`
 
 	PrivateIPAddresses []*PrivateIPAddressSpecification `json:"privateIPAddresses,omitempty"`
@@ -2676,6 +3120,8 @@ type LaunchTemplateInstanceNetworkInterfaceSpecificationRequest struct {
 	Description *string `json:"description,omitempty"`
 
 	DeviceIndex *int64 `json:"deviceIndex,omitempty"`
+	// Launch instances with ENA Express settings configured from your launch template.
+	ENASrdSpecification *ENASrdSpecificationRequest `json:"enaSrdSpecification,omitempty"`
 
 	Groups []*string `json:"groups,omitempty"`
 
@@ -2696,6 +3142,8 @@ type LaunchTemplateInstanceNetworkInterfaceSpecificationRequest struct {
 	NetworkCardIndex *int64 `json:"networkCardIndex,omitempty"`
 
 	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
+
+	PrimaryIPv6 *bool `json:"primaryIPv6,omitempty"`
 
 	PrivateIPAddress *string `json:"privateIPAddress,omitempty"`
 
@@ -2722,15 +3170,35 @@ type LaunchTemplateOverrides struct {
 	// The attributes for the instance types. When you specify instance attributes,
 	// Amazon EC2 will identify instance types with these attributes.
 	//
-	// When you specify multiple parameters, you get instance types that satisfy
-	// all of the specified parameters. If you specify multiple values for a parameter,
+	// You must specify VCpuCount and MemoryMiB. All other attributes are optional.
+	// Any unspecified optional attribute is set to its default.
+	//
+	// When you specify multiple attributes, you get instance types that satisfy
+	// all of the specified attributes. If you specify multiple values for an attribute,
 	// you get instance types that satisfy any of the specified values.
 	//
-	// You must specify VCpuCount and MemoryMiB. All other parameters are optional.
-	// Any unspecified optional parameter is set to its default.
+	// To limit the list of instance types from which Amazon EC2 can identify matching
+	// instance types, you can use one of the following parameters, but not both
+	// in the same request:
 	//
-	// For more information, see Attribute-based instance type selection for EC2
-	// Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
+	//    * AllowedInstanceTypes - The instance types to include in the list. All
+	//    other instance types are ignored, even if they match your specified attributes.
+	//
+	//    * ExcludedInstanceTypes - The instance types to exclude from the list,
+	//    even if they match your specified attributes.
+	//
+	// If you specify InstanceRequirements, you can't specify InstanceType.
+	//
+	// Attribute-based instance type selection is only supported when using Auto
+	// Scaling groups, EC2 Fleet, and Spot Fleet to launch instances. If you plan
+	// to use the launch template in the launch instance wizard (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-instance-wizard.html)
+	// or with the RunInstances API (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html),
+	// you can't specify InstanceRequirements.
+	//
+	// For more information, see Create a mixed instances group using attribute-based
+	// instance type selection (https://docs.aws.amazon.com/autoscaling/ec2/userguide/create-mixed-instances-group-attribute-based-instance-type-selection.html)
+	// in the Amazon EC2 Auto Scaling User Guide, and also Attribute-based instance
+	// type selection for EC2 Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
 	// Attribute-based instance type selection for Spot Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-fleet-attribute-based-instance-type-selection.html),
 	// and Spot placement score (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-placement-score.html)
 	// in the Amazon EC2 User Guide.
@@ -2753,6 +3221,8 @@ type LaunchTemplatePlacement struct {
 
 	AvailabilityZone *string `json:"availabilityZone,omitempty"`
 
+	GroupID *string `json:"groupID,omitempty"`
+
 	GroupName *string `json:"groupName,omitempty"`
 
 	HostID *string `json:"hostID,omitempty"`
@@ -2771,6 +3241,8 @@ type LaunchTemplatePlacementRequest struct {
 	Affinity *string `json:"affinity,omitempty"`
 
 	AvailabilityZone *string `json:"availabilityZone,omitempty"`
+
+	GroupID *string `json:"groupID,omitempty"`
 
 	GroupName *string `json:"groupName,omitempty"`
 
@@ -2935,7 +3407,13 @@ type LocalGateway struct {
 type LocalGatewayRoute struct {
 	DestinationCIDRBlock *string `json:"destinationCIDRBlock,omitempty"`
 
+	DestinationPrefixListID *string `json:"destinationPrefixListID,omitempty"`
+
+	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
+
 	OwnerID *string `json:"ownerID,omitempty"`
+
+	SubnetID *string `json:"subnetID,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -3010,6 +3488,15 @@ type LocalGatewayVirtualInterfaceGroup struct {
 }
 
 // +kubebuilder:skipversion
+type MaintenanceDetails struct {
+	LastMaintenanceApplied *metav1.Time `json:"lastMaintenanceApplied,omitempty"`
+
+	MaintenanceAutoAppliedAfter *metav1.Time `json:"maintenanceAutoAppliedAfter,omitempty"`
+
+	PendingMaintenance *string `json:"pendingMaintenance,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type ManagedPrefixList struct {
 	AddressFamily *string `json:"addressFamily,omitempty"`
 
@@ -3057,7 +3544,18 @@ type MemoryMiBRequest struct {
 }
 
 // +kubebuilder:skipversion
+type MetricPoint struct {
+	EndDate *metav1.Time `json:"endDate,omitempty"`
+
+	StartDate *metav1.Time `json:"startDate,omitempty"`
+
+	Status *string `json:"status,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type ModifyTransitGatewayOptions struct {
+	AmazonSideASN *int64 `json:"amazonSideASN,omitempty"`
+
 	AutoAcceptSharedAttachments *string `json:"autoAcceptSharedAttachments,omitempty"`
 
 	DefaultRouteTableAssociation *string `json:"defaultRouteTableAssociation,omitempty"`
@@ -3084,11 +3582,11 @@ type ModifyVPNTunnelOptionsSpecification struct {
 
 	DPDTimeoutSeconds *int64 `json:"dpdTimeoutSeconds,omitempty"`
 
+	EnableTunnelLifecycleControl *bool `json:"enableTunnelLifecycleControl,omitempty"`
+
 	Phase1LifetimeSeconds *int64 `json:"phase1LifetimeSeconds,omitempty"`
 
 	Phase2LifetimeSeconds *int64 `json:"phase2LifetimeSeconds,omitempty"`
-
-	PreSharedKey *string `json:"preSharedKey,omitempty"`
 
 	RekeyFuzzPercentage *int64 `json:"rekeyFuzzPercentage,omitempty"`
 
@@ -3101,6 +3599,21 @@ type ModifyVPNTunnelOptionsSpecification struct {
 	TunnelInsideCIDR *string `json:"tunnelInsideCIDR,omitempty"`
 
 	TunnelInsideIPv6CIDR *string `json:"tunnelInsideIPv6CIDR,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ModifyVerifiedAccessTrustProviderOIDCOptions struct {
+	AuthorizationEndpoint *string `json:"authorizationEndpoint,omitempty"`
+
+	ClientID *string `json:"clientID,omitempty"`
+
+	Issuer *string `json:"issuer,omitempty"`
+
+	Scope *string `json:"scope,omitempty"`
+
+	TokenEndpoint *string `json:"tokenEndpoint,omitempty"`
+
+	UserInfoEndpoint *string `json:"userInfoEndpoint,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -3130,6 +3643,12 @@ type NATGateway struct {
 // +kubebuilder:skipversion
 type NATGatewayAddress struct {
 	AllocationID *string `json:"allocationID,omitempty"`
+
+	AssociationID *string `json:"associationID,omitempty"`
+
+	FailureMessage *string `json:"failureMessage,omitempty"`
+
+	IsPrimary *bool `json:"isPrimary,omitempty"`
 
 	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
 
@@ -3174,6 +3693,20 @@ type NetworkACLEntry struct {
 }
 
 // +kubebuilder:skipversion
+type NetworkBandwidthGbps struct {
+	Max *float64 `json:"max,omitempty"`
+
+	Min *float64 `json:"min,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type NetworkBandwidthGbpsRequest struct {
+	Max *float64 `json:"max,omitempty"`
+
+	Min *float64 `json:"min,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type NetworkInsightsAccessScope struct {
 	CreatedDate *metav1.Time `json:"createdDate,omitempty"`
 
@@ -3199,11 +3732,15 @@ type NetworkInsightsAccessScopeAnalysis struct {
 
 // +kubebuilder:skipversion
 type NetworkInsightsAnalysis struct {
+	AdditionalAccounts []*string `json:"additionalAccounts,omitempty"`
+
 	NetworkPathFound *bool `json:"networkPathFound,omitempty"`
 
 	StartDate *metav1.Time `json:"startDate,omitempty"`
 
 	StatusMessage *string `json:"statusMessage,omitempty"`
+
+	SuggestedAccounts []*string `json:"suggestedAccounts,omitempty"`
 
 	Tags []*Tag `json:"tags,omitempty"`
 
@@ -3316,6 +3853,8 @@ type NetworkInterfaceCountRequest struct {
 // +kubebuilder:skipversion
 type NetworkInterfaceIPv6Address struct {
 	IPv6Address *string `json:"ipv6Address,omitempty"`
+
+	IsPrimaryIPv6 *bool `json:"isPrimaryIPv6,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -3348,6 +3887,21 @@ type NewDHCPConfiguration struct {
 	Key *string `json:"key,omitempty"`
 
 	Values []*string `json:"values,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type OIDCOptions struct {
+	AuthorizationEndpoint *string `json:"authorizationEndpoint,omitempty"`
+
+	ClientID *string `json:"clientID,omitempty"`
+
+	Issuer *string `json:"issuer,omitempty"`
+
+	Scope *string `json:"scope,omitempty"`
+
+	TokenEndpoint *string `json:"tokenEndpoint,omitempty"`
+
+	UserInfoEndpoint *string `json:"userInfoEndpoint,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -3405,6 +3959,8 @@ type PacketHeaderStatementRequest struct {
 // +kubebuilder:skipversion
 type PathComponent struct {
 	SequenceNumber *int64 `json:"sequenceNumber,omitempty"`
+
+	ServiceName *string `json:"serviceName,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -3445,6 +4001,8 @@ type PeeringConnectionOptionsRequest struct {
 
 // +kubebuilder:skipversion
 type PeeringTgwInfo struct {
+	CoreNetworkID *string `json:"coreNetworkID,omitempty"`
+
 	OwnerID *string `json:"ownerID,omitempty"`
 
 	Region *string `json:"region,omitempty"`
@@ -3517,6 +4075,8 @@ type Placement struct {
 	Affinity *string `json:"affinity,omitempty"`
 
 	AvailabilityZone *string `json:"availabilityZone,omitempty"`
+
+	GroupID *string `json:"groupID,omitempty"`
 
 	GroupName *string `json:"groupName,omitempty"`
 
@@ -3778,7 +4338,7 @@ type RegisterInstanceTagAttributeRequest struct {
 }
 
 // +kubebuilder:skipversion
-type RemoveIPamOperatingRegion struct {
+type RemoveIPAMOperatingRegion struct {
 	RegionName *string `json:"regionName,omitempty"`
 }
 
@@ -3791,7 +4351,13 @@ type RemovePrefixListEntry struct {
 type ReplaceRootVolumeTask struct {
 	CompleteTime *string `json:"completeTime,omitempty"`
 
+	DeleteReplacedRootVolume *bool `json:"deleteReplacedRootVolume,omitempty"`
+
+	ImageID *string `json:"imageID,omitempty"`
+
 	InstanceID *string `json:"instanceID,omitempty"`
+
+	SnapshotID *string `json:"snapshotID,omitempty"`
 
 	StartTime *string `json:"startTime,omitempty"`
 
@@ -3799,7 +4365,7 @@ type ReplaceRootVolumeTask struct {
 }
 
 // +kubebuilder:skipversion
-type RequestIPamResourceTag struct {
+type RequestIPAMResourceTag struct {
 	Key *string `json:"key,omitempty"`
 
 	Value *string `json:"value,omitempty"`
@@ -3818,8 +4384,10 @@ type RequestLaunchTemplateData struct {
 	// The CPU options for the instance. Both the core count and threads per core
 	// must be specified in the request.
 	CPUOptions *LaunchTemplateCPUOptionsRequest `json:"cpuOptions,omitempty"`
-	// The credit option for CPU usage of a T2, T3, or T3a instance.
+	// The credit option for CPU usage of a T instance.
 	CreditSpecification *CreditSpecificationRequest `json:"creditSpecification,omitempty"`
+
+	DisableAPIStop *bool `json:"disableAPIStop,omitempty"`
 
 	DisableAPITermination *bool `json:"disableAPITermination,omitempty"`
 
@@ -3833,7 +4401,7 @@ type RequestLaunchTemplateData struct {
 	// in the Amazon Web Services Nitro Enclaves User Guide.
 	EnclaveOptions *LaunchTemplateEnclaveOptionsRequest `json:"enclaveOptions,omitempty"`
 	// Indicates whether the instance is configured for hibernation. This parameter
-	// is valid only if the instance meets the hibernation prerequisites (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Hibernate.html#hibernating-prerequisites).
+	// is valid only if the instance meets the hibernation prerequisites (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/hibernating-prerequisites.html).
 	HibernationOptions *LaunchTemplateHibernationOptionsRequest `json:"hibernationOptions,omitempty"`
 	// An IAM instance profile.
 	IAMInstanceProfile *LaunchTemplateIAMInstanceProfileSpecificationRequest `json:"iamInstanceProfile,omitempty"`
@@ -3846,12 +4414,31 @@ type RequestLaunchTemplateData struct {
 	// The attributes for the instance types. When you specify instance attributes,
 	// Amazon EC2 will identify instance types with these attributes.
 	//
-	// When you specify multiple parameters, you get instance types that satisfy
-	// all of the specified parameters. If you specify multiple values for a parameter,
+	// You must specify VCpuCount and MemoryMiB. All other attributes are optional.
+	// Any unspecified optional attribute is set to its default.
+	//
+	// When you specify multiple attributes, you get instance types that satisfy
+	// all of the specified attributes. If you specify multiple values for an attribute,
 	// you get instance types that satisfy any of the specified values.
 	//
-	// You must specify VCpuCount and MemoryMiB. All other parameters are optional.
-	// Any unspecified optional parameter is set to its default.
+	// To limit the list of instance types from which Amazon EC2 can identify matching
+	// instance types, you can use one of the following parameters, but not both
+	// in the same request:
+	//
+	//    * AllowedInstanceTypes - The instance types to include in the list. All
+	//    other instance types are ignored, even if they match your specified attributes.
+	//
+	//    * ExcludedInstanceTypes - The instance types to exclude from the list,
+	//    even if they match your specified attributes.
+	//
+	// If you specify InstanceRequirements, you can't specify InstanceType.
+	//
+	// Attribute-based instance type selection is only supported when using Auto
+	// Scaling groups, EC2 Fleet, and Spot Fleet to launch instances. If you plan
+	// to use the launch template in the launch instance wizard (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-instance-wizard.html),
+	// or with the RunInstances (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html)
+	// API or AWS::EC2::Instance (https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-instance.html)
+	// Amazon Web Services CloudFormation resource, you can't specify InstanceRequirements.
 	//
 	// For more information, see Attribute-based instance type selection for EC2
 	// Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
@@ -3870,7 +4457,7 @@ type RequestLaunchTemplateData struct {
 	// The maintenance options of your instance.
 	MaintenanceOptions *LaunchTemplateInstanceMaintenanceOptionsRequest `json:"maintenanceOptions,omitempty"`
 	// The metadata options for the instance. For more information, see Instance
-	// Metadata and User Data (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
+	// metadata and user data (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
 	// in the Amazon Elastic Compute Cloud User Guide.
 	MetadataOptions *LaunchTemplateInstanceMetadataOptionsRequest `json:"metadataOptions,omitempty"`
 	// Describes the monitoring for the instance.
@@ -4061,8 +4648,10 @@ type ResponseLaunchTemplateData struct {
 	CapacityReservationSpecification *LaunchTemplateCapacityReservationSpecificationResponse `json:"capacityReservationSpecification,omitempty"`
 	// The CPU options for the instance.
 	CPUOptions *LaunchTemplateCPUOptions `json:"cpuOptions,omitempty"`
-	// Describes the credit option for CPU usage of a T2, T3, or T3a instance.
+	// Describes the credit option for CPU usage of a T instance.
 	CreditSpecification *CreditSpecification `json:"creditSpecification,omitempty"`
+
+	DisableAPIStop *bool `json:"disableAPIStop,omitempty"`
 
 	DisableAPITermination *bool `json:"disableAPITermination,omitempty"`
 
@@ -4086,15 +4675,35 @@ type ResponseLaunchTemplateData struct {
 	// The attributes for the instance types. When you specify instance attributes,
 	// Amazon EC2 will identify instance types with these attributes.
 	//
-	// When you specify multiple parameters, you get instance types that satisfy
-	// all of the specified parameters. If you specify multiple values for a parameter,
+	// You must specify VCpuCount and MemoryMiB. All other attributes are optional.
+	// Any unspecified optional attribute is set to its default.
+	//
+	// When you specify multiple attributes, you get instance types that satisfy
+	// all of the specified attributes. If you specify multiple values for an attribute,
 	// you get instance types that satisfy any of the specified values.
 	//
-	// You must specify VCpuCount and MemoryMiB. All other parameters are optional.
-	// Any unspecified optional parameter is set to its default.
+	// To limit the list of instance types from which Amazon EC2 can identify matching
+	// instance types, you can use one of the following parameters, but not both
+	// in the same request:
 	//
-	// For more information, see Attribute-based instance type selection for EC2
-	// Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
+	//    * AllowedInstanceTypes - The instance types to include in the list. All
+	//    other instance types are ignored, even if they match your specified attributes.
+	//
+	//    * ExcludedInstanceTypes - The instance types to exclude from the list,
+	//    even if they match your specified attributes.
+	//
+	// If you specify InstanceRequirements, you can't specify InstanceType.
+	//
+	// Attribute-based instance type selection is only supported when using Auto
+	// Scaling groups, EC2 Fleet, and Spot Fleet to launch instances. If you plan
+	// to use the launch template in the launch instance wizard (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-instance-wizard.html)
+	// or with the RunInstances API (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html),
+	// you can't specify InstanceRequirements.
+	//
+	// For more information, see Create a mixed instances group using attribute-based
+	// instance type selection (https://docs.aws.amazon.com/autoscaling/ec2/userguide/create-mixed-instances-group-attribute-based-instance-type-selection.html)
+	// in the Amazon EC2 Auto Scaling User Guide, and also Attribute-based instance
+	// type selection for EC2 Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
 	// Attribute-based instance type selection for Spot Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-fleet-attribute-based-instance-type-selection.html),
 	// and Spot placement score (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-placement-score.html)
 	// in the Amazon EC2 User Guide.
@@ -4110,7 +4719,7 @@ type ResponseLaunchTemplateData struct {
 	// The maintenance options of your instance.
 	MaintenanceOptions *LaunchTemplateInstanceMaintenanceOptions `json:"maintenanceOptions,omitempty"`
 	// The metadata options for the instance. For more information, see Instance
-	// Metadata and User Data (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
+	// metadata and user data (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
 	// in the Amazon Elastic Compute Cloud User Guide.
 	MetadataOptions *LaunchTemplateInstanceMetadataOptions `json:"metadataOptions,omitempty"`
 	// Describes the monitoring for the instance.
@@ -4194,6 +4803,16 @@ type Route_SDK struct {
 }
 
 // +kubebuilder:skipversion
+type RuleGroupTypePair struct {
+	RuleGroupType *string `json:"ruleGroupType,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type RuleOption struct {
+	Keyword *string `json:"keyword,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type RunInstancesMonitoringEnabled struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
@@ -4212,8 +4831,6 @@ type S3Storage struct {
 	Bucket *string `json:"bucket,omitempty"`
 
 	Prefix *string `json:"prefix,omitempty"`
-
-	UploadPolicySignature *string `json:"uploadPolicySignature,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -4402,6 +5019,21 @@ type SecurityGroup struct {
 }
 
 // +kubebuilder:skipversion
+type SecurityGroupForVPC struct {
+	Description *string `json:"description,omitempty"`
+
+	GroupID *string `json:"groupID,omitempty"`
+
+	GroupName *string `json:"groupName,omitempty"`
+
+	OwnerID *string `json:"ownerID,omitempty"`
+
+	PrimaryVPCID *string `json:"primaryVPCID,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type SecurityGroupIdentifier struct {
 	GroupID *string `json:"groupID,omitempty"`
 
@@ -4471,6 +5103,8 @@ type ServiceConfiguration struct {
 
 	ServiceType []*ServiceTypeDetail `json:"serviceType,omitempty"`
 
+	SupportedIPAddressTypes []*string `json:"supportedIPAddressTypes,omitempty"`
+
 	Tags []*Tag `json:"tags,omitempty"`
 }
 
@@ -4497,6 +5131,8 @@ type ServiceDetail struct {
 	ServiceName *string `json:"serviceName,omitempty"`
 
 	ServiceType []*ServiceTypeDetail `json:"serviceType,omitempty"`
+
+	SupportedIPAddressTypes []*string `json:"supportedIPAddressTypes,omitempty"`
 
 	Tags []*Tag `json:"tags,omitempty"`
 
@@ -4539,8 +5175,6 @@ type SnapshotDetail struct {
 	Status *string `json:"status,omitempty"`
 
 	StatusMessage *string `json:"statusMessage,omitempty"`
-
-	URL *string `json:"url,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -4548,8 +5182,6 @@ type SnapshotDiskContainer struct {
 	Description *string `json:"description,omitempty"`
 
 	Format *string `json:"format,omitempty"`
-
-	URL *string `json:"url,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -4565,6 +5197,8 @@ type SnapshotInfo struct {
 	Progress *string `json:"progress,omitempty"`
 
 	SnapshotID *string `json:"snapshotID,omitempty"`
+
+	SSEType *string `json:"sseType,omitempty"`
 
 	StartTime *metav1.Time `json:"startTime,omitempty"`
 
@@ -4607,8 +5241,6 @@ type SnapshotTaskDetail struct {
 	Status *string `json:"status,omitempty"`
 
 	StatusMessage *string `json:"statusMessage,omitempty"`
-
-	URL *string `json:"url,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -4656,15 +5288,35 @@ type SpotFleetLaunchSpecification struct {
 	// The attributes for the instance types. When you specify instance attributes,
 	// Amazon EC2 will identify instance types with these attributes.
 	//
-	// When you specify multiple parameters, you get instance types that satisfy
-	// all of the specified parameters. If you specify multiple values for a parameter,
+	// You must specify VCpuCount and MemoryMiB. All other attributes are optional.
+	// Any unspecified optional attribute is set to its default.
+	//
+	// When you specify multiple attributes, you get instance types that satisfy
+	// all of the specified attributes. If you specify multiple values for an attribute,
 	// you get instance types that satisfy any of the specified values.
 	//
-	// You must specify VCpuCount and MemoryMiB. All other parameters are optional.
-	// Any unspecified optional parameter is set to its default.
+	// To limit the list of instance types from which Amazon EC2 can identify matching
+	// instance types, you can use one of the following parameters, but not both
+	// in the same request:
 	//
-	// For more information, see Attribute-based instance type selection for EC2
-	// Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
+	//    * AllowedInstanceTypes - The instance types to include in the list. All
+	//    other instance types are ignored, even if they match your specified attributes.
+	//
+	//    * ExcludedInstanceTypes - The instance types to exclude from the list,
+	//    even if they match your specified attributes.
+	//
+	// If you specify InstanceRequirements, you can't specify InstanceType.
+	//
+	// Attribute-based instance type selection is only supported when using Auto
+	// Scaling groups, EC2 Fleet, and Spot Fleet to launch instances. If you plan
+	// to use the launch template in the launch instance wizard (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-instance-wizard.html)
+	// or with the RunInstances API (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html),
+	// you can't specify InstanceRequirements.
+	//
+	// For more information, see Create a mixed instances group using attribute-based
+	// instance type selection (https://docs.aws.amazon.com/autoscaling/ec2/userguide/create-mixed-instances-group-attribute-based-instance-type-selection.html)
+	// in the Amazon EC2 Auto Scaling User Guide, and also Attribute-based instance
+	// type selection for EC2 Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-fleet-attribute-based-instance-type-selection.html),
 	// Attribute-based instance type selection for Spot Fleet (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-fleet-attribute-based-instance-type-selection.html),
 	// and Spot placement score (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-placement-score.html)
 	// in the Amazon EC2 User Guide.
@@ -4968,8 +5620,24 @@ type SubnetCIDRReservation struct {
 }
 
 // +kubebuilder:skipversion
+type SubnetConfiguration struct {
+	IPv4 *string `json:"ipv4,omitempty"`
+
+	IPv6 *string `json:"ipv6,omitempty"`
+
+	SubnetID *string `json:"subnetID,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type SubnetIPv6CIDRBlockAssociation struct {
 	IPv6CIDRBlock *string `json:"ipv6CIDRBlock,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type Subscription struct {
+	Destination *string `json:"destination,omitempty"`
+
+	Source *string `json:"source,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -5140,6 +5808,8 @@ type TrafficMirrorSession struct {
 // +kubebuilder:skipversion
 type TrafficMirrorTarget struct {
 	Description *string `json:"description,omitempty"`
+
+	GatewayLoadBalancerEndpointID *string `json:"gatewayLoadBalancerEndpointID,omitempty"`
 
 	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
 
@@ -5362,6 +6032,8 @@ type TransitGatewayOptions struct {
 
 // +kubebuilder:skipversion
 type TransitGatewayPeeringAttachment struct {
+	AccepterTransitGatewayAttachmentID *string `json:"accepterTransitGatewayAttachmentID,omitempty"`
+
 	CreationTime *metav1.Time `json:"creationTime,omitempty"`
 
 	State *string `json:"state,omitempty"`
@@ -5369,6 +6041,51 @@ type TransitGatewayPeeringAttachment struct {
 	Tags []*Tag `json:"tags,omitempty"`
 
 	TransitGatewayAttachmentID *string `json:"transitGatewayAttachmentID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type TransitGatewayPolicyRule struct {
+	DestinationCIDRBlock *string `json:"destinationCIDRBlock,omitempty"`
+
+	DestinationPortRange *string `json:"destinationPortRange,omitempty"`
+
+	Protocol *string `json:"protocol,omitempty"`
+
+	SourceCIDRBlock *string `json:"sourceCIDRBlock,omitempty"`
+
+	SourcePortRange *string `json:"sourcePortRange,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type TransitGatewayPolicyRuleMetaData struct {
+	MetaDataKey *string `json:"metaDataKey,omitempty"`
+
+	MetaDataValue *string `json:"metaDataValue,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type TransitGatewayPolicyTable struct {
+	CreationTime *metav1.Time `json:"creationTime,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+
+	TransitGatewayID *string `json:"transitGatewayID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type TransitGatewayPolicyTableAssociation struct {
+	ResourceID *string `json:"resourceID,omitempty"`
+
+	ResourceType *string `json:"resourceType,omitempty"`
+
+	TransitGatewayAttachmentID *string `json:"transitGatewayAttachmentID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type TransitGatewayPolicyTableEntry struct {
+	PolicyRuleNumber *string `json:"policyRuleNumber,omitempty"`
+
+	TargetRouteTableID *string `json:"targetRouteTableID,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -5398,6 +6115,8 @@ type TransitGatewayPropagation struct {
 	ResourceType *string `json:"resourceType,omitempty"`
 
 	TransitGatewayAttachmentID *string `json:"transitGatewayAttachmentID,omitempty"`
+
+	TransitGatewayRouteTableAnnouncementID *string `json:"transitGatewayRouteTableAnnouncementID,omitempty"`
 
 	TransitGatewayRouteTableID *string `json:"transitGatewayRouteTableID,omitempty"`
 }
@@ -5431,6 +6150,27 @@ type TransitGatewayRouteAttachment struct {
 }
 
 // +kubebuilder:skipversion
+type TransitGatewayRouteTableAnnouncement struct {
+	CoreNetworkID *string `json:"coreNetworkID,omitempty"`
+
+	CreationTime *metav1.Time `json:"creationTime,omitempty"`
+
+	PeerCoreNetworkID *string `json:"peerCoreNetworkID,omitempty"`
+
+	PeerTransitGatewayID *string `json:"peerTransitGatewayID,omitempty"`
+
+	PeeringAttachmentID *string `json:"peeringAttachmentID,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+
+	TransitGatewayID *string `json:"transitGatewayID,omitempty"`
+
+	TransitGatewayRouteTableAnnouncementID *string `json:"transitGatewayRouteTableAnnouncementID,omitempty"`
+
+	TransitGatewayRouteTableID *string `json:"transitGatewayRouteTableID,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type TransitGatewayRouteTableAssociation struct {
 	ResourceID *string `json:"resourceID,omitempty"`
 
@@ -5446,6 +6186,8 @@ type TransitGatewayRouteTablePropagation struct {
 	ResourceType *string `json:"resourceType,omitempty"`
 
 	TransitGatewayAttachmentID *string `json:"transitGatewayAttachmentID,omitempty"`
+
+	TransitGatewayRouteTableAnnouncementID *string `json:"transitGatewayRouteTableAnnouncementID,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -5491,6 +6233,8 @@ type TransitGatewayRoute_SDK struct {
 	State *string `json:"state,omitempty"`
 
 	TransitGatewayAttachments []*TransitGatewayRouteAttachment `json:"transitGatewayAttachments,omitempty"`
+
+	TransitGatewayRouteTableAnnouncementID *string `json:"transitGatewayRouteTableAnnouncementID,omitempty"`
 
 	Type *string `json:"type_,omitempty"`
 }
@@ -5563,13 +6307,13 @@ type TunnelOption struct {
 
 	DPDTimeoutSeconds *int64 `json:"dpdTimeoutSeconds,omitempty"`
 
+	EnableTunnelLifecycleControl *bool `json:"enableTunnelLifecycleControl,omitempty"`
+
 	OutsideIPAddress *string `json:"outsideIPAddress,omitempty"`
 
 	Phase1LifetimeSeconds *int64 `json:"phase1LifetimeSeconds,omitempty"`
 
 	Phase2LifetimeSeconds *int64 `json:"phase2LifetimeSeconds,omitempty"`
-
-	PreSharedKey *string `json:"preSharedKey,omitempty"`
 
 	RekeyFuzzPercentage *int64 `json:"rekeyFuzzPercentage,omitempty"`
 
@@ -5720,9 +6464,15 @@ type VPCEndpointConnection struct {
 
 	GatewayLoadBalancerARNs []*string `json:"gatewayLoadBalancerARNs,omitempty"`
 
+	IPAddressType *string `json:"ipAddressType,omitempty"`
+
 	NetworkLoadBalancerARNs []*string `json:"networkLoadBalancerARNs,omitempty"`
 
 	ServiceID *string `json:"serviceID,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+
+	VPCEndpointConnectionID *string `json:"vpcEndpointConnectionID,omitempty"`
 
 	VPCEndpointID *string `json:"vpcEndpointID,omitempty"`
 
@@ -5736,8 +6486,12 @@ type VPCEndpoint_SDK struct {
 	CreationTimestamp *metav1.Time `json:"creationTimestamp,omitempty"`
 
 	DNSEntries []*DNSEntry `json:"dnsEntries,omitempty"`
+	// Describes the DNS options for an endpoint.
+	DNSOptions *DNSOptions `json:"dnsOptions,omitempty"`
 
 	Groups []*SecurityGroupIdentifier `json:"groups,omitempty"`
+
+	IPAddressType *string `json:"ipAddressType,omitempty"`
 	// The last error that occurred for a VPC endpoint.
 	LastError *LastError `json:"lastError,omitempty"`
 
@@ -5836,8 +6590,6 @@ type VPNConnection struct {
 
 	CoreNetworkAttachmentARN *string `json:"coreNetworkAttachmentARN,omitempty"`
 
-	CustomerGatewayConfiguration *string `json:"customerGatewayConfiguration,omitempty"`
-
 	CustomerGatewayID *string `json:"customerGatewayID,omitempty"`
 
 	Tags []*Tag `json:"tags,omitempty"`
@@ -5868,11 +6620,15 @@ type VPNConnectionOptions struct {
 
 	LocalIPv6NetworkCIDR *string `json:"localIPv6NetworkCIDR,omitempty"`
 
+	OutsideIPAddressType *string `json:"outsideIPAddressType,omitempty"`
+
 	RemoteIPv4NetworkCIDR *string `json:"remoteIPv4NetworkCIDR,omitempty"`
 
 	RemoteIPv6NetworkCIDR *string `json:"remoteIPv6NetworkCIDR,omitempty"`
 
 	StaticRoutesOnly *bool `json:"staticRoutesOnly,omitempty"`
+
+	TransportTransitGatewayAttachmentID *string `json:"transportTransitGatewayAttachmentID,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -5883,11 +6639,15 @@ type VPNConnectionOptionsSpecification struct {
 
 	LocalIPv6NetworkCIDR *string `json:"localIPv6NetworkCIDR,omitempty"`
 
+	OutsideIPAddressType *string `json:"outsideIPAddressType,omitempty"`
+
 	RemoteIPv4NetworkCIDR *string `json:"remoteIPv4NetworkCIDR,omitempty"`
 
 	RemoteIPv6NetworkCIDR *string `json:"remoteIPv6NetworkCIDR,omitempty"`
 
 	StaticRoutesOnly *bool `json:"staticRoutesOnly,omitempty"`
+
+	TransportTransitGatewayAttachmentID *string `json:"transportTransitGatewayAttachmentID,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -5912,11 +6672,11 @@ type VPNTunnelOptionsSpecification struct {
 
 	DPDTimeoutSeconds *int64 `json:"dpdTimeoutSeconds,omitempty"`
 
+	EnableTunnelLifecycleControl *bool `json:"enableTunnelLifecycleControl,omitempty"`
+
 	Phase1LifetimeSeconds *int64 `json:"phase1LifetimeSeconds,omitempty"`
 
 	Phase2LifetimeSeconds *int64 `json:"phase2LifetimeSeconds,omitempty"`
-
-	PreSharedKey *string `json:"preSharedKey,omitempty"`
 
 	RekeyFuzzPercentage *int64 `json:"rekeyFuzzPercentage,omitempty"`
 
@@ -5941,6 +6701,190 @@ type ValidationError struct {
 // +kubebuilder:skipversion
 type ValidationWarning struct {
 	Errors []*ValidationError `json:"errors,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessEndpoint struct {
+	ApplicationDomain *string `json:"applicationDomain,omitempty"`
+
+	CreationTime *string `json:"creationTime,omitempty"`
+
+	DeletionTime *string `json:"deletionTime,omitempty"`
+
+	Description *string `json:"description,omitempty"`
+
+	DeviceValidationDomain *string `json:"deviceValidationDomain,omitempty"`
+
+	DomainCertificateARN *string `json:"domainCertificateARN,omitempty"`
+
+	EndpointDomain *string `json:"endpointDomain,omitempty"`
+
+	LastUpdatedTime *string `json:"lastUpdatedTime,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+
+	VerifiedAccessEndpointID *string `json:"verifiedAccessEndpointID,omitempty"`
+
+	VerifiedAccessGroupID *string `json:"verifiedAccessGroupID,omitempty"`
+
+	VerifiedAccessInstanceID *string `json:"verifiedAccessInstanceID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessEndpointEniOptions struct {
+	NetworkInterfaceID *string `json:"networkInterfaceID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessEndpointLoadBalancerOptions struct {
+	LoadBalancerARN *string `json:"loadBalancerARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessEndpointStatus struct {
+	Message *string `json:"message,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessGroup struct {
+	CreationTime *string `json:"creationTime,omitempty"`
+
+	DeletionTime *string `json:"deletionTime,omitempty"`
+
+	Description *string `json:"description,omitempty"`
+
+	LastUpdatedTime *string `json:"lastUpdatedTime,omitempty"`
+
+	Owner *string `json:"owner,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+
+	VerifiedAccessGroupARN *string `json:"verifiedAccessGroupARN,omitempty"`
+
+	VerifiedAccessGroupID *string `json:"verifiedAccessGroupID,omitempty"`
+
+	VerifiedAccessInstanceID *string `json:"verifiedAccessInstanceID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessInstance struct {
+	CreationTime *string `json:"creationTime,omitempty"`
+
+	Description *string `json:"description,omitempty"`
+
+	FipsEnabled *bool `json:"fipsEnabled,omitempty"`
+
+	LastUpdatedTime *string `json:"lastUpdatedTime,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+
+	VerifiedAccessInstanceID *string `json:"verifiedAccessInstanceID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessInstanceLoggingConfiguration struct {
+	VerifiedAccessInstanceID *string `json:"verifiedAccessInstanceID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogCloudWatchLogsDestination struct {
+	Enabled *bool `json:"enabled,omitempty"`
+
+	LogGroup *string `json:"logGroup,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogCloudWatchLogsDestinationOptions struct {
+	Enabled *bool `json:"enabled,omitempty"`
+
+	LogGroup *string `json:"logGroup,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogDeliveryStatus struct {
+	Message *string `json:"message,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogKinesisDataFirehoseDestination struct {
+	DeliveryStream *string `json:"deliveryStream,omitempty"`
+
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogKinesisDataFirehoseDestinationOptions struct {
+	DeliveryStream *string `json:"deliveryStream,omitempty"`
+
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogOptions struct {
+	IncludeTrustContext *bool `json:"includeTrustContext,omitempty"`
+
+	LogVersion *string `json:"logVersion,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogS3Destination struct {
+	BucketName *string `json:"bucketName,omitempty"`
+
+	BucketOwner *string `json:"bucketOwner,omitempty"`
+
+	Enabled *bool `json:"enabled,omitempty"`
+
+	Prefix *string `json:"prefix,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogS3DestinationOptions struct {
+	BucketName *string `json:"bucketName,omitempty"`
+
+	BucketOwner *string `json:"bucketOwner,omitempty"`
+
+	Enabled *bool `json:"enabled,omitempty"`
+
+	Prefix *string `json:"prefix,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessLogs struct {
+	IncludeTrustContext *bool `json:"includeTrustContext,omitempty"`
+
+	LogVersion *string `json:"logVersion,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessSSESpecificationRequest struct {
+	CustomerManagedKeyEnabled *bool `json:"customerManagedKeyEnabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessSSESpecificationResponse struct {
+	CustomerManagedKeyEnabled *bool `json:"customerManagedKeyEnabled,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessTrustProvider struct {
+	CreationTime *string `json:"creationTime,omitempty"`
+
+	Description *string `json:"description,omitempty"`
+
+	LastUpdatedTime *string `json:"lastUpdatedTime,omitempty"`
+
+	PolicyReferenceName *string `json:"policyReferenceName,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+
+	VerifiedAccessTrustProviderID *string `json:"verifiedAccessTrustProviderID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type VerifiedAccessTrustProviderCondensed struct {
+	Description *string `json:"description,omitempty"`
+
+	VerifiedAccessTrustProviderID *string `json:"verifiedAccessTrustProviderID,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -6068,6 +7012,8 @@ type Volume_SDK struct {
 	Size *int64 `json:"size,omitempty"`
 
 	SnapshotID *string `json:"snapshotID,omitempty"`
+
+	SSEType *string `json:"sseType,omitempty"`
 
 	State *string `json:"state,omitempty"`
 

@@ -81,3 +81,50 @@ type NodeType string
 const (
 	NodeType_BROKER NodeType = "BROKER"
 )
+
+type ReplicatorState string
+
+const (
+	ReplicatorState_RUNNING  ReplicatorState = "RUNNING"
+	ReplicatorState_CREATING ReplicatorState = "CREATING"
+	ReplicatorState_UPDATING ReplicatorState = "UPDATING"
+	ReplicatorState_DELETING ReplicatorState = "DELETING"
+	ReplicatorState_FAILED   ReplicatorState = "FAILED"
+)
+
+type StorageMode string
+
+const (
+	StorageMode_LOCAL  StorageMode = "LOCAL"
+	StorageMode_TIERED StorageMode = "TIERED"
+)
+
+type TargetCompressionType string
+
+const (
+	TargetCompressionType_NONE   TargetCompressionType = "NONE"
+	TargetCompressionType_GZIP   TargetCompressionType = "GZIP"
+	TargetCompressionType_SNAPPY TargetCompressionType = "SNAPPY"
+	TargetCompressionType_LZ4    TargetCompressionType = "LZ4"
+	TargetCompressionType_ZSTD   TargetCompressionType = "ZSTD"
+)
+
+type UserIdentityType string
+
+const (
+	UserIdentityType_AWSACCOUNT UserIdentityType = "AWSACCOUNT"
+	UserIdentityType_AWSSERVICE UserIdentityType = "AWSSERVICE"
+)
+
+type VPCConnectionState string
+
+const (
+	VPCConnectionState_CREATING     VPCConnectionState = "CREATING"
+	VPCConnectionState_AVAILABLE    VPCConnectionState = "AVAILABLE"
+	VPCConnectionState_INACTIVE     VPCConnectionState = "INACTIVE"
+	VPCConnectionState_DEACTIVATING VPCConnectionState = "DEACTIVATING"
+	VPCConnectionState_DELETING     VPCConnectionState = "DELETING"
+	VPCConnectionState_FAILED       VPCConnectionState = "FAILED"
+	VPCConnectionState_REJECTED     VPCConnectionState = "REJECTED"
+	VPCConnectionState_REJECTING    VPCConnectionState = "REJECTING"
+)

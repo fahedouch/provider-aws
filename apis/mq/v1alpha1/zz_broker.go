@@ -39,6 +39,10 @@ type BrokerParameters struct {
 
 	CreatorRequestID *string `json:"creatorRequestID,omitempty"`
 
+	DataReplicationMode *string `json:"dataReplicationMode,omitempty"`
+
+	DataReplicationPrimaryBrokerARN *string `json:"dataReplicationPrimaryBrokerARN,omitempty"`
+
 	// +kubebuilder:validation:Required
 	DeploymentMode *string `json:"deploymentMode"`
 
@@ -101,6 +105,8 @@ type BrokerObservation struct {
 	PendingSecurityGroups []*string `json:"pendingSecurityGroups,omitempty"`
 
 	Users []*UserSummary `json:"users,omitempty"`
+
+	CustomBrokerObservation `json:",inline"`
 }
 
 // BrokerStatus defines the observed state of Broker.
@@ -115,6 +121,7 @@ type BrokerStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

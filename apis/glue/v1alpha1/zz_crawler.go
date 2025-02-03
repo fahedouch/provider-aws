@@ -30,12 +30,12 @@ type CrawlerParameters struct {
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
 	// Crawler configuration information. This versioned JSON string allows users
-	// to specify aspects of a crawler's behavior. For more information, see Configuring
-	// a Crawler (https://docs.aws.amazon.com/glue/latest/dg/crawler-configuration.html).
+	// to specify aspects of a crawler's behavior. For more information, see Setting
+	// crawler configuration options (https://docs.aws.amazon.com/glue/latest/dg/crawler-configuration.html).
 	Configuration *string `json:"configuration,omitempty"`
 	// A description of the new crawler.
 	Description *string `json:"description,omitempty"`
-
+	// Specifies Lake Formation configuration settings for the crawler.
 	LakeFormationConfiguration *LakeFormationConfiguration `json:"lakeFormationConfiguration,omitempty"`
 	// Specifies data lineage configuration settings for the crawler.
 	LineageConfiguration *LineageConfiguration `json:"lineageConfiguration,omitempty"`
@@ -83,6 +83,8 @@ type CrawlerObservation struct {
 	State *string `json:"state,omitempty"`
 	// The version of the crawler.
 	Version *int64 `json:"version,omitempty"`
+
+	CustomCrawlerObservation `json:",inline"`
 }
 
 // CrawlerStatus defines the observed state of Crawler.
@@ -97,6 +99,7 @@ type CrawlerStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

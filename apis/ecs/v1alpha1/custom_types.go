@@ -5,6 +5,9 @@ import xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 // CustomClusterParameters provides custom parameters for the Cluster type
 type CustomClusterParameters struct{}
 
+// CustomClusterObservation includes the custom status fields of Cluster.
+type CustomClusterObservation struct{}
+
 // CustomAWSVPCConfiguration provides custom parameters for the
 // AWSVPCConfiguration type
 type CustomAWSVPCConfiguration struct {
@@ -96,6 +99,10 @@ type CustomServiceParameters struct {
 	ClusterRef      *xpv1.Reference `json:"clusterRef,omitempty"`
 	ClusterSelector *xpv1.Selector  `json:"clusterSelector,omitempty"`
 
+	// Force Service to be deleted, even with task Running or Pending
+	// +optional
+	ForceDeletion bool `json:"forceDeletion,omitempty"`
+
 	// A load balancer object representing the load balancers to use with your service.
 	// For more information, see Service Load Balancing (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html)
 	// in the Amazon Elastic Container Service Developer Guide.
@@ -164,6 +171,9 @@ type CustomServiceParameters struct {
 	TaskDefinitionRef      *xpv1.Reference `json:"taskDefinitionRef,omitempty"`
 	TaskDefinitionSelector *xpv1.Selector  `json:"taskDefinitionSelector,omitempty"`
 }
+
+// CustomServiceObservation includes the custom status fields of Service.
+type CustomServiceObservation struct{}
 
 // CustomEFSAuthorizationConfig provides custom parameters for the
 // EFSAuthorizationConfig type
@@ -262,3 +272,6 @@ type CustomTaskDefinitionParameters struct {
 
 	Volumes []*CustomVolume `json:"volumes,omitempty"`
 }
+
+// CustomTaskDefinitionObservation includes the custom status fields of TaskDefinition.
+type CustomTaskDefinitionObservation struct{}

@@ -32,6 +32,9 @@ type PublicDNSNamespaceParameters struct {
 	// A description for the namespace.
 	Description *string `json:"description,omitempty"`
 	// The name that you want to assign to this namespace.
+	//
+	// Do not include sensitive information in the name. The name is publicly available
+	// using DNS queries.
 	// +kubebuilder:validation:Required
 	Name *string `json:"name"`
 	// Properties for the public DNS namespace.
@@ -54,6 +57,8 @@ type PublicDNSNamespaceObservation struct {
 	// A value that you can use to determine whether the request completed successfully.
 	// To get the status of the operation, see GetOperation (https://docs.aws.amazon.com/cloud-map/latest/api/API_GetOperation.html).
 	OperationID *string `json:"operationID,omitempty"`
+
+	CustomPublicDNSNamespaceObservation `json:",inline"`
 }
 
 // PublicDNSNamespaceStatus defines the observed state of PublicDNSNamespace.
@@ -68,6 +73,7 @@ type PublicDNSNamespaceStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

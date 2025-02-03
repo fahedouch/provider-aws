@@ -18,11 +18,10 @@ package permission
 
 import (
 	svcsdk "github.com/aws/aws-sdk-go-v2/service/lambda"
-
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/lambda/manualv1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 func generatePermission(policyDocument *policyDocument, sid string) *svcapitypes.Permission {
@@ -47,7 +46,7 @@ func generateAddPermissionInput(cr *svcapitypes.Permission) *svcsdk.AddPermissio
 		Action:           &cr.Spec.ForProvider.Action,
 		FunctionName:     cr.Spec.ForProvider.FunctionName,
 		Principal:        &cr.Spec.ForProvider.Principal,
-		StatementId:      awsclient.String(meta.GetExternalName(cr)),
+		StatementId:      pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		EventSourceToken: cr.Spec.ForProvider.EventSourceToken,
 		PrincipalOrgID:   cr.Spec.ForProvider.PrincipalOrgID,
 		SourceArn:        cr.Spec.ForProvider.SourceArn,
@@ -58,6 +57,6 @@ func generateAddPermissionInput(cr *svcapitypes.Permission) *svcsdk.AddPermissio
 func generateRemovePermissionInput(cr *svcapitypes.Permission) *svcsdk.RemovePermissionInput {
 	return &svcsdk.RemovePermissionInput{
 		FunctionName: cr.Spec.ForProvider.FunctionName,
-		StatementId:  awsclient.String(meta.GetExternalName(cr)),
+		StatementId:  pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	}
 }

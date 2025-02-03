@@ -27,6 +27,9 @@ type CustomLaunchTemplateParameters struct {
 	Tags []Tag `json:"tags,omitempty"`
 }
 
+// CustomLaunchTemplateParameters includes the custom status fields of LaunchTemplate.
+type CustomLaunchTemplateObservation struct{}
+
 // CustomVPCEndpointServiceConfigurationParameters contains the additional fields
 // for VPCEndpointServiceConfigurationParameter.
 type CustomVPCEndpointServiceConfigurationParameters struct {
@@ -68,6 +71,9 @@ type CustomVPCEndpointServiceConfigurationParameters struct {
 	NetworkLoadBalancerARNSelector *xpv1.Selector `json:"networkLoadBalancerARNSelector,omitempty"`
 }
 
+// CustomLaunchTemplateParameters includes the custom status fields of VPCEndpointServiceConfigurationParameter.
+type CustomVPCEndpointServiceConfigurationObservation struct{}
+
 // CustomLaunchTemplateVersionParameters includes the custom fields of LaunchTemplateVersion.
 type CustomLaunchTemplateVersionParameters struct {
 	// The ID of the Launch Template. You must specify this parameter in the request.
@@ -94,8 +100,15 @@ type CustomLaunchTemplateVersionParameters struct {
 	LaunchTemplateNameSelector *xpv1.Selector `json:"launchTemplateNameSelector,omitempty"`
 }
 
+// CustomLaunchTemplateVersionObservation includes the custom status fields of LaunchTemplateVersion.
+type CustomLaunchTemplateVersionObservation struct{}
+
 // CustomVolumeParameters contains the additional fields for VolumeParameters.
 type CustomVolumeParameters struct {
+	// Metadata tagging key value pairs
+	// +optional
+	Tags map[string]string `json:"tags,omitempty"`
+
 	// The identifier of the AWS Key Management Service (AWS KMS) customer master
 	// key (CMK) to use for Amazon EBS encryption. If this parameter is not specified,
 	// your AWS managed CMK for EBS is used. If KmsKeyId is specified, the encrypted
@@ -128,6 +141,9 @@ type CustomVolumeParameters struct {
 	// +optional
 	KMSKeyIDSelector *xpv1.Selector `json:"kmsKeyIdSelector,omitempty"`
 }
+
+// CustomVolumeObservation includes the custom status fields of Volume.
+type CustomVolumeObservation struct{}
 
 // CustomVPCPeeringConnectionParameters are custom parameters for VPCPeeringConnection
 type CustomVPCPeeringConnectionParameters struct {
@@ -171,12 +187,18 @@ type CustomVPCPeeringConnectionParameters struct {
 	AccepterPeeringOptions *VPCPeeringConnectionOptionsDescription `json:"accepterPeeringOptions,omitempty"`
 }
 
+// CustomVPCPeeringConnectionObservation includes the custom status fields of VPCPeeringConnection.
+type CustomVPCPeeringConnectionObservation struct{}
+
 // CustomTransitGatewayParameters are custom parameters for TransitGateway
 type CustomTransitGatewayParameters struct {
 	// Metadata tagging key value pairs
 	// +optional
 	Tags []Tag `json:"tags,omitempty"`
 }
+
+// CustomTransitGatewayObservation includes the custom status fields of TransitGateway.
+type CustomTransitGatewayObservation struct{}
 
 // CustomTransitGatewayVPCAttachmentParameters are custom parameters for TransitGatewayVPCAttachment
 type CustomTransitGatewayVPCAttachmentParameters struct {
@@ -234,6 +256,9 @@ type CustomTransitGatewayVPCAttachmentParameters struct {
 	// +optional
 	Tags []Tag `json:"tags,omitempty"`
 }
+
+// CustomTransitGatewayVPCAttachmentObservation includes the custom status fields of TransitGatewayVPCAttachment.
+type CustomTransitGatewayVPCAttachmentObservation struct{}
 
 // CustomRouteParameters are custom parameters for Route
 type CustomRouteParameters struct {
@@ -333,8 +358,15 @@ type CustomRouteParameters struct {
 	GatewayIDSelector *xpv1.Selector `json:"gatewayIdSelector,omitempty"`
 }
 
+// CustomRouteObservation includes the custom status fields of Route.
+type CustomRouteObservation struct{}
+
 // CustomVPCEndpointParameters are custom parameters for VPCEndpoint
 type CustomVPCEndpointParameters struct {
+	// Metadata tagging key value pairs
+	// +optional
+	Tags map[string]string `json:"tags,omitempty"`
+
 	// The ID of the VPC. You must specify this parameter in the request.
 	// +optional
 	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1.VPC
@@ -402,6 +434,9 @@ type CustomVPCEndpointParameters struct {
 	RouteTableIDSelector *xpv1.Selector `json:"routeTableIdSelector,omitempty"`
 }
 
+// CustomVPCEndpointObservation includes the custom status fields of VPCEndpoint.
+type CustomVPCEndpointObservation struct{}
+
 // CustomTransitGatewayRouteParameters are custom parameters for TransitGatewayRouteParameters
 type CustomTransitGatewayRouteParameters struct {
 	// The ID of the attachment.
@@ -435,6 +470,9 @@ type CustomTransitGatewayRouteParameters struct {
 	TransitGatewayRouteTableIDSelector *xpv1.Selector `json:"transitGatewayRouteTableIdSelector,omitempty"`
 }
 
+// CustomTransitGatewayRouteObservation includes the custom status fields of TransitGatewayRouteParameters.
+type CustomTransitGatewayRouteObservation struct{}
+
 // CustomTransitGatewayRouteTableParameters are custom parameters for TransitGatewayRouteTableParameters
 type CustomTransitGatewayRouteTableParameters struct {
 	// The ID of the transit gateway.
@@ -456,6 +494,9 @@ type CustomTransitGatewayRouteTableParameters struct {
 	// +optional
 	Tags []Tag `json:"tags,omitempty"`
 }
+
+// CustomTransitGatewayRouteTableObservation includes the custom status fields of TransitGatewayRouteTable.
+type CustomTransitGatewayRouteTableObservation struct{}
 
 // CustomFlowLogParameters are custom parameters for FlowLogParameters
 type CustomFlowLogParameters struct {
@@ -588,3 +629,6 @@ type CustomFlowLogParameters struct {
 	// +optional
 	S3BucketSubfolder *string `json:"s3BucketSubfolder,omitempty"`
 }
+
+// CustomFlowLogObservation includes the custom status fields of FlowLog.
+type CustomFlowLogObservation struct{}

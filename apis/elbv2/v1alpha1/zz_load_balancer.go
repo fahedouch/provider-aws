@@ -57,11 +57,11 @@ type LoadBalancerParameters struct {
 	//
 	// You cannot specify a scheme for a Gateway Load Balancer.
 	Scheme *string `json:"scheme,omitempty"`
-	// [Application Load Balancers] The IDs of the security groups for the load
-	// balancer.
+	// [Application Load Balancers and Network Load Balancers] The IDs of the security
+	// groups for the load balancer.
 	SecurityGroups []*string `json:"securityGroups,omitempty"`
 	// The IDs of the public subnets. You can specify only one subnet per Availability
-	// Zone. You must specify either subnets or subnet mappings.
+	// Zone. You must specify either subnets or subnet mappings, but not both.
 	//
 	// [Application Load Balancers] You must specify subnets from at least two Availability
 	// Zones. You cannot specify Elastic IP addresses for your subnets.
@@ -82,7 +82,8 @@ type LoadBalancerParameters struct {
 	// Zones. You cannot specify Elastic IP addresses for your subnets.
 	SubnetMappings []*SubnetMapping `json:"subnetMappings,omitempty"`
 	// The IDs of the public subnets. You can specify only one subnet per Availability
-	// Zone. You must specify either subnets or subnet mappings.
+	// Zone. You must specify either subnets or subnet mappings, but not both. To
+	// specify an Elastic IP address, specify subnet mappings instead of subnets.
 	//
 	// [Application Load Balancers] You must specify subnets from at least two Availability
 	// Zones.
@@ -119,6 +120,9 @@ type LoadBalancerObservation struct {
 	CreatedTime *metav1.Time `json:"createdTime,omitempty"`
 	// The public DNS name of the load balancer.
 	DNSName *string `json:"dnsName,omitempty"`
+	// Indicates whether to evaluate inbound security group rules for traffic sent
+	// to a Network Load Balancer through Amazon Web Services PrivateLink.
+	EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic *string `json:"enforceSecurityGroupInboundRulesOnPrivateLinkTraffic,omitempty"`
 	// The Amazon Resource Name (ARN) of the load balancer.
 	LoadBalancerARN *string `json:"loadBalancerARN,omitempty"`
 	// The name of the load balancer.
@@ -129,6 +133,8 @@ type LoadBalancerObservation struct {
 	Type *string `json:"type_,omitempty"`
 	// The ID of the VPC for the load balancer.
 	VPCID *string `json:"vpcID,omitempty"`
+
+	CustomLoadBalancerObservation `json:",inline"`
 }
 
 // LoadBalancerStatus defines the observed state of LoadBalancer.
@@ -143,6 +149,7 @@ type LoadBalancerStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

@@ -18,15 +18,17 @@ package sns
 
 import (
 	"context"
-	"errors"
 	"strconv"
-
-	"github.com/crossplane-contrib/provider-aws/apis/sns/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	snstypes "github.com/aws/aws-sdk-go-v2/service/sns/types"
+	"github.com/pkg/errors"
+	"k8s.io/utils/ptr"
+
+	"github.com/crossplane-contrib/provider-aws/apis/sns/v1beta1"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	policyutils "github.com/crossplane-contrib/provider-aws/pkg/utils/policy"
 )
 
 // TopicAttributes refers to AWS SNS Topic Attributes List
@@ -98,15 +100,15 @@ func GenerateCreateTopicInput(p *v1beta1.TopicParameters) *sns.CreateTopicInput 
 // LateInitializeTopicAttr fills the empty fields in *v1beta1.TopicParameters with the
 // values seen in sns.Topic.
 func LateInitializeTopicAttr(in *v1beta1.TopicParameters, attrs map[string]string) {
-	in.DisplayName = awsclients.LateInitializeStringPtr(in.DisplayName, aws.String(attrs[string(TopicDisplayName)]))
-	in.DeliveryPolicy = awsclients.LateInitializeStringPtr(in.DeliveryPolicy, aws.String(attrs[string(TopicDeliveryPolicy)]))
-	in.KMSMasterKeyID = awsclients.LateInitializeStringPtr(in.KMSMasterKeyID, aws.String(attrs[string(TopicKmsMasterKeyID)]))
-	in.Policy = awsclients.LateInitializeStringPtr(in.Policy, aws.String(attrs[string(TopicPolicy)]))
+	in.DisplayName = pointer.LateInitialize(in.DisplayName, aws.String(attrs[string(TopicDisplayName)]))
+	in.DeliveryPolicy = pointer.LateInitialize(in.DeliveryPolicy, aws.String(attrs[string(TopicDeliveryPolicy)]))
+	in.KMSMasterKeyID = pointer.LateInitialize(in.KMSMasterKeyID, aws.String(attrs[string(TopicKmsMasterKeyID)]))
+	in.Policy = pointer.LateInitialize(in.Policy, aws.String(attrs[string(TopicPolicy)]))
 
 	in.FifoTopic = nil
 	fifoTopic, err := strconv.ParseBool(attrs[string(TopicFifoTopic)])
 	if err == nil && fifoTopic {
-		in.FifoTopic = awsclients.LateInitializeBoolPtr(in.FifoTopic, aws.Bool(fifoTopic))
+		in.FifoTopic = pointer.LateInitialize(in.FifoTopic, aws.Bool(fifoTopic))
 	}
 }
 
@@ -116,16 +118,24 @@ func LateInitializeTopicAttr(in *v1beta1.TopicParameters, attrs map[string]strin
 // Please see https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
 // So we need to compare each topic attribute and call SetTopicAttribute for ones which has
 // changed.
-func GetChangedAttributes(p v1beta1.TopicParameters, attrs map[string]string) map[string]string {
+func GetChangedAttributes(p v1beta1.TopicParameters, attrs map[string]string) (map[string]string, error) {
 	topicAttrs := getTopicAttributes(p)
 	changedAttrs := make(map[string]string)
 	for k, v := range topicAttrs {
-		if v != attrs[k] {
+		if k == string(TopicPolicy) {
+			isPolicyUpToDate, err := isSNSPolicyUpToDate(v, attrs[string(TopicPolicy)])
+			if err != nil {
+				return nil, errors.Wrap(err, "cannot compare policies")
+			}
+			if !isPolicyUpToDate {
+				changedAttrs[k] = v
+			}
+		} else if v != attrs[k] {
 			changedAttrs[k] = v
 		}
 	}
 
-	return changedAttrs
+	return changedAttrs, nil
 }
 
 // GenerateTopicObservation is used to produce TopicObservation from attributes
@@ -152,18 +162,42 @@ func GenerateTopicObservation(attr map[string]string) v1beta1.TopicObservation {
 }
 
 // IsSNSTopicUpToDate checks if object is up to date
-func IsSNSTopicUpToDate(p v1beta1.TopicParameters, attr map[string]string) bool {
+func IsSNSTopicUpToDate(p v1beta1.TopicParameters, attr map[string]string) (bool, error) {
 	fifoTopic, _ := strconv.ParseBool(attr[string(TopicFifoTopic)])
+
+	isPolicyUpToDate, err := isSNSPolicyUpToDate(ptr.Deref(p.Policy, ""), attr[string(TopicPolicy)])
+	if err != nil {
+		return false, err
+	}
 
 	return aws.ToString(p.DeliveryPolicy) == attr[string(TopicDeliveryPolicy)] &&
 		aws.ToString(p.DisplayName) == attr[string(TopicDisplayName)] &&
 		aws.ToString(p.KMSMasterKeyID) == attr[string(TopicKmsMasterKeyID)] &&
 		aws.ToBool(p.FifoTopic) == fifoTopic &&
-		aws.ToString(p.Policy) == attr[string(TopicPolicy)]
+		isPolicyUpToDate, nil
+}
+
+// IsSNSPolicyChanged determines whether a SNS topic policy needs to be updated
+func isSNSPolicyUpToDate(specPolicyStr, currPolicyStr string) (bool, error) {
+	if specPolicyStr == "" {
+		return currPolicyStr == "", nil
+	} else if currPolicyStr == "" {
+		return false, nil
+	}
+
+	currPolicy, err := policyutils.ParsePolicyString(currPolicyStr)
+	if err != nil {
+		return false, errors.Wrap(err, "current policy")
+	}
+	specPolicy, err := policyutils.ParsePolicyString(specPolicyStr)
+	if err != nil {
+		return false, errors.Wrap(err, "spec policy")
+	}
+	equalPolicies, _ := policyutils.ArePoliciesEqal(&currPolicy, &specPolicy)
+	return equalPolicies, nil
 }
 
 func getTopicAttributes(p v1beta1.TopicParameters) map[string]string {
-
 	topicAttr := make(map[string]string)
 
 	topicAttr[string(TopicDeliveryPolicy)] = aws.ToString(p.DeliveryPolicy)

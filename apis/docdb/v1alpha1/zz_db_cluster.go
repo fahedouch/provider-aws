@@ -29,6 +29,12 @@ type DBClusterParameters struct {
 	// Region is which region the DBCluster will be created.
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
+	// A value that indicates whether major version upgrades are allowed.
+	//
+	// Constraints: You must allow major version upgrades when specifying a value
+	// for the EngineVersion parameter that is a different major version than the
+	// DB cluster's current version.
+	AllowMajorVersionUpgrade *bool `json:"allowMajorVersionUpgrade,omitempty"`
 	// A list of Amazon EC2 Availability Zones that instances in the cluster can
 	// be created in.
 	AvailabilityZones []*string `json:"availabilityZones,omitempty"`
@@ -159,6 +165,8 @@ type DBClusterObservation struct {
 	// grant permission for the cluster to access other Amazon Web Services services
 	// on your behalf.
 	AssociatedRoles []*DBClusterRole `json:"associatedRoles,omitempty"`
+	// Identifies the clone group to which the DB cluster is associated.
+	CloneGroupID *string `json:"cloneGroupID,omitempty"`
 	// Specifies the time when the cluster was created, in Universal Coordinated
 	// Time (UTC).
 	ClusterCreateTime *metav1.Time `json:"clusterCreateTime,omitempty"`
@@ -186,6 +194,8 @@ type DBClusterObservation struct {
 	EnabledCloudwatchLogsExports []*string `json:"enabledCloudwatchLogsExports,omitempty"`
 	// Specifies the connection endpoint for the primary instance of the cluster.
 	Endpoint *string `json:"endpoint,omitempty"`
+	// Indicates the database engine version.
+	EngineVersion *string `json:"engineVersion,omitempty"`
 	// Specifies the ID that Amazon Route 53 assigns when you create a hosted zone.
 	HostedZoneID *string `json:"hostedZoneID,omitempty"`
 	// Specifies the latest time to which a database can be restored with point-in-time
@@ -218,6 +228,8 @@ type DBClusterObservation struct {
 	// Provides a list of virtual private cloud (VPC) security groups that the cluster
 	// belongs to.
 	VPCSecurityGroups []*VPCSecurityGroupMembership `json:"vpcSecurityGroups,omitempty"`
+
+	CustomDBClusterObservation `json:",inline"`
 }
 
 // DBClusterStatus defines the observed state of DBCluster.
@@ -232,6 +244,7 @@ type DBClusterStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

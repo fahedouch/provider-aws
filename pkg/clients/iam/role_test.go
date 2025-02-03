@@ -1,19 +1,21 @@
 package iam
 
 import (
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/aws/smithy-go/document"
-
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go/document"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
@@ -31,8 +33,19 @@ var (
 		  }
 		]
 	   }`
+	assumeRolePolicyDocumentWithArrays = `{
+		"Statement": [
+			{
+				"Effect": "Allow",
+				"Principal": {
+					"Service": ["eks.amazonaws.com"]
+				},
+				"Action": ["sts:AssumeRole"]
+			}
+		],
+		"Version": "2012-10-17"
+	}`
 	assumeRolePolicyDocument2 = `{
-		"Version": "2012-10-17",
 		"Statement": [
 		  {
 			"Effect": "Allow",
@@ -44,19 +57,23 @@ var (
 			  "StringEquals": {"foo": "bar"}
 			}
 		  }
-		]
-	   }`
-	roleID   = "some Id"
-	roleName = "some name"
-	tagKey   = "key"
-	tagValue = "value"
+		],
+		"Version": "2012-10-17"
+	}`
+	roleID             = "some Id"
+	roleName           = "some name"
+	tagKey             = "key"
+	tagValue           = "value"
+	permissionBoundary = "arn:aws:iam::111111111111:policy/permission-boundary"
+	createDate         = time.Now()
+	region             = "us-east-1"
 )
 
 func roleParams(m ...func(*v1beta1.RoleParameters)) *v1beta1.RoleParameters {
 	o := &v1beta1.RoleParameters{
 		Description:              &description,
 		AssumeRolePolicyDocument: assumeRolePolicyDocument,
-		MaxSessionDuration:       aws.Int32(1),
+		MaxSessionDuration:       pointer.ToIntAsInt32(1),
 	}
 
 	for _, f := range m {
@@ -66,19 +83,11 @@ func roleParams(m ...func(*v1beta1.RoleParameters)) *v1beta1.RoleParameters {
 	return o
 }
 
-func escapedPolicyJSON() *string {
-	p, err := aws.CompactAndEscapeJSON(assumeRolePolicyDocument)
-	if err == nil {
-		return &p
-	}
-	return nil
-}
-
 func role(m ...func(*iamtypes.Role)) *iamtypes.Role {
 	o := &iamtypes.Role{
 		Description:              &description,
 		AssumeRolePolicyDocument: &assumeRolePolicyDocument,
-		MaxSessionDuration:       aws.Int32(1),
+		MaxSessionDuration:       pointer.ToIntAsInt32(1),
 	}
 
 	for _, f := range m {
@@ -89,14 +98,24 @@ func role(m ...func(*iamtypes.Role)) *iamtypes.Role {
 }
 
 func addRoleOutputFields(r *iamtypes.Role) {
-	r.Arn = aws.String(roleARN)
-	r.RoleId = aws.String(roleID)
+	r.Arn = pointer.ToOrNilIfZeroValue(roleARN)
+	r.RoleId = pointer.ToOrNilIfZeroValue(roleID)
+	r.CreateDate = &createDate
+	r.RoleLastUsed = &iamtypes.RoleLastUsed{
+		LastUsedDate: &createDate,
+		Region:       &region,
+	}
 }
 
 func roleObservation(m ...func(*v1beta1.RoleExternalStatus)) *v1beta1.RoleExternalStatus {
 	o := &v1beta1.RoleExternalStatus{
-		ARN:    roleARN,
-		RoleID: roleID,
+		ARN:        roleARN,
+		RoleID:     roleID,
+		CreateDate: pointer.TimeToMetaTime(&createDate),
+		RoleLastUsed: &v1beta1.RoleLastUsed{
+			LastUsedDate: pointer.TimeToMetaTime(&createDate),
+			Region:       &region,
+		},
 	}
 
 	for _, f := range m {
@@ -114,10 +133,10 @@ func TestGenerateCreateRoleInput(t *testing.T) {
 		"FilledInput": {
 			in: *roleParams(),
 			out: iam.CreateRoleInput{
-				RoleName:                 aws.String(roleName),
+				RoleName:                 pointer.ToOrNilIfZeroValue(roleName),
 				Description:              &description,
-				AssumeRolePolicyDocument: aws.String(assumeRolePolicyDocument),
-				MaxSessionDuration:       aws.Int32(1),
+				AssumeRolePolicyDocument: pointer.ToOrNilIfZeroValue(assumeRolePolicyDocument),
+				MaxSessionDuration:       pointer.ToIntAsInt32(1),
 			},
 		},
 	}
@@ -243,80 +262,144 @@ func TestIsRoleUpToDate(t *testing.T) {
 	cases := map[string]struct {
 		args     args
 		want     bool
-		wantDiff string
+		wantDiff []*regexp.Regexp
 	}{
 		"SameFields": {
 			args: args{
 				role: iamtypes.Role{
-					AssumeRolePolicyDocument: escapedPolicyJSON(),
+					AssumeRolePolicyDocument: ptr.To(url.QueryEscape(assumeRolePolicyDocument)),
 					Description:              &description,
-					MaxSessionDuration:       aws.Int32(1),
-					Path:                     aws.String("/"),
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
 					Tags: []iamtypes.Tag{{
-						Key:   aws.String("key1"),
-						Value: aws.String("value1"),
+						Key:   pointer.ToOrNilIfZeroValue("key1"),
+						Value: pointer.ToOrNilIfZeroValue("value1"),
 					}},
 				},
 				p: v1beta1.RoleParameters{
 					Description:              &description,
 					AssumeRolePolicyDocument: assumeRolePolicyDocument,
-					MaxSessionDuration:       aws.Int32(1),
-					Path:                     aws.String("/"),
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
 					Tags: []v1beta1.Tag{{
 						Key:   "key1",
 						Value: "value1",
 					}},
 				},
 			},
-			want:     true,
-			wantDiff: "",
+			want: true,
+		},
+		"SameFieldsWithDifferentPolicyFormat": {
+			args: args{
+				role: iamtypes.Role{
+					AssumeRolePolicyDocument: ptr.To(url.QueryEscape(assumeRolePolicyDocumentWithArrays)),
+					Description:              &description,
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
+					Tags: []iamtypes.Tag{{
+						Key:   pointer.ToOrNilIfZeroValue("key1"),
+						Value: pointer.ToOrNilIfZeroValue("value1"),
+					}},
+				},
+				p: v1beta1.RoleParameters{
+					Description:              &description,
+					AssumeRolePolicyDocument: assumeRolePolicyDocument,
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
+					Tags: []v1beta1.Tag{{
+						Key:   "key1",
+						Value: "value1",
+					}},
+				},
+			},
+			want: true,
+		},
+		"AWSInitializedFields": {
+			args: args{
+				role: iamtypes.Role{
+					AssumeRolePolicyDocument: ptr.To(url.QueryEscape(assumeRolePolicyDocument)),
+					CreateDate:               &createDate,
+					Description:              &description,
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
+					PermissionsBoundary: &iamtypes.AttachedPermissionsBoundary{
+						PermissionsBoundaryArn:  &permissionBoundary,
+						PermissionsBoundaryType: "Policy",
+					},
+					RoleLastUsed: &iamtypes.RoleLastUsed{
+						LastUsedDate: &createDate,
+						Region:       pointer.ToOrNilIfZeroValue("us-east-1"),
+					},
+					Tags: []iamtypes.Tag{{
+						Key:   pointer.ToOrNilIfZeroValue("key1"),
+						Value: pointer.ToOrNilIfZeroValue("value1"),
+					}},
+				},
+				p: v1beta1.RoleParameters{
+					Description:              &description,
+					AssumeRolePolicyDocument: assumeRolePolicyDocument,
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
+					PermissionsBoundary:      &permissionBoundary,
+					Tags: []v1beta1.Tag{{
+						Key:   "key1",
+						Value: "value1",
+					}},
+				},
+			},
+			want: true,
 		},
 		"DifferentPolicy": {
 			args: args{
 				role: iamtypes.Role{
-					AssumeRolePolicyDocument: escapedPolicyJSON(),
+					AssumeRolePolicyDocument: ptr.To(url.QueryEscape(assumeRolePolicyDocument)),
 					Description:              &description,
-					MaxSessionDuration:       aws.Int32(1),
-					Path:                     aws.String("/"),
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
 				},
 				p: v1beta1.RoleParameters{
 					Description:              &description,
 					AssumeRolePolicyDocument: assumeRolePolicyDocument2,
-					MaxSessionDuration:       aws.Int32(1),
-					Path:                     aws.String("/"),
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
 				},
 			},
 			want: false,
-			wantDiff: `Found observed difference in IAM role
-
-desired assume role policy: %7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Principal%22%3A%7B%22Service%22%3A%22eks.amazonaws.com%22%7D%2C%22Action%22%3A%22sts%3AAssumeRole%22%2C%22Condition%22%3A%7B%22StringEquals%22%3A%7B%22foo%22%3A%22bar%22%7D%7D%7D%5D%7D
-observed assume role policy: %7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Principal%22%3A%7B%22Service%22%3A%22eks.amazonaws.com%22%7D%2C%22Action%22%3A%22sts%3AAssumeRole%22%7D%5D%7D`,
+			wantDiff: []*regexp.Regexp{
+				regexp.MustCompile("Found observed difference in IAM role"),
+				regexp.MustCompile(`- AssumeRolePolicyDocument: &"(%\w\w)+Statement`),
+				regexp.MustCompile(`\+ AssumeRolePolicyDocument: &"(%\w\w)+Version`),
+			},
 		},
 		"DifferentFields": {
 			args: args{
 				role: iamtypes.Role{
-					AssumeRolePolicyDocument: &assumeRolePolicyDocument,
+					AssumeRolePolicyDocument: ptr.To(url.QueryEscape(assumeRolePolicyDocument)),
 					Description:              &description,
-					MaxSessionDuration:       aws.Int32(1),
-					Path:                     aws.String("//"),
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("//"),
 					Tags: []iamtypes.Tag{{
-						Key:   aws.String("key1"),
-						Value: aws.String("value1"),
+						Key:   pointer.ToOrNilIfZeroValue("key1"),
+						Value: pointer.ToOrNilIfZeroValue("value1"),
 					}},
 				},
 				p: v1beta1.RoleParameters{
 					Description:              &description,
 					AssumeRolePolicyDocument: assumeRolePolicyDocument,
-					MaxSessionDuration:       aws.Int32(1),
-					Path:                     aws.String("/"),
+					MaxSessionDuration:       pointer.ToIntAsInt32(1),
+					Path:                     pointer.ToOrNilIfZeroValue("/"),
 					Tags: []v1beta1.Tag{{
 						Key:   "key1",
 						Value: "value1",
 					}},
 				},
 			},
-			want:     false,
-			wantDiff: "Found observed difference in IAM role",
+			want: false,
+			wantDiff: []*regexp.Regexp{
+				regexp.MustCompile("Found observed difference in IAM role"),
+				regexp.MustCompile(`- Path: &"/"`),
+				regexp.MustCompile(`\+ Path: &"//"`),
+			},
 		},
 	}
 
@@ -329,15 +412,18 @@ observed assume role policy: %7B%22Version%22%3A%222012-10-17%22%2C%22Statement%
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if tc.wantDiff == "" {
-				if tc.wantDiff != testDiff {
-					t.Errorf("r: -want, +got:\n%s", testDiff)
+			if tc.wantDiff == nil {
+				if diff := cmp.Diff("", testDiff); diff != "" {
+					t.Errorf("r: -want, +got:\n%s", diff)
 				}
-			}
-
-			if tc.wantDiff == "Found observed difference in IAM role" {
-				if !strings.Contains(testDiff, tc.wantDiff) {
-					t.Errorf("r: -want, +got:\n%s", testDiff)
+			} else {
+				// cmp randomly uses either regular or non-breaking spaces.
+				// Replace them all with regular spaces.
+				compactDiff := strings.Join(strings.Fields(testDiff), " ")
+				for _, wantDiff := range tc.wantDiff {
+					if !wantDiff.MatchString(compactDiff) {
+						t.Errorf("expected:\n%s\nto match:\n%s", testDiff, wantDiff.String())
+					}
 				}
 			}
 		})

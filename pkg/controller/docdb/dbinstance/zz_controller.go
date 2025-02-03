@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/docdb/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -58,7 +59,7 @@ func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
@@ -81,7 +82,7 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeDBInstancesWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	resp = e.filterList(cr, resp)
 	if len(resp.DBInstances) == 0 {
@@ -92,14 +93,18 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateDBInstance(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
@@ -116,7 +121,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateDBInstanceWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.DBInstance.AutoMinorVersionUpgrade != nil {
@@ -135,9 +140,26 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.BackupRetentionPeriod = nil
 	}
 	if resp.DBInstance.CACertificateIdentifier != nil {
-		cr.Status.AtProvider.CACertificateIdentifier = resp.DBInstance.CACertificateIdentifier
+		cr.Spec.ForProvider.CACertificateIdentifier = resp.DBInstance.CACertificateIdentifier
 	} else {
-		cr.Status.AtProvider.CACertificateIdentifier = nil
+		cr.Spec.ForProvider.CACertificateIdentifier = nil
+	}
+	if resp.DBInstance.CertificateDetails != nil {
+		f4 := &svcapitypes.CertificateDetails{}
+		if resp.DBInstance.CertificateDetails.CAIdentifier != nil {
+			f4.CAIdentifier = resp.DBInstance.CertificateDetails.CAIdentifier
+		}
+		if resp.DBInstance.CertificateDetails.ValidTill != nil {
+			f4.ValidTill = &metav1.Time{*resp.DBInstance.CertificateDetails.ValidTill}
+		}
+		cr.Status.AtProvider.CertificateDetails = f4
+	} else {
+		cr.Status.AtProvider.CertificateDetails = nil
+	}
+	if resp.DBInstance.CopyTagsToSnapshot != nil {
+		cr.Spec.ForProvider.CopyTagsToSnapshot = resp.DBInstance.CopyTagsToSnapshot
+	} else {
+		cr.Spec.ForProvider.CopyTagsToSnapshot = nil
 	}
 	if resp.DBInstance.DBClusterIdentifier != nil {
 		cr.Status.AtProvider.DBClusterIdentifier = resp.DBInstance.DBClusterIdentifier
@@ -165,44 +187,44 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.DBInstanceStatus = nil
 	}
 	if resp.DBInstance.DBSubnetGroup != nil {
-		f9 := &svcapitypes.DBSubnetGroup_SDK{}
+		f11 := &svcapitypes.DBSubnetGroup_SDK{}
 		if resp.DBInstance.DBSubnetGroup.DBSubnetGroupArn != nil {
-			f9.DBSubnetGroupARN = resp.DBInstance.DBSubnetGroup.DBSubnetGroupArn
+			f11.DBSubnetGroupARN = resp.DBInstance.DBSubnetGroup.DBSubnetGroupArn
 		}
 		if resp.DBInstance.DBSubnetGroup.DBSubnetGroupDescription != nil {
-			f9.DBSubnetGroupDescription = resp.DBInstance.DBSubnetGroup.DBSubnetGroupDescription
+			f11.DBSubnetGroupDescription = resp.DBInstance.DBSubnetGroup.DBSubnetGroupDescription
 		}
 		if resp.DBInstance.DBSubnetGroup.DBSubnetGroupName != nil {
-			f9.DBSubnetGroupName = resp.DBInstance.DBSubnetGroup.DBSubnetGroupName
+			f11.DBSubnetGroupName = resp.DBInstance.DBSubnetGroup.DBSubnetGroupName
 		}
 		if resp.DBInstance.DBSubnetGroup.SubnetGroupStatus != nil {
-			f9.SubnetGroupStatus = resp.DBInstance.DBSubnetGroup.SubnetGroupStatus
+			f11.SubnetGroupStatus = resp.DBInstance.DBSubnetGroup.SubnetGroupStatus
 		}
 		if resp.DBInstance.DBSubnetGroup.Subnets != nil {
-			f9f4 := []*svcapitypes.Subnet{}
-			for _, f9f4iter := range resp.DBInstance.DBSubnetGroup.Subnets {
-				f9f4elem := &svcapitypes.Subnet{}
-				if f9f4iter.SubnetAvailabilityZone != nil {
-					f9f4elemf0 := &svcapitypes.AvailabilityZone{}
-					if f9f4iter.SubnetAvailabilityZone.Name != nil {
-						f9f4elemf0.Name = f9f4iter.SubnetAvailabilityZone.Name
+			f11f4 := []*svcapitypes.Subnet{}
+			for _, f11f4iter := range resp.DBInstance.DBSubnetGroup.Subnets {
+				f11f4elem := &svcapitypes.Subnet{}
+				if f11f4iter.SubnetAvailabilityZone != nil {
+					f11f4elemf0 := &svcapitypes.AvailabilityZone{}
+					if f11f4iter.SubnetAvailabilityZone.Name != nil {
+						f11f4elemf0.Name = f11f4iter.SubnetAvailabilityZone.Name
 					}
-					f9f4elem.SubnetAvailabilityZone = f9f4elemf0
+					f11f4elem.SubnetAvailabilityZone = f11f4elemf0
 				}
-				if f9f4iter.SubnetIdentifier != nil {
-					f9f4elem.SubnetIdentifier = f9f4iter.SubnetIdentifier
+				if f11f4iter.SubnetIdentifier != nil {
+					f11f4elem.SubnetIdentifier = f11f4iter.SubnetIdentifier
 				}
-				if f9f4iter.SubnetStatus != nil {
-					f9f4elem.SubnetStatus = f9f4iter.SubnetStatus
+				if f11f4iter.SubnetStatus != nil {
+					f11f4elem.SubnetStatus = f11f4iter.SubnetStatus
 				}
-				f9f4 = append(f9f4, f9f4elem)
+				f11f4 = append(f11f4, f11f4elem)
 			}
-			f9.Subnets = f9f4
+			f11.Subnets = f11f4
 		}
 		if resp.DBInstance.DBSubnetGroup.VpcId != nil {
-			f9.VPCID = resp.DBInstance.DBSubnetGroup.VpcId
+			f11.VPCID = resp.DBInstance.DBSubnetGroup.VpcId
 		}
-		cr.Status.AtProvider.DBSubnetGroup = f9
+		cr.Status.AtProvider.DBSubnetGroup = f11
 	} else {
 		cr.Status.AtProvider.DBSubnetGroup = nil
 	}
@@ -212,28 +234,28 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.DBIResourceID = nil
 	}
 	if resp.DBInstance.EnabledCloudwatchLogsExports != nil {
-		f11 := []*string{}
-		for _, f11iter := range resp.DBInstance.EnabledCloudwatchLogsExports {
-			var f11elem string
-			f11elem = *f11iter
-			f11 = append(f11, &f11elem)
+		f13 := []*string{}
+		for _, f13iter := range resp.DBInstance.EnabledCloudwatchLogsExports {
+			var f13elem string
+			f13elem = *f13iter
+			f13 = append(f13, &f13elem)
 		}
-		cr.Status.AtProvider.EnabledCloudwatchLogsExports = f11
+		cr.Status.AtProvider.EnabledCloudwatchLogsExports = f13
 	} else {
 		cr.Status.AtProvider.EnabledCloudwatchLogsExports = nil
 	}
 	if resp.DBInstance.Endpoint != nil {
-		f12 := &svcapitypes.Endpoint{}
+		f14 := &svcapitypes.Endpoint{}
 		if resp.DBInstance.Endpoint.Address != nil {
-			f12.Address = resp.DBInstance.Endpoint.Address
+			f14.Address = resp.DBInstance.Endpoint.Address
 		}
 		if resp.DBInstance.Endpoint.HostedZoneId != nil {
-			f12.HostedZoneID = resp.DBInstance.Endpoint.HostedZoneId
+			f14.HostedZoneID = resp.DBInstance.Endpoint.HostedZoneId
 		}
 		if resp.DBInstance.Endpoint.Port != nil {
-			f12.Port = resp.DBInstance.Endpoint.Port
+			f14.Port = resp.DBInstance.Endpoint.Port
 		}
-		cr.Status.AtProvider.Endpoint = f12
+		cr.Status.AtProvider.Endpoint = f14
 	} else {
 		cr.Status.AtProvider.Endpoint = nil
 	}
@@ -263,69 +285,69 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.LatestRestorableTime = nil
 	}
 	if resp.DBInstance.PendingModifiedValues != nil {
-		f18 := &svcapitypes.PendingModifiedValues{}
+		f20 := &svcapitypes.PendingModifiedValues{}
 		if resp.DBInstance.PendingModifiedValues.AllocatedStorage != nil {
-			f18.AllocatedStorage = resp.DBInstance.PendingModifiedValues.AllocatedStorage
+			f20.AllocatedStorage = resp.DBInstance.PendingModifiedValues.AllocatedStorage
 		}
 		if resp.DBInstance.PendingModifiedValues.BackupRetentionPeriod != nil {
-			f18.BackupRetentionPeriod = resp.DBInstance.PendingModifiedValues.BackupRetentionPeriod
+			f20.BackupRetentionPeriod = resp.DBInstance.PendingModifiedValues.BackupRetentionPeriod
 		}
 		if resp.DBInstance.PendingModifiedValues.CACertificateIdentifier != nil {
-			f18.CACertificateIdentifier = resp.DBInstance.PendingModifiedValues.CACertificateIdentifier
+			f20.CACertificateIdentifier = resp.DBInstance.PendingModifiedValues.CACertificateIdentifier
 		}
 		if resp.DBInstance.PendingModifiedValues.DBInstanceClass != nil {
-			f18.DBInstanceClass = resp.DBInstance.PendingModifiedValues.DBInstanceClass
+			f20.DBInstanceClass = resp.DBInstance.PendingModifiedValues.DBInstanceClass
 		}
 		if resp.DBInstance.PendingModifiedValues.DBInstanceIdentifier != nil {
-			f18.DBInstanceIdentifier = resp.DBInstance.PendingModifiedValues.DBInstanceIdentifier
+			f20.DBInstanceIdentifier = resp.DBInstance.PendingModifiedValues.DBInstanceIdentifier
 		}
 		if resp.DBInstance.PendingModifiedValues.DBSubnetGroupName != nil {
-			f18.DBSubnetGroupName = resp.DBInstance.PendingModifiedValues.DBSubnetGroupName
+			f20.DBSubnetGroupName = resp.DBInstance.PendingModifiedValues.DBSubnetGroupName
 		}
 		if resp.DBInstance.PendingModifiedValues.EngineVersion != nil {
-			f18.EngineVersion = resp.DBInstance.PendingModifiedValues.EngineVersion
+			f20.EngineVersion = resp.DBInstance.PendingModifiedValues.EngineVersion
 		}
 		if resp.DBInstance.PendingModifiedValues.Iops != nil {
-			f18.IOPS = resp.DBInstance.PendingModifiedValues.Iops
+			f20.IOPS = resp.DBInstance.PendingModifiedValues.Iops
 		}
 		if resp.DBInstance.PendingModifiedValues.LicenseModel != nil {
-			f18.LicenseModel = resp.DBInstance.PendingModifiedValues.LicenseModel
+			f20.LicenseModel = resp.DBInstance.PendingModifiedValues.LicenseModel
 		}
 		if resp.DBInstance.PendingModifiedValues.MasterUserPassword != nil {
-			f18.MasterUserPassword = resp.DBInstance.PendingModifiedValues.MasterUserPassword
+			f20.MasterUserPassword = resp.DBInstance.PendingModifiedValues.MasterUserPassword
 		}
 		if resp.DBInstance.PendingModifiedValues.MultiAZ != nil {
-			f18.MultiAZ = resp.DBInstance.PendingModifiedValues.MultiAZ
+			f20.MultiAZ = resp.DBInstance.PendingModifiedValues.MultiAZ
 		}
 		if resp.DBInstance.PendingModifiedValues.PendingCloudwatchLogsExports != nil {
-			f18f11 := &svcapitypes.PendingCloudwatchLogsExports{}
+			f20f11 := &svcapitypes.PendingCloudwatchLogsExports{}
 			if resp.DBInstance.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToDisable != nil {
-				f18f11f0 := []*string{}
-				for _, f18f11f0iter := range resp.DBInstance.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToDisable {
-					var f18f11f0elem string
-					f18f11f0elem = *f18f11f0iter
-					f18f11f0 = append(f18f11f0, &f18f11f0elem)
+				f20f11f0 := []*string{}
+				for _, f20f11f0iter := range resp.DBInstance.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToDisable {
+					var f20f11f0elem string
+					f20f11f0elem = *f20f11f0iter
+					f20f11f0 = append(f20f11f0, &f20f11f0elem)
 				}
-				f18f11.LogTypesToDisable = f18f11f0
+				f20f11.LogTypesToDisable = f20f11f0
 			}
 			if resp.DBInstance.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToEnable != nil {
-				f18f11f1 := []*string{}
-				for _, f18f11f1iter := range resp.DBInstance.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToEnable {
-					var f18f11f1elem string
-					f18f11f1elem = *f18f11f1iter
-					f18f11f1 = append(f18f11f1, &f18f11f1elem)
+				f20f11f1 := []*string{}
+				for _, f20f11f1iter := range resp.DBInstance.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToEnable {
+					var f20f11f1elem string
+					f20f11f1elem = *f20f11f1iter
+					f20f11f1 = append(f20f11f1, &f20f11f1elem)
 				}
-				f18f11.LogTypesToEnable = f18f11f1
+				f20f11.LogTypesToEnable = f20f11f1
 			}
-			f18.PendingCloudwatchLogsExports = f18f11
+			f20.PendingCloudwatchLogsExports = f20f11
 		}
 		if resp.DBInstance.PendingModifiedValues.Port != nil {
-			f18.Port = resp.DBInstance.PendingModifiedValues.Port
+			f20.Port = resp.DBInstance.PendingModifiedValues.Port
 		}
 		if resp.DBInstance.PendingModifiedValues.StorageType != nil {
-			f18.StorageType = resp.DBInstance.PendingModifiedValues.StorageType
+			f20.StorageType = resp.DBInstance.PendingModifiedValues.StorageType
 		}
-		cr.Status.AtProvider.PendingModifiedValues = f18
+		cr.Status.AtProvider.PendingModifiedValues = f20
 	} else {
 		cr.Status.AtProvider.PendingModifiedValues = nil
 	}
@@ -350,24 +372,24 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.PubliclyAccessible = nil
 	}
 	if resp.DBInstance.StatusInfos != nil {
-		f23 := []*svcapitypes.DBInstanceStatusInfo{}
-		for _, f23iter := range resp.DBInstance.StatusInfos {
-			f23elem := &svcapitypes.DBInstanceStatusInfo{}
-			if f23iter.Message != nil {
-				f23elem.Message = f23iter.Message
+		f25 := []*svcapitypes.DBInstanceStatusInfo{}
+		for _, f25iter := range resp.DBInstance.StatusInfos {
+			f25elem := &svcapitypes.DBInstanceStatusInfo{}
+			if f25iter.Message != nil {
+				f25elem.Message = f25iter.Message
 			}
-			if f23iter.Normal != nil {
-				f23elem.Normal = f23iter.Normal
+			if f25iter.Normal != nil {
+				f25elem.Normal = f25iter.Normal
 			}
-			if f23iter.Status != nil {
-				f23elem.Status = f23iter.Status
+			if f25iter.Status != nil {
+				f25elem.Status = f25iter.Status
 			}
-			if f23iter.StatusType != nil {
-				f23elem.StatusType = f23iter.StatusType
+			if f25iter.StatusType != nil {
+				f25elem.StatusType = f25iter.StatusType
 			}
-			f23 = append(f23, f23elem)
+			f25 = append(f25, f25elem)
 		}
-		cr.Status.AtProvider.StatusInfos = f23
+		cr.Status.AtProvider.StatusInfos = f25
 	} else {
 		cr.Status.AtProvider.StatusInfos = nil
 	}
@@ -377,18 +399,18 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.StorageEncrypted = nil
 	}
 	if resp.DBInstance.VpcSecurityGroups != nil {
-		f25 := []*svcapitypes.VPCSecurityGroupMembership{}
-		for _, f25iter := range resp.DBInstance.VpcSecurityGroups {
-			f25elem := &svcapitypes.VPCSecurityGroupMembership{}
-			if f25iter.Status != nil {
-				f25elem.Status = f25iter.Status
+		f27 := []*svcapitypes.VPCSecurityGroupMembership{}
+		for _, f27iter := range resp.DBInstance.VpcSecurityGroups {
+			f27elem := &svcapitypes.VPCSecurityGroupMembership{}
+			if f27iter.Status != nil {
+				f27elem.Status = f27iter.Status
 			}
-			if f25iter.VpcSecurityGroupId != nil {
-				f25elem.VPCSecurityGroupID = f25iter.VpcSecurityGroupId
+			if f27iter.VpcSecurityGroupId != nil {
+				f27elem.VPCSecurityGroupID = f27iter.VpcSecurityGroupId
 			}
-			f25 = append(f25, f25elem)
+			f27 = append(f27, f27elem)
 		}
-		cr.Status.AtProvider.VPCSecurityGroups = f25
+		cr.Status.AtProvider.VPCSecurityGroups = f27
 	} else {
 		cr.Status.AtProvider.VPCSecurityGroups = nil
 	}
@@ -406,7 +428,7 @@ func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.E
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.ModifyDBInstanceWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
 func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
@@ -424,7 +446,7 @@ func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
 		return nil
 	}
 	resp, err := e.client.DeleteDBInstanceWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
 }
 
 type option func(*external)
@@ -458,7 +480,7 @@ type external struct {
 	postObserve    func(context.Context, *svcapitypes.DBInstance, *svcsdk.DescribeDBInstancesOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	filterList     func(*svcapitypes.DBInstance, *svcsdk.DescribeDBInstancesOutput) *svcsdk.DescribeDBInstancesOutput
 	lateInitialize func(*svcapitypes.DBInstanceParameters, *svcsdk.DescribeDBInstancesOutput) error
-	isUpToDate     func(*svcapitypes.DBInstance, *svcsdk.DescribeDBInstancesOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.DBInstance, *svcsdk.DescribeDBInstancesOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.DBInstance, *svcsdk.CreateDBInstanceInput) error
 	postCreate     func(context.Context, *svcapitypes.DBInstance, *svcsdk.CreateDBInstanceOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.DBInstance, *svcsdk.DeleteDBInstanceInput) (bool, error)
@@ -480,8 +502,8 @@ func nopFilterList(_ *svcapitypes.DBInstance, list *svcsdk.DescribeDBInstancesOu
 func nopLateInitialize(*svcapitypes.DBInstanceParameters, *svcsdk.DescribeDBInstancesOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.DBInstance, *svcsdk.DescribeDBInstancesOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.DBInstance, *svcsdk.DescribeDBInstancesOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.DBInstance, *svcsdk.CreateDBInstanceInput) error {

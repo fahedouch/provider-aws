@@ -44,19 +44,22 @@ type ServiceParameters struct {
 	// is specified, the default value of ECS is used.
 	DeploymentController *DeploymentController `json:"deploymentController,omitempty"`
 	// The number of instantiations of the specified task definition to place and
-	// keep running on your cluster.
+	// keep running in your service.
 	//
 	// This is required if schedulingStrategy is REPLICA or isn't specified. If
 	// schedulingStrategy is DAEMON then this isn't required.
 	DesiredCount *int64 `json:"desiredCount,omitempty"`
 	// Specifies whether to turn on Amazon ECS managed tags for the tasks within
-	// the service. For more information, see Tagging Your Amazon ECS Resources
+	// the service. For more information, see Tagging your Amazon ECS resources
 	// (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-using-tags.html)
 	// in the Amazon Elastic Container Service Developer Guide.
+	//
+	// When you use Amazon ECS managed tags, you need to set the propagateTags request
+	// parameter.
 	EnableECSManagedTags *bool `json:"enableECSManagedTags,omitempty"`
-	// Determines whether the execute command functionality is enabled for the service.
-	// If true, this enables execute command functionality on all containers in
-	// the service tasks.
+	// Determines whether the execute command functionality is turned on for the
+	// service. If true, this enables execute command functionality on all containers
+	// in the service tasks.
 	EnableExecuteCommand *bool `json:"enableExecuteCommand,omitempty"`
 	// The period of time, in seconds, that the Amazon ECS service scheduler ignores
 	// unhealthy Elastic Load Balancing target health checks after a task has first
@@ -64,8 +67,8 @@ type ServiceParameters struct {
 	// balancer. If your service has a load balancer defined and you don't specify
 	// a health check grace period value, the default value of 0 is used.
 	//
-	// If you do not use an Elastic Load Balancing, we recomend that you use the
-	// startPeriod in the task definition healtch check parameters. For more information,
+	// If you do not use an Elastic Load Balancing, we recommend that you use the
+	// startPeriod in the task definition health check parameters. For more information,
 	// see Health check (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_HealthCheck.html).
 	//
 	// If your service's tasks take a while to start and respond to Elastic Load
@@ -112,7 +115,10 @@ type ServiceParameters struct {
 	// Specifies whether to propagate the tags from the task definition to the task.
 	// If no value is specified, the tags aren't propagated. Tags can only be propagated
 	// to the task during task creation. To add tags to a task after task creation,
-	// use the TagResource API action.
+	// use the TagResource (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_TagResource.html)
+	// API action.
+	//
+	// The default is NONE.
 	PropagateTags *string `json:"propagateTags,omitempty"`
 	// The name or full Amazon Resource Name (ARN) of the IAM role that allows Amazon
 	// ECS to make calls to your load balancer on your behalf. This parameter is
@@ -159,6 +165,17 @@ type ServiceParameters struct {
 	//    launch type or the CODE_DEPLOY or EXTERNAL deployment controller types
 	//    don't support the DAEMON scheduling strategy.
 	SchedulingStrategy *string `json:"schedulingStrategy,omitempty"`
+	// The configuration for this service to discover and connect to services, and
+	// be discovered by, and connected from, other services within a namespace.
+	//
+	// Tasks that run in a namespace can use short names to connect to services
+	// in the namespace. Tasks can connect to services across all of the clusters
+	// in the namespace. Tasks connect through a managed proxy container that collects
+	// logs and metrics for increased visibility. Only the tasks that Amazon ECS
+	// services create are supported with Service Connect. For more information,
+	// see Service Connect (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-connect.html)
+	// in the Amazon Elastic Container Service Developer Guide.
+	ServiceConnectConfiguration *ServiceConnectConfiguration `json:"serviceConnectConfiguration,omitempty"`
 	// The details of the service discovery registry to associate with this service.
 	// For more information, see Service discovery (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-discovery.html).
 	//
@@ -235,10 +252,9 @@ type ServiceObservation struct {
 	RoleARN *string `json:"roleARN,omitempty"`
 	// The number of tasks in the cluster that are in the RUNNING state.
 	RunningCount *int64 `json:"runningCount,omitempty"`
-	// The ARN that identifies the service. The ARN contains the arn:aws:ecs namespace,
-	// followed by the Region of the service, the Amazon Web Services account ID
-	// of the service owner, the service namespace, and then the service name. For
-	// example, arn:aws:ecs:region:012345678910:service/my-service.
+	// The ARN that identifies the service. For more information about the ARN format,
+	// see Amazon Resource Name (ARN) (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-account-settings.html#ecs-resource-ids)
+	// in the Amazon ECS Developer Guide.
 	ServiceARN *string `json:"serviceARN,omitempty"`
 	// The name of your service. Up to 255 letters (uppercase and lowercase), numbers,
 	// underscores, and hyphens are allowed. Service names must be unique within
@@ -247,6 +263,8 @@ type ServiceObservation struct {
 	ServiceName *string `json:"serviceName,omitempty"`
 	// The status of the service. The valid values are ACTIVE, DRAINING, or INACTIVE.
 	Status *string `json:"status,omitempty"`
+	// The list of task ARN entries for the ListTasks request.
+	TaskARNs []*string `json:"taskARNs,omitempty"`
 	// The task definition to use for tasks in the service. This value is specified
 	// when the service is created with CreateService, and it can be modified with
 	// UpdateService.
@@ -256,6 +274,8 @@ type ServiceObservation struct {
 	// desired number of tasks, how many tasks are running, and whether the task
 	// set serves production traffic.
 	TaskSets []*TaskSet `json:"taskSets,omitempty"`
+
+	CustomServiceObservation `json:",inline"`
 }
 
 // ServiceStatus defines the observed state of Service.
@@ -270,6 +290,7 @@ type ServiceStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

@@ -35,7 +35,13 @@ type LaunchTemplateParameters struct {
 	// A name for the launch template.
 	// +kubebuilder:validation:Required
 	LaunchTemplateName *string `json:"launchTemplateName"`
-	// The tags to apply to the launch template during creation.
+	// The tags to apply to the launch template on creation. To tag the launch template,
+	// the resource type must be launch-template.
+	//
+	// To specify the tags for the resources that are created when an instance is
+	// launched, you must use the TagSpecifications parameter in the launch template
+	// data (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RequestLaunchTemplateData.html)
+	// structure.
 	TagSpecifications []*TagSpecification `json:"tagSpecifications,omitempty"`
 	// A description for the first version of the launch template.
 	VersionDescription             *string `json:"versionDescription,omitempty"`
@@ -56,6 +62,8 @@ type LaunchTemplateObservation struct {
 	// are not valid, an error code and an error message are returned for each issue
 	// that's found.
 	Warning *ValidationWarning `json:"warning,omitempty"`
+
+	CustomLaunchTemplateObservation `json:",inline"`
 }
 
 // LaunchTemplateStatus defines the observed state of LaunchTemplate.
@@ -70,6 +78,7 @@ type LaunchTemplateStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

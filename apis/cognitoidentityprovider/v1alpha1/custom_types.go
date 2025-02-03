@@ -18,8 +18,6 @@ package v1alpha1
 
 import (
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/reference"
-	resource "github.com/crossplane/crossplane-runtime/pkg/resource"
 )
 
 // CustomGroupParameters includes custom additional fields for GroupParameters.
@@ -51,6 +49,9 @@ type CustomGroupParameters struct {
 	// +optional
 	UserPoolIDSelector *xpv1.Selector `json:"userPoolIdSelector,omitempty"`
 }
+
+// CustomGroupObservation contains the additional status fields for GroupParameters.
+type CustomGroupObservation struct{}
 
 // CustomIdentityProviderParameters includes custom additional fields for IdentityProviderParameters.
 type CustomIdentityProviderParameters struct {
@@ -89,8 +90,14 @@ type CustomIdentityProviderParameters struct {
 	ProviderDetailsSecretRef xpv1.SecretReference `json:"providerDetailsSecretRef,omitempty"`
 }
 
+// CustomIdentityProviderObservation contains the additional status fields for IdentityProviderParameters.
+type CustomIdentityProviderObservation struct{}
+
 // CustomUserPoolParameters includes custom additional fields for UserPoolParameters.
 type CustomUserPoolParameters struct{}
+
+// CustomUserPoolObservation contains the additional status fields for UserPoolParameters.
+type CustomUserPoolObservation struct{}
 
 // CustomUserPoolDomainParameters includes custom additional fields for UserPoolDomainParameters.
 type CustomUserPoolDomainParameters struct {
@@ -108,6 +115,9 @@ type CustomUserPoolDomainParameters struct {
 	UserPoolIDSelector *xpv1.Selector `json:"userPoolIdSelector,omitempty"`
 }
 
+// CustomUserPoolDomainObservation contains the additional status fields for UserPoolDomainObservation.
+type CustomUserPoolDomainObservation struct{}
+
 // CustomUserPoolClientParameters includes custom additional fields for UserPoolClientParameters.
 type CustomUserPoolClientParameters struct {
 	// The user pool ID.
@@ -123,6 +133,9 @@ type CustomUserPoolClientParameters struct {
 	// +optional
 	UserPoolIDSelector *xpv1.Selector `json:"userPoolIdSelector,omitempty"`
 }
+
+// CustomUserPoolClientObservation contains the additional status fields for UserPoolClientObservation.
+type CustomUserPoolClientObservation struct{}
 
 // CustomResourceServerParameters includes the custom fields of ResourceServerParameters.
 type CustomResourceServerParameters struct {
@@ -140,19 +153,5 @@ type CustomResourceServerParameters struct {
 	UserPoolIDSelector *xpv1.Selector `json:"userPoolIdSelector,omitempty"`
 }
 
-// UserPoolName returns the status.atProvider.name of a UserPool.
-func UserPoolName() reference.ExtractValueFn {
-	return func(mg resource.Managed) string {
-		r, ok := mg.(*UserPool)
-		if !ok {
-			return ""
-		}
-
-		if r.Status.AtProvider.ID == nil {
-			return ""
-		}
-
-		return "cognito-idp." + r.Spec.ForProvider.Region + ".amazonaws.com/" + *r.Status.AtProvider.ID
-
-	}
-}
+// CustomResourceServerObservation contains the additional status fields for ResourceServerObservation.
+type CustomResourceServerObservation struct{}

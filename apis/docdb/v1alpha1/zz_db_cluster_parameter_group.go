@@ -52,6 +52,8 @@ type DBClusterParameterGroupObservation struct {
 	DBClusterParameterGroupARN *string `json:"dbClusterParameterGroupARN,omitempty"`
 	// Provides the name of the cluster parameter group.
 	DBClusterParameterGroupName *string `json:"dbClusterParameterGroupName,omitempty"`
+
+	CustomDBClusterParameterGroupObservation `json:",inline"`
 }
 
 // DBClusterParameterGroupStatus defines the observed state of DBClusterParameterGroup.
@@ -66,6 +68,7 @@ type DBClusterParameterGroupStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

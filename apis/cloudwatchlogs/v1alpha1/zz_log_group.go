@@ -34,10 +34,14 @@ type LogGroupParameters struct {
 	LogGroupName *string `json:"logGroupName"`
 	// The key-value pairs to use for the tags.
 	//
-	// CloudWatch Logs doesn’t support IAM policies that prevent users from assigning
-	// specified tags to log groups using the aws:Resource/key-name or aws:TagKeys
-	// condition keys. For more information about using tags to control access,
-	// see Controlling access to Amazon Web Services resources using tags (https://docs.aws.amazon.com/IAM/latest/UserGuide/access_tags.html).
+	// You can grant users access to certain log groups while preventing them from
+	// accessing other log groups. To do so, tag your groups and use IAM policies
+	// that refer to those tags. To assign tags when you create a log group, you
+	// must have either the logs:TagResource or logs:TagLogGroup permission. For
+	// more information about tagging, see Tagging Amazon Web Services resources
+	// (https://docs.aws.amazon.com/general/latest/gr/aws_tagging.html). For more
+	// information about using tags to control access, see Controlling access to
+	// Amazon Web Services resources using tags (https://docs.aws.amazon.com/IAM/latest/UserGuide/access_tags.html).
 	Tags                     map[string]*string `json:"tags,omitempty"`
 	CustomLogGroupParameters `json:",inline"`
 }
@@ -55,7 +59,8 @@ type LogGroupObservation struct {
 	// The creation time of the log group, expressed as the number of milliseconds
 	// after Jan 1, 1970 00:00:00 UTC.
 	CreationTime *int64 `json:"creationTime,omitempty"`
-	// The Amazon Resource Name (ARN) of the CMK to use when encrypting log data.
+	// The Amazon Resource Name (ARN) of the KMS key to use when encrypting log
+	// data.
 	KMSKeyID *string `json:"kmsKeyID,omitempty"`
 	// The name of the log group.
 	LogGroupName *string `json:"logGroupName,omitempty"`
@@ -65,6 +70,8 @@ type LogGroupObservation struct {
 	RetentionInDays *int64 `json:"retentionInDays,omitempty"`
 	// The number of bytes stored.
 	StoredBytes *int64 `json:"storedBytes,omitempty"`
+
+	CustomLogGroupObservation `json:",inline"`
 }
 
 // LogGroupStatus defines the observed state of LogGroup.
@@ -79,6 +86,7 @@ type LogGroupStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}
