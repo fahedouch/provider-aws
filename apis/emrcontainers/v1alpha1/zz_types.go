@@ -39,7 +39,7 @@ type Configuration struct {
 
 // +kubebuilder:skipversion
 type ContainerInfo struct {
-	// The information about the EKS cluster.
+	// The information about the Amazon EKS cluster.
 	EKSInfo *EKSInfo `json:"eksInfo,omitempty"`
 }
 
@@ -82,6 +82,8 @@ type Endpoint struct {
 
 // +kubebuilder:skipversion
 type JobDriver struct {
+	// The job driver for job type.
+	SparkSQLJobDriver *SparkSQLJobDriver `json:"sparkSQLJobDriver,omitempty"`
 	// The information about job driver for Spark submit.
 	SparkSubmitJobDriver *SparkSubmitJobDriver `json:"sparkSubmitJobDriver,omitempty"`
 }
@@ -103,12 +105,17 @@ type JobRun_SDK struct {
 	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
 
 	ID *string `json:"id,omitempty"`
-	// Specify the driver that the job runs on.
+	// Specify the driver that the job runs on. Exactly one of the two available
+	// job drivers is required, either sparkSqlJobDriver or sparkSubmitJobDriver.
 	JobDriver *JobDriver `json:"jobDriver,omitempty"`
 
 	Name *string `json:"name,omitempty"`
 
 	ReleaseLabel *string `json:"releaseLabel,omitempty"`
+	// The configuration of the retry policy that the job runs on.
+	RetryPolicyConfiguration *RetryPolicyConfiguration `json:"retryPolicyConfiguration,omitempty"`
+	// The current status of the retry policy executed on the job.
+	RetryPolicyExecution *RetryPolicyExecution `json:"retryPolicyExecution,omitempty"`
 
 	State *string `json:"state,omitempty"`
 
@@ -120,12 +127,61 @@ type JobRun_SDK struct {
 }
 
 // +kubebuilder:skipversion
+type JobTemplate struct {
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+
+	CreatedBy *string `json:"createdBy,omitempty"`
+
+	ID *string `json:"id,omitempty"`
+
+	Name *string `json:"name,omitempty"`
+
+	Tags map[string]*string `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type JobTemplateData struct {
+	// Specify the driver that the job runs on. Exactly one of the two available
+	// job drivers is required, either sparkSqlJobDriver or sparkSubmitJobDriver.
+	JobDriver *JobDriver `json:"jobDriver,omitempty"`
+
+	JobTags map[string]*string `json:"jobTags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ParametricCloudWatchMonitoringConfiguration struct {
+	LogStreamNamePrefix *string `json:"logStreamNamePrefix,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type RetryPolicyConfiguration struct {
+	MaxAttempts *int64 `json:"maxAttempts,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type RetryPolicyExecution struct {
+	CurrentAttemptCount *int64 `json:"currentAttemptCount,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type SparkSQLJobDriver struct {
+	EntryPoint *string `json:"entryPoint,omitempty"`
+
+	SparkSQLParameters *string `json:"sparkSQLParameters,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type SparkSubmitJobDriver struct {
 	EntryPoint *string `json:"entryPoint,omitempty"`
 
 	EntryPointArguments []*string `json:"entryPointArguments,omitempty"`
 
 	SparkSubmitParameters *string `json:"sparkSubmitParameters,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type TemplateParameterConfiguration struct {
+	DefaultValue *string `json:"defaultValue,omitempty"`
 }
 
 // +kubebuilder:skipversion

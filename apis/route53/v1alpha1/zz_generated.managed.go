@@ -30,17 +30,14 @@ func (mg *HostedZone) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this HostedZone.
+func (mg *HostedZone) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this HostedZone.
 func (mg *HostedZone) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this HostedZone.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *HostedZone) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this HostedZone.
@@ -63,17 +60,14 @@ func (mg *HostedZone) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this HostedZone.
+func (mg *HostedZone) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this HostedZone.
 func (mg *HostedZone) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this HostedZone.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *HostedZone) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this HostedZone.
@@ -96,17 +90,14 @@ func (mg *ResourceRecordSet) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this ResourceRecordSet.
+func (mg *ResourceRecordSet) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this ResourceRecordSet.
 func (mg *ResourceRecordSet) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this ResourceRecordSet.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *ResourceRecordSet) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this ResourceRecordSet.
@@ -129,17 +120,14 @@ func (mg *ResourceRecordSet) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this ResourceRecordSet.
+func (mg *ResourceRecordSet) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this ResourceRecordSet.
 func (mg *ResourceRecordSet) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this ResourceRecordSet.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *ResourceRecordSet) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this ResourceRecordSet.

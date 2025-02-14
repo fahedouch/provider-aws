@@ -33,7 +33,7 @@ type CacheParameterGroupParameters struct {
 	// can be used with.
 	//
 	// Valid values are: memcached1.4 | memcached1.5 | memcached1.6 | redis2.6 |
-	// redis2.8 | redis3.2 | redis4.0 | redis5.0 | redis6.x
+	// redis2.8 | redis3.2 | redis4.0 | redis5.0 | redis6.x | redis7
 	// +kubebuilder:validation:Required
 	CacheParameterGroupFamily *string `json:"cacheParameterGroupFamily"`
 	// A user-specified description for the cache parameter group.
@@ -59,6 +59,8 @@ type CacheParameterGroupObservation struct {
 	CacheParameterGroupName *string `json:"cacheParameterGroupName,omitempty"`
 	// Indicates whether the parameter group is associated with a Global datastore
 	IsGlobal *bool `json:"isGlobal,omitempty"`
+
+	CustomCacheParameterGroupObservation `json:",inline"`
 }
 
 // CacheParameterGroupStatus defines the observed state of CacheParameterGroup.
@@ -73,6 +75,7 @@ type CacheParameterGroupStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-   http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,19 +20,18 @@ import (
 	"testing"
 
 	awssqs "github.com/aws/aws-sdk-go-v2/service/sqs"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/sqs/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/sqs"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/sqs/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -142,7 +141,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  queue(withExternalName(queueName)),
-				err: awsclient.Wrap(errBoom, errGetQueueAttributesFailed),
+				err: errorutils.Wrap(errBoom, errGetQueueAttributesFailed),
 			},
 		},
 		"ListTagsFail": {
@@ -166,7 +165,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  queue(withExternalName(queueName)),
-				err: awsclient.Wrap(errBoom, errListQueueTagsFailed),
+				err: errorutils.Wrap(errBoom, errListQueueTagsFailed),
 			},
 		},
 	}
@@ -237,7 +236,7 @@ func TestCreate(t *testing.T) {
 			want: want{
 				cr: queue(withExternalName(queueURL),
 					withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreateFailed),
+				err: errorutils.Wrap(errBoom, errCreateFailed),
 			},
 		},
 	}
@@ -347,7 +346,7 @@ func TestUpdate(t *testing.T) {
 				cr: queue(withStatus(v1beta1.QueueObservation{
 					URL: queueURL,
 				})),
-				err: awsclient.Wrap(errBoom, errUpdateFailed),
+				err: errorutils.Wrap(errBoom, errUpdateFailed),
 			},
 		},
 	}
@@ -416,7 +415,7 @@ func TestDelete(t *testing.T) {
 					withStatus(v1beta1.QueueObservation{
 						URL: queueURL,
 					})),
-				err: awsclient.Wrap(errBoom, errDeleteFailed),
+				err: errorutils.Wrap(errBoom, errDeleteFailed),
 			},
 		},
 	}
@@ -424,7 +423,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.sqs}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

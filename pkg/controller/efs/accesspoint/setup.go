@@ -1,20 +1,21 @@
 package accesspoint
 
 import (
-	svcsdk "github.com/aws/aws-sdk-go/service/efs"
-	"golang.org/x/net/context"
-	ctrl "sigs.k8s.io/controller-runtime"
+	"context"
 
+	svcsdk "github.com/aws/aws-sdk-go/service/efs"
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/efs/v1alpha1"
-
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupAccessPoint adds a controller that reconciles AccessPoint.
@@ -28,22 +29,35 @@ func SetupAccessPoint(mgr ctrl.Manager, o controller.Options) error {
 			e.postCreate = postCreate
 		},
 	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithInitializers(),
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.AccessPointGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.AccessPoint{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.AccessPointGroupVersionKind),
-			managed.WithInitializers(),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name)))))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.AccessPoint, obj *svcsdk.DescribeAccessPointsInput) error {
 	obj.FileSystemId = nil
-	obj.AccessPointId = awsclients.String(meta.GetExternalName(cr))
+	obj.AccessPointId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -51,7 +65,7 @@ func postObserve(_ context.Context, cr *svcapitypes.AccessPoint, resp *svcsdk.De
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	switch awsclients.StringValue(resp.AccessPoints[0].LifeCycleState) {
+	switch pointer.StringValue(resp.AccessPoints[0].LifeCycleState) {
 	case string(svcapitypes.LifeCycleState_available):
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.LifeCycleState_creating):
@@ -66,7 +80,7 @@ func postObserve(_ context.Context, cr *svcapitypes.AccessPoint, resp *svcsdk.De
 
 func preCreate(_ context.Context, cr *svcapitypes.AccessPoint, obj *svcsdk.CreateAccessPointInput) error {
 	obj.FileSystemId = cr.Spec.ForProvider.FileSystemID
-	obj.ClientToken = awsclients.String(string(cr.UID))
+	obj.ClientToken = pointer.ToOrNilIfZeroValue(string(cr.UID))
 	return nil
 }
 
@@ -74,6 +88,6 @@ func postCreate(_ context.Context, cr *svcapitypes.AccessPoint, obj *svcsdk.Crea
 	if err != nil {
 		return managed.ExternalCreation{}, err
 	}
-	meta.SetExternalName(cr, awsclients.StringValue(obj.AccessPointId))
+	meta.SetExternalName(cr, pointer.StringValue(obj.AccessPointId))
 	return managed.ExternalCreation{}, nil
 }

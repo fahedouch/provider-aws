@@ -18,6 +18,23 @@ limitations under the License.
 
 package v1alpha1
 
+type DataProtectionStatus string
+
+const (
+	DataProtectionStatus_ACTIVATED DataProtectionStatus = "ACTIVATED"
+	DataProtectionStatus_DELETED   DataProtectionStatus = "DELETED"
+	DataProtectionStatus_ARCHIVED  DataProtectionStatus = "ARCHIVED"
+	DataProtectionStatus_DISABLED  DataProtectionStatus = "DISABLED"
+)
+
+type DeliveryDestinationType string
+
+const (
+	DeliveryDestinationType_S3  DeliveryDestinationType = "S3"
+	DeliveryDestinationType_CWL DeliveryDestinationType = "CWL"
+	DeliveryDestinationType_FH  DeliveryDestinationType = "FH"
+)
+
 type Distribution string
 
 const (
@@ -36,11 +53,33 @@ const (
 	ExportTaskStatusCode_RUNNING        ExportTaskStatusCode = "RUNNING"
 )
 
+type InheritedProperty string
+
+const (
+	InheritedProperty_ACCOUNT_DATA_PROTECTION InheritedProperty = "ACCOUNT_DATA_PROTECTION"
+)
+
 type OrderBy string
 
 const (
 	OrderBy_LogStreamName OrderBy = "LogStreamName"
 	OrderBy_LastEventTime OrderBy = "LastEventTime"
+)
+
+type OutputFormat string
+
+const (
+	OutputFormat_json    OutputFormat = "json"
+	OutputFormat_plain   OutputFormat = "plain"
+	OutputFormat_w3c     OutputFormat = "w3c"
+	OutputFormat_raw     OutputFormat = "raw"
+	OutputFormat_parquet OutputFormat = "parquet"
+)
+
+type PolicyType string
+
+const (
+	PolicyType_DATA_PROTECTION_POLICY PolicyType = "DATA_PROTECTION_POLICY"
 )
 
 type QueryStatus string
@@ -53,6 +92,12 @@ const (
 	QueryStatus_Cancelled QueryStatus = "Cancelled"
 	QueryStatus_Timeout   QueryStatus = "Timeout"
 	QueryStatus_Unknown   QueryStatus = "Unknown"
+)
+
+type Scope string
+
+const (
+	Scope_ALL Scope = "ALL"
 )
 
 type StandardUnit string

@@ -17,8 +17,6 @@ import (
 	"context"
 
 	svcsdk "github.com/aws/aws-sdk-go/service/ec2"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -26,11 +24,13 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ec2/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupVolume adds a controller that reconciles Volume.
@@ -50,25 +50,37 @@ func SetupVolume(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithInitializers(),
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.VolumeGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Volume{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.VolumeGroupVersionKind),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient())),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func filterList(cr *svcapitypes.Volume, obj *svcsdk.DescribeVolumesOutput) *svcsdk.DescribeVolumesOutput {
-	volumeIdentifier := awsclients.String(meta.GetExternalName(cr))
+	volumeIdentifier := pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	resp := &svcsdk.DescribeVolumesOutput{}
 	for _, volume := range obj.Volumes {
-		if awsclients.StringValue(volume.VolumeId) == awsclients.StringValue(volumeIdentifier) {
+		if pointer.StringValue(volume.VolumeId) == pointer.StringValue(volumeIdentifier) {
 			resp.Volumes = append(resp.Volumes, volume)
 			break
 		}
@@ -78,7 +90,7 @@ func filterList(cr *svcapitypes.Volume, obj *svcsdk.DescribeVolumesOutput) *svcs
 
 func preCreate(_ context.Context, cr *svcapitypes.Volume, obj *svcsdk.CreateVolumeInput) error {
 	obj.KmsKeyId = cr.Spec.ForProvider.KMSKeyID
-	obj.ClientToken = awsclients.String(string(cr.UID))
+	obj.ClientToken = pointer.ToOrNilIfZeroValue(string(cr.UID))
 	return nil
 }
 
@@ -86,8 +98,8 @@ func postCreate(_ context.Context, cr *svcapitypes.Volume, obj *svcsdk.Volume, c
 	if err != nil {
 		return managed.ExternalCreation{}, err
 	}
-	meta.SetExternalName(cr, awsclients.StringValue(obj.VolumeId))
-	return managed.ExternalCreation{ExternalNameAssigned: true}, nil
+	meta.SetExternalName(cr, pointer.StringValue(obj.VolumeId))
+	return managed.ExternalCreation{}, nil
 }
 
 func postObserve(_ context.Context, cr *svcapitypes.Volume, obj *svcsdk.DescribeVolumesOutput, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) {
@@ -95,7 +107,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Volume, obj *svcsdk.Describe
 		return managed.ExternalObservation{}, err
 	}
 
-	switch awsclients.StringValue(obj.Volumes[0].State) {
+	switch pointer.StringValue(obj.Volumes[0].State) {
 	case string(svcapitypes.VolumeState_available):
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.VolumeState_creating):
@@ -107,7 +119,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Volume, obj *svcsdk.Describe
 	}
 
 	obs.ConnectionDetails = managed.ConnectionDetails{
-		"volumeID": []byte(awsclients.StringValue(obj.Volumes[0].VolumeId)),
+		"volumeID": []byte(pointer.StringValue(obj.Volumes[0].VolumeId)),
 	}
 	return obs, nil
 }

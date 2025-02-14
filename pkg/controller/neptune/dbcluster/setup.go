@@ -16,12 +16,9 @@ package dbcluster
 import (
 	"context"
 
+	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/neptune"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/neptune/neptuneiface"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -29,11 +26,15 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/neptune/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 type dbClusterStatus string
@@ -47,7 +48,7 @@ const (
 
 // SetupDBCluster adds a controller that reconciles DB Cluster.
 func SetupDBCluster(mgr ctrl.Manager, o controller.Options) error {
-	name := managed.ControllerName(svcapitypes.DBClusterKind)
+	name := managed.ControllerName(svcapitypes.DBClusterGroupKind)
 	opts := []option{
 		func(e *external) {
 			e.lateInitialize = lateInitialize
@@ -66,17 +67,29 @@ func SetupDBCluster(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.DBClusterGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.DBCluster{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.DBClusterGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.DBCluster, obj *svcsdk.DescribeDBClustersInput) error {
@@ -149,68 +162,68 @@ func lateInitialize(in *svcapitypes.DBClusterParameters, out *svcsdk.DescribeDBC
 
 	from := out.DBClusters[0]
 
-	in.AvailabilityZones = aws.LateInitializeStringPtrSlice(in.AvailabilityZones, from.AvailabilityZones)
-	in.BackupRetentionPeriod = aws.LateInitializeInt64Ptr(in.BackupRetentionPeriod, from.BackupRetentionPeriod)
-	in.CharacterSetName = aws.LateInitializeStringPtr(in.CharacterSetName, from.CharacterSetName)
-	in.DatabaseName = aws.LateInitializeStringPtr(in.DatabaseName, from.DatabaseName)
-	in.DBClusterParameterGroupName = aws.LateInitializeStringPtr(in.DBClusterParameterGroupName, from.DBClusterParameterGroup)
-	in.DBSubnetGroupName = aws.LateInitializeStringPtr(in.DBSubnetGroupName, from.DBSubnetGroup)
-	in.DeletionProtection = aws.LateInitializeBoolPtr(in.DeletionProtection, from.DeletionProtection)
-	in.EnableCloudwatchLogsExports = aws.LateInitializeStringPtrSlice(in.EnableCloudwatchLogsExports, from.EnabledCloudwatchLogsExports)
-	in.Engine = aws.LateInitializeStringPtr(in.Engine, from.Engine)
-	in.EngineVersion = aws.LateInitializeStringPtr(in.EngineVersion, from.EngineVersion)
-	in.EnableIAMDatabaseAuthentication = aws.LateInitializeBoolPtr(in.EnableIAMDatabaseAuthentication, from.IAMDatabaseAuthenticationEnabled)
-	in.KMSKeyID = aws.LateInitializeStringPtr(in.KMSKeyID, from.KmsKeyId)
-	in.MasterUsername = aws.LateInitializeStringPtr(in.MasterUsername, from.MasterUsername)
-	in.Port = aws.LateInitializeInt64Ptr(in.Port, from.Port)
-	in.PreferredBackupWindow = aws.LateInitializeStringPtr(in.PreferredBackupWindow, from.PreferredBackupWindow)
-	in.PreferredMaintenanceWindow = aws.LateInitializeStringPtr(in.PreferredMaintenanceWindow, from.PreferredMaintenanceWindow)
-	in.ReplicationSourceIdentifier = aws.LateInitializeStringPtr(in.ReplicationSourceIdentifier, from.ReplicationSourceIdentifier)
-	in.StorageEncrypted = aws.LateInitializeBoolPtr(in.StorageEncrypted, from.StorageEncrypted)
+	in.AvailabilityZones = pointer.LateInitializeSlice(in.AvailabilityZones, from.AvailabilityZones)
+	in.BackupRetentionPeriod = pointer.LateInitialize(in.BackupRetentionPeriod, from.BackupRetentionPeriod)
+	in.CharacterSetName = pointer.LateInitialize(in.CharacterSetName, from.CharacterSetName)
+	in.DatabaseName = pointer.LateInitialize(in.DatabaseName, from.DatabaseName)
+	in.DBClusterParameterGroupName = pointer.LateInitialize(in.DBClusterParameterGroupName, from.DBClusterParameterGroup)
+	in.DBSubnetGroupName = pointer.LateInitialize(in.DBSubnetGroupName, from.DBSubnetGroup)
+	in.DeletionProtection = pointer.LateInitialize(in.DeletionProtection, from.DeletionProtection)
+	in.EnableCloudwatchLogsExports = pointer.LateInitializeSlice(in.EnableCloudwatchLogsExports, from.EnabledCloudwatchLogsExports)
+	in.Engine = pointer.LateInitialize(in.Engine, from.Engine)
+	in.EngineVersion = pointer.LateInitialize(in.EngineVersion, from.EngineVersion)
+	in.EnableIAMDatabaseAuthentication = pointer.LateInitialize(in.EnableIAMDatabaseAuthentication, from.IAMDatabaseAuthenticationEnabled)
+	in.KMSKeyID = pointer.LateInitialize(in.KMSKeyID, from.KmsKeyId)
+	in.MasterUsername = pointer.LateInitialize(in.MasterUsername, from.MasterUsername)
+	in.Port = pointer.LateInitialize(in.Port, from.Port)
+	in.PreferredBackupWindow = pointer.LateInitialize(in.PreferredBackupWindow, from.PreferredBackupWindow)
+	in.PreferredMaintenanceWindow = pointer.LateInitialize(in.PreferredMaintenanceWindow, from.PreferredMaintenanceWindow)
+	in.ReplicationSourceIdentifier = pointer.LateInitialize(in.ReplicationSourceIdentifier, from.ReplicationSourceIdentifier)
+	in.StorageEncrypted = pointer.LateInitialize(in.StorageEncrypted, from.StorageEncrypted)
 
 	if len(in.VPCSecurityGroupIDs) == 0 && len(from.VpcSecurityGroups) != 0 {
 		in.VPCSecurityGroupIDs = make([]*string, len(from.VpcSecurityGroups))
 		for i, val := range from.VpcSecurityGroups {
-			in.VPCSecurityGroupIDs[i] = aws.LateInitializeStringPtr(in.VPCSecurityGroupIDs[i], val.VpcSecurityGroupId)
+			in.VPCSecurityGroupIDs[i] = pointer.LateInitialize(in.VPCSecurityGroupIDs[i], val.VpcSecurityGroupId)
 		}
 	}
 	return nil
 }
 
-// nolint:gocyclo
-func isUpToDate(cr *svcapitypes.DBCluster, output *svcsdk.DescribeDBClustersOutput) (bool, error) {
+//nolint:gocyclo
+func isUpToDate(_ context.Context, cr *svcapitypes.DBCluster, output *svcsdk.DescribeDBClustersOutput) (bool, string, error) {
 	in := cr.Spec.ForProvider
 	out := output.DBClusters[0]
 
 	if aws.Int64Value(in.BackupRetentionPeriod) != aws.Int64Value(out.BackupRetentionPeriod) {
-		return false, nil
+		return false, "", nil
 	}
 	if aws.StringValue(in.DBClusterParameterGroupName) != aws.StringValue(out.DBClusterParameterGroup) {
-		return false, nil
+		return false, "", nil
 	}
 	if aws.BoolValue(in.DeletionProtection) != aws.BoolValue(out.DeletionProtection) {
-		return false, nil
+		return false, "", nil
 	}
 	if !cmp.Equal(in.EnableCloudwatchLogsExports, out.EnabledCloudwatchLogsExports) {
-		return false, nil
+		return false, "", nil
 	}
 	if aws.StringValue(in.EngineVersion) != aws.StringValue(out.EngineVersion) {
-		return false, nil
+		return false, "", nil
 	}
 	if aws.BoolValue(in.EnableIAMDatabaseAuthentication) != aws.BoolValue(out.IAMDatabaseAuthenticationEnabled) {
-		return false, nil
+		return false, "", nil
 	}
 	if aws.Int64Value(in.Port) != aws.Int64Value(out.Port) {
-		return false, nil
+		return false, "", nil
 	}
 	if aws.StringValue(in.PreferredBackupWindow) != aws.StringValue(out.PreferredBackupWindow) {
-		return false, nil
+		return false, "", nil
 	}
 	if aws.StringValue(in.PreferredMaintenanceWindow) != aws.StringValue(out.PreferredMaintenanceWindow) {
-		return false, nil
+		return false, "", nil
 	}
 	if len(in.VPCSecurityGroupIDs) != len(out.VpcSecurityGroups) {
-		return true, nil
+		return false, "", nil
 	}
 
 	vcpArr := make([]*string, len(in.VPCSecurityGroupIDs))
@@ -218,10 +231,10 @@ func isUpToDate(cr *svcapitypes.DBCluster, output *svcsdk.DescribeDBClustersOutp
 		vcpArr[i] = out.VpcSecurityGroups[i].VpcSecurityGroupId
 	}
 	if !cmp.Equal(in.VPCSecurityGroupIDs, vcpArr) {
-		return false, nil
+		return false, "", nil
 	}
 
-	return true, nil
+	return true, "", nil
 }
 
 func postObserve(_ context.Context, cr *svcapitypes.DBCluster, resp *svcsdk.DescribeDBClustersOutput, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) {

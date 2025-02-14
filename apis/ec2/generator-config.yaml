@@ -54,11 +54,22 @@ ignore:
     - VpnConnectionRoute
     - VpnConnection
     - VpnGateway
+    - InstanceConnectEndpoint
     - Ipam
+    - IpamResourceDiscovery
     - IpamScope
     - IpamPool
     - NetworkInsightsAccessScope
     - PublicIpv4Pool
+    - CoipCidr
+    - LocalGatewayRouteTable
+    - LocalGatewayRouteTableVirtualInterfaceGroupAssociation
+    - TransitGatewayPolicyTable
+    - TransitGatewayRouteTableAnnouncement
+    - VerifiedAccessEndpoint
+    - VerifiedAccessGroup
+    - VerifiedAccessInstance
+    - VerifiedAccessTrustProvider
   shape_names:
     - Instance
     - SecurityGroupRule

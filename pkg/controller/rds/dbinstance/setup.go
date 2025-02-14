@@ -3,6 +3,7 @@ package dbinstance
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -11,14 +12,6 @@ import (
 
 	svcsdk "github.com/aws/aws-sdk-go/service/rds"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/rds/rdsiface"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/pkg/errors"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -27,28 +20,42 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/password"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/rds/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	dbinstance "github.com/crossplane-contrib/provider-aws/pkg/clients/rds"
+	"github.com/crossplane-contrib/provider-aws/pkg/controller/rds/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // error constants
 const (
-	errSaveSecretFailed = "failed to save generated password to Kubernetes secret"
-)
-
-// time formats
-const (
-	maintenanceWindowFormat     = "Mon:15:04"
-	backupWindowFormat          = "15:04"
 	errS3RestoreFailed          = "cannot restore DB instance from S3 backup"
 	errSnapshotRestoreFailed    = "cannot restore DB instance from snapshot"
 	errPointInTimeRestoreFailed = "cannot restore DB instance from point in time"
 	errUnknownRestoreSource     = "unknown DB Instance restore source"
-	statusDeleting              = "deleting"
+	errAddTags                  = "cannot add tags"
+	errRemoveTags               = "cannot remove tags"
+)
+
+// time formats
+const (
+	maintenanceWindowFormat = "Mon:15:04"
+	backupWindowFormat      = "15:04"
+)
+
+// other
+const (
+	statusDeleting = "deleting"
 )
 
 // SetupDBInstance adds a controller that reconciles DBInstance
@@ -63,6 +70,7 @@ func SetupDBInstance(mgr ctrl.Manager, o controller.Options) error {
 			e.postObserve = c.postObserve
 			e.preCreate = c.preCreate
 			e.preDelete = c.preDelete
+			e.postDelete = c.postDelete
 			e.filterList = filterList
 			e.preUpdate = c.preUpdate
 			e.postUpdate = c.postUpdate
@@ -74,144 +82,253 @@ func SetupDBInstance(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.DBInstanceGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.DBInstance{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.DBInstanceGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type custom struct {
 	kube     client.Client
 	client   svcsdkapi.RDSAPI
 	external *external
+
+	cache struct {
+		addTags    []*svcsdk.Tag
+		removeTags []*string
+	}
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.DescribeDBInstancesInput) error {
-	obj.DBInstanceIdentifier = aws.String(meta.GetExternalName(cr))
+	obj.DBInstanceIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
-func (e *custom) preCreate(ctx context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.CreateDBInstanceInput) error { // nolint:gocyclo
-	pw, _, err := dbinstance.GetPassword(ctx, e.kube, cr.Spec.ForProvider.MasterUserPasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
-	if resource.IgnoreNotFound(err) != nil {
-		return errors.Wrap(err, "cannot get password from the given secret")
-	}
-	if pw == "" && cr.Spec.ForProvider.AutogeneratePassword {
+func (e *custom) preCreate(ctx context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.CreateDBInstanceInput) (err error) { //nolint:gocyclo
+	restoreFrom := cr.Spec.ForProvider.RestoreFrom
+	autogenerate := cr.Spec.ForProvider.AutogeneratePassword
+	masterUserPasswordSecretRef := cr.Spec.ForProvider.MasterUserPasswordSecretRef
+	clusterIdentifier := cr.Spec.ForProvider.DBClusterIdentifier
+
+	var pw string
+	switch {
+	case clusterIdentifier != nil:
+		break
+	case masterUserPasswordSecretRef == nil && restoreFrom == nil && !autogenerate:
+		return errors.New(dbinstance.ErrNoMasterUserPasswordSecretRefNorAutogenerateNoRestore)
+	case masterUserPasswordSecretRef == nil && autogenerate:
 		pw, err = password.Generate()
-		if err != nil {
-			return errors.Wrap(err, "unable to generate a password")
-		}
-		if err := e.savePasswordSecret(ctx, cr, pw); err != nil {
-			return errors.Wrap(err, errSaveSecretFailed)
-		}
+	case masterUserPasswordSecretRef != nil && autogenerate,
+		masterUserPasswordSecretRef != nil && !autogenerate:
+		pw, err = dbinstance.GetSecretValue(ctx, e.kube, masterUserPasswordSecretRef)
 	}
-	obj.MasterUserPassword = aws.String(pw)
-	obj.DBInstanceIdentifier = aws.String(meta.GetExternalName(cr))
-	if len(cr.Spec.ForProvider.VPCSecurityGroupIDs) > 0 {
-		obj.VpcSecurityGroupIds = make([]*string, len(cr.Spec.ForProvider.VPCSecurityGroupIDs))
-		for i, v := range cr.Spec.ForProvider.VPCSecurityGroupIDs {
-			obj.VpcSecurityGroupIds[i] = aws.String(v)
-		}
+	if err != nil {
+		return errors.Wrap(err, dbinstance.ErrNoRetrievePasswordOrGenerate)
 	}
+
+	obj.MasterUserPassword = pointer.ToOrNilIfZeroValue(pw)
+	obj.DBInstanceIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
+
+	// VpcSecurityGroupIds cannot be set on an instance that belongs to a DBCluster
+	// NOTE: Unlike in preUpdate we are using spec here because status is not yet available.
+	if cr.Spec.ForProvider.DBClusterIdentifier == nil {
+		if len(cr.Spec.ForProvider.VPCSecurityGroupIDs) > 0 {
+			obj.VpcSecurityGroupIds = make([]*string, len(cr.Spec.ForProvider.VPCSecurityGroupIDs))
+			for i, v := range cr.Spec.ForProvider.VPCSecurityGroupIDs {
+				obj.VpcSecurityGroupIds[i] = pointer.ToOrNilIfZeroValue(v)
+			}
+		}
+	} else {
+		obj.VpcSecurityGroupIds = nil
+	}
+
 	if len(cr.Spec.ForProvider.DBSecurityGroups) > 0 {
 		obj.DBSecurityGroups = make([]*string, len(cr.Spec.ForProvider.DBSecurityGroups))
 		for i, v := range cr.Spec.ForProvider.DBSecurityGroups {
-			obj.DBSecurityGroups[i] = aws.String(v)
+			obj.DBSecurityGroups[i] = pointer.ToOrNilIfZeroValue(v)
 		}
 	}
-	if cr.Spec.ForProvider.RestoreFrom != nil {
-		switch *cr.Spec.ForProvider.RestoreFrom.Source {
+
+	passwordRestoreInfo := map[string]string{dbinstance.PasswordCacheKey: pw}
+	if restoreFrom != nil {
+		passwordRestoreInfo[dbinstance.RestoreFlagCacheKay] = string(dbinstance.RestoreStateRestored)
+
+		switch *restoreFrom.Source {
 		case "S3":
 			_, err := e.client.RestoreDBInstanceFromS3WithContext(ctx, dbinstance.GenerateRestoreDBInstanceFromS3Input(meta.GetExternalName(cr), pw, &cr.Spec.ForProvider))
 			if err != nil {
-				return aws.Wrap(err, errS3RestoreFailed)
+				return errorutils.Wrap(err, errS3RestoreFailed)
 			}
 
 		case "Snapshot":
 			_, err := e.client.RestoreDBInstanceFromDBSnapshotWithContext(ctx, dbinstance.GenerateRestoreDBInstanceFromSnapshotInput(meta.GetExternalName(cr), &cr.Spec.ForProvider))
 			if err != nil {
-				return aws.Wrap(err, errSnapshotRestoreFailed)
+				return errorutils.Wrap(err, errSnapshotRestoreFailed)
 			}
 		case "PointInTime":
 			_, err := e.client.RestoreDBInstanceToPointInTimeWithContext(ctx, dbinstance.GenerateRestoreDBInstanceToPointInTimeInput(meta.GetExternalName(cr), &cr.Spec.ForProvider))
 			if err != nil {
-				return aws.Wrap(err, errPointInTimeRestoreFailed)
+				return errorutils.Wrap(err, errPointInTimeRestoreFailed)
 			}
 		default:
 			return errors.New(errUnknownRestoreSource)
-
 		}
 	}
+
+	if cr.Spec.ForProvider.EngineVersion != nil {
+		obj.EngineVersion = cr.Spec.ForProvider.EngineVersion
+	}
+
+	if _, err = dbinstance.Cache(ctx, e.kube, cr, passwordRestoreInfo); err != nil {
+		return errors.Wrap(err, dbinstance.ErrCachePassword)
+	}
+
+	// for storageType gp3 below engine specific allocatedStorage threshold, do not send iops and storageThroughput
+	// to avoid errors like "You can't specify IOPS or storage throughput for engine postgres and a storage size less than 400."
+	// This allows users to set iops/storageThroughput to the default values themselves.
+	if isStorageTypeGP3BelowAllocatedStorageThreshold(cr) {
+		obj.Iops = nil
+		obj.StorageThroughput = nil
+	}
+
 	return nil
 }
 
-func (e *custom) assembleConnectionDetails(ctx context.Context, cr *svcapitypes.DBInstance) (managed.ConnectionDetails, error) {
-	conn := managed.ConnectionDetails{
-		xpv1.ResourceCredentialsSecretUserKey: []byte(aws.StringValue(cr.Spec.ForProvider.MasterUsername)),
+func (e *custom) updateConnectionDetails(ctx context.Context, cr *svcapitypes.DBInstance, details managed.ConnectionDetails) (managed.ConnectionDetails, error) {
+	if details == nil {
+		details = managed.ConnectionDetails{}
 	}
-	pw, _, err := dbinstance.GetPassword(ctx, e.kube, cr.Spec.ForProvider.MasterUserPasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
+
+	details[xpv1.ResourceCredentialsSecretUserKey] = []byte(pointer.StringValue(cr.Spec.ForProvider.MasterUsername))
+
+	pw, err := dbinstance.GetDesiredPassword(ctx, e.kube, cr)
 	if err != nil {
-		return managed.ConnectionDetails{}, errors.Wrap(err, "cannot get password from the given secret")
+		return details, errors.Wrap(err, dbinstance.ErrGetCachedPassword)
 	}
-	if pw != "" {
-		conn[xpv1.ResourceCredentialsSecretPasswordKey] = []byte(pw)
+	details[xpv1.ResourceCredentialsSecretPasswordKey] = []byte(pw)
+
+	if cr.Status.AtProvider.Endpoint == nil {
+		return details, nil
 	}
-	if cr.Status.AtProvider.Endpoint != nil {
-		if aws.StringValue(cr.Status.AtProvider.Endpoint.Address) != "" {
-			conn[xpv1.ResourceCredentialsSecretEndpointKey] = []byte(aws.StringValue(cr.Status.AtProvider.Endpoint.Address))
-		}
-		if aws.Int64Value(cr.Status.AtProvider.Endpoint.Port) > 0 {
-			conn[xpv1.ResourceCredentialsSecretPortKey] = []byte(strconv.FormatInt(*cr.Status.AtProvider.Endpoint.Port, 10))
-		}
+	if pointer.StringValue(cr.Status.AtProvider.Endpoint.Address) != "" {
+		details[xpv1.ResourceCredentialsSecretEndpointKey] = []byte(pointer.StringValue(cr.Status.AtProvider.Endpoint.Address))
 	}
-	return conn, nil
+	if pointer.Int64Value(cr.Status.AtProvider.Endpoint.Port) > 0 {
+		details[xpv1.ResourceCredentialsSecretPortKey] = []byte(strconv.FormatInt(*cr.Status.AtProvider.Endpoint.Port, 10))
+	}
+
+	return details, nil
 }
 
-func (e *custom) preUpdate(ctx context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.ModifyDBInstanceInput) error {
-	obj.DBInstanceIdentifier = aws.String(meta.GetExternalName(cr))
+func (e *custom) preUpdate(ctx context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.ModifyDBInstanceInput) (err error) {
+	obj.DBInstanceIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.ApplyImmediately = cr.Spec.ForProvider.ApplyImmediately
-	pw, pwchanged, err := dbinstance.GetPassword(ctx, e.kube, cr.Spec.ForProvider.MasterUserPasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
+
+	desiredPassword, err := dbinstance.GetDesiredPassword(ctx, e.kube, cr)
 	if err != nil {
-		return err
+		return errors.Wrap(err, dbinstance.ErrRetrievePasswordForUpdate)
 	}
-	if pwchanged {
-		obj.MasterUserPassword = aws.String(pw)
+	obj.MasterUserPassword = pointer.ToOrNilIfZeroValue(desiredPassword)
+
+	// VpcSecurityGroupIds cannot be set on an instance that belongs to a DBCluster
+	if cr.Status.AtProvider.DBClusterIdentifier == nil {
+		if cr.Spec.ForProvider.VPCSecurityGroupIDs != nil {
+			obj.VpcSecurityGroupIds = make([]*string, len(cr.Spec.ForProvider.VPCSecurityGroupIDs))
+			for i, v := range cr.Spec.ForProvider.VPCSecurityGroupIDs {
+				obj.VpcSecurityGroupIds[i] = pointer.ToOrNilIfZeroValue(v)
+			}
+		}
+	} else {
+		obj.VpcSecurityGroupIds = nil
 	}
 
-	if cr.Spec.ForProvider.VPCSecurityGroupIDs != nil {
-		obj.VpcSecurityGroupIds = make([]*string, len(cr.Spec.ForProvider.VPCSecurityGroupIDs))
-		for i, v := range cr.Spec.ForProvider.VPCSecurityGroupIDs {
-			obj.VpcSecurityGroupIds[i] = aws.String(v)
-		}
+	// for storageType gp3 below engine specific allocatedStorage threshold, do not send iops and storageThroughput
+	// to avoid errors like "You can't specify IOPS or storage throughput for engine postgres and a storage size less than 400."
+	// This allows users to set iops/storageThroughput to the default values themselves.
+	if isStorageTypeGP3BelowAllocatedStorageThreshold(cr) {
+		obj.Iops = nil
+		obj.StorageThroughput = nil
+	}
+
+	input := GenerateDescribeDBInstancesInput(cr)
+
+	out, err := e.client.DescribeDBInstancesWithContext(ctx, input)
+	if err != nil {
+		return errors.Wrap(err, dbinstance.ErrDescribe)
+	}
+	if !isEngineVersionUpToDate(cr, out) && cr.Spec.ForProvider.EngineVersion != nil {
+		obj.EngineVersion = cr.Spec.ForProvider.EngineVersion // add EngineVersion if changed and no downgrade
 	}
 
 	return nil
 }
 
-func (e *custom) postUpdate(ctx context.Context, cr *svcapitypes.DBInstance, out *svcsdk.ModifyDBInstanceOutput, _ managed.ExternalUpdate, err error) (managed.ExternalUpdate, error) {
+func (e *custom) postUpdate(ctx context.Context, cr *svcapitypes.DBInstance, out *svcsdk.ModifyDBInstanceOutput, upd managed.ExternalUpdate, err error) (managed.ExternalUpdate, error) {
 	if err != nil {
-		return managed.ExternalUpdate{}, err
+		return upd, err
 	}
-	conn, err := e.assembleConnectionDetails(ctx, cr)
+
+	desiredPassword, err := dbinstance.GetDesiredPassword(ctx, e.kube, cr)
 	if err != nil {
-		return managed.ExternalUpdate{}, err
+		return upd, errors.Wrap(err, dbinstance.ErrRetrievePasswordForUpdate)
 	}
-	return managed.ExternalUpdate{
-		ConnectionDetails: conn,
-	}, nil
+
+	_, err = dbinstance.Cache(ctx, e.kube, cr, map[string]string{
+		dbinstance.PasswordCacheKey:    desiredPassword,
+		dbinstance.RestoreFlagCacheKay: "", // reset restore flag
+	})
+	if err != nil {
+		return upd, errors.Wrap(err, dbinstance.ErrCachePassword)
+	}
+
+	upd.ConnectionDetails, err = e.updateConnectionDetails(ctx, cr, upd.ConnectionDetails)
+
+	// Update tags if necessary
+	if len(e.cache.addTags) > 0 {
+		_, err := e.client.AddTagsToResourceWithContext(ctx, &svcsdk.AddTagsToResourceInput{
+			ResourceName: out.DBInstance.DBInstanceArn,
+			Tags:         e.cache.addTags,
+		})
+		if err != nil {
+			return upd, errors.Wrap(err, errAddTags)
+		}
+	}
+	if len(e.cache.removeTags) > 0 {
+		_, err := e.client.RemoveTagsFromResourceWithContext(ctx, &svcsdk.RemoveTagsFromResourceInput{
+			ResourceName: out.DBInstance.DBInstanceArn,
+			TagKeys:      e.cache.removeTags,
+		})
+		if err != nil {
+			return upd, errors.Wrap(err, errRemoveTags)
+		}
+	}
+
+	return upd, err
 }
 
 func (e *custom) preDelete(ctx context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.DeleteDBInstanceInput) (bool, error) {
-	obj.DBInstanceIdentifier = aws.String(meta.GetExternalName(cr))
-	obj.FinalDBSnapshotIdentifier = aws.String(cr.Spec.ForProvider.FinalDBSnapshotIdentifier)
-	obj.SkipFinalSnapshot = aws.Bool(cr.Spec.ForProvider.SkipFinalSnapshot)
+	obj.DBInstanceIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
+	obj.FinalDBSnapshotIdentifier = pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.FinalDBSnapshotIdentifier)
+	obj.SkipFinalSnapshot = pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.SkipFinalSnapshot)
 	obj.DeleteAutomatedBackups = cr.Spec.ForProvider.DeleteAutomatedBackups
 
 	_, _ = e.external.Update(ctx, cr)
@@ -221,53 +338,57 @@ func (e *custom) preDelete(ctx context.Context, cr *svcapitypes.DBInstance, obj 
 	return false, nil
 }
 
-func (e *custom) postObserve(ctx context.Context, cr *svcapitypes.DBInstance, resp *svcsdk.DescribeDBInstancesOutput, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) {
+func (e *custom) postDelete(ctx context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.DeleteDBInstanceOutput, err error) (managed.ExternalDelete, error) {
 	if err != nil {
-		return managed.ExternalObservation{}, err
+		return managed.ExternalDelete{}, err
 	}
 
-	switch aws.StringValue(resp.DBInstances[0].DBInstanceStatus) {
+	return managed.ExternalDelete{}, dbinstance.DeleteCache(ctx, e.kube, cr)
+}
+
+func (e *custom) postObserve(ctx context.Context, cr *svcapitypes.DBInstance, resp *svcsdk.DescribeDBInstancesOutput, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) {
+	if err != nil {
+		return obs, err
+	}
+
+	cr.Spec.ForProvider.DBClusterIdentifier = resp.DBInstances[0].DBClusterIdentifier
+
+	switch pointer.StringValue(resp.DBInstances[0].DBInstanceStatus) {
 	case "available", "configuring-enhanced-monitoring", "storage-optimization", "backing-up":
 		cr.SetConditions(xpv1.Available())
 	case "modifying":
-		cr.SetConditions(xpv1.Available().WithMessage("DB Instance is " + aws.StringValue(resp.DBInstances[0].DBInstanceStatus) + ", availability may vary"))
+		cr.SetConditions(xpv1.Available().WithMessage("DB Instance is " + pointer.StringValue(resp.DBInstances[0].DBInstanceStatus) + ", availability may vary"))
 	case "deleting":
 		cr.SetConditions(xpv1.Deleting())
 	case "creating":
 		cr.SetConditions(xpv1.Creating())
 	default:
-		cr.SetConditions(xpv1.Unavailable().WithMessage("DB Instance is " + aws.StringValue(resp.DBInstances[0].DBInstanceStatus)))
+		cr.SetConditions(xpv1.Unavailable().WithMessage("DB Instance is " + pointer.StringValue(resp.DBInstances[0].DBInstanceStatus)))
 	}
 
-	obs.ConnectionDetails, _ = e.assembleConnectionDetails(ctx, cr)
-	return obs, nil
+	obs.ConnectionDetails, err = e.updateConnectionDetails(ctx, cr, obs.ConnectionDetails)
+	return obs, err
 }
 
-func lateInitialize(in *svcapitypes.DBInstanceParameters, out *svcsdk.DescribeDBInstancesOutput) error { // nolint:gocyclo
+func lateInitialize(in *svcapitypes.DBInstanceParameters, out *svcsdk.DescribeDBInstancesOutput) error { //nolint:gocyclo
 	// (PocketMobsters): The controller should already be checking if out is nil so we *should* have a dbinstance here, always
 	db := out.DBInstances[0]
-	in.DBInstanceClass = aws.LateInitializeStringPtr(in.DBInstanceClass, db.DBInstanceClass)
-	in.Engine = aws.LateInitializeStringPtr(in.Engine, db.Engine)
+	in.DBInstanceClass = pointer.LateInitialize(in.DBInstanceClass, db.DBInstanceClass)
+	in.Engine = pointer.LateInitialize(in.Engine, db.Engine)
 
-	in.DBClusterIdentifier = aws.LateInitializeStringPtr(in.DBClusterIdentifier, db.DBClusterIdentifier)
+	in.DBClusterIdentifier = pointer.LateInitialize(in.DBClusterIdentifier, db.DBClusterIdentifier)
 	// if the instance belongs to a cluster, these fields should not be lateinit,
 	// to allow the user to manage these via the cluster
 	if in.DBClusterIdentifier == nil {
-		in.AllocatedStorage = aws.LateInitializeInt64Ptr(in.AllocatedStorage, db.AllocatedStorage)
-		in.BackupRetentionPeriod = aws.LateInitializeInt64Ptr(in.BackupRetentionPeriod, db.BackupRetentionPeriod)
-		in.CopyTagsToSnapshot = aws.LateInitializeBoolPtr(in.CopyTagsToSnapshot, db.CopyTagsToSnapshot)
-		in.DeletionProtection = aws.LateInitializeBoolPtr(in.DeletionProtection, db.DeletionProtection)
-		in.EnableIAMDatabaseAuthentication = aws.LateInitializeBoolPtr(in.EnableIAMDatabaseAuthentication, db.IAMDatabaseAuthenticationEnabled)
-		in.PreferredBackupWindow = aws.LateInitializeStringPtr(in.PreferredBackupWindow, db.PreferredBackupWindow)
-		in.StorageEncrypted = aws.LateInitializeBoolPtr(in.StorageEncrypted, db.StorageEncrypted)
-		in.StorageType = aws.LateInitializeStringPtr(in.StorageType, db.StorageType)
-		in.EngineVersion = aws.LateInitializeStringPtr(in.EngineVersion, db.EngineVersion)
-		// When version 5.6 is chosen, AWS creates 5.6.41 and that's totally valid.
-		// But we detect as if we need to update it all the time. Here, we assign
-		// the actual full version to our spec to avoid unnecessary update signals.
-		if strings.HasPrefix(aws.StringValue(db.EngineVersion), aws.StringValue(in.EngineVersion)) {
-			in.EngineVersion = db.EngineVersion
-		}
+		in.AllocatedStorage = pointer.LateInitialize(in.AllocatedStorage, db.AllocatedStorage)
+		in.BackupRetentionPeriod = pointer.LateInitialize(in.BackupRetentionPeriod, db.BackupRetentionPeriod)
+		in.CopyTagsToSnapshot = pointer.LateInitialize(in.CopyTagsToSnapshot, db.CopyTagsToSnapshot)
+		in.DeletionProtection = pointer.LateInitialize(in.DeletionProtection, db.DeletionProtection)
+		in.EnableIAMDatabaseAuthentication = pointer.LateInitialize(in.EnableIAMDatabaseAuthentication, db.IAMDatabaseAuthenticationEnabled)
+		in.PreferredBackupWindow = pointer.LateInitialize(in.PreferredBackupWindow, db.PreferredBackupWindow)
+		in.StorageEncrypted = pointer.LateInitialize(in.StorageEncrypted, db.StorageEncrypted)
+		in.StorageType = pointer.LateInitialize(in.StorageType, db.StorageType)
+		in.EngineVersion = pointer.LateInitialize(in.EngineVersion, db.EngineVersion)
 		if in.DBParameterGroupName == nil {
 			for i := range db.DBParameterGroups {
 				if db.DBParameterGroups[i].DBParameterGroupName != nil {
@@ -279,45 +400,48 @@ func lateInitialize(in *svcapitypes.DBInstanceParameters, out *svcsdk.DescribeDB
 		if len(in.VPCSecurityGroupIDs) == 0 && len(db.VpcSecurityGroups) != 0 {
 			in.VPCSecurityGroupIDs = make([]string, len(db.VpcSecurityGroups))
 			for i, val := range db.VpcSecurityGroups {
-				in.VPCSecurityGroupIDs[i] = aws.StringValue(val.VpcSecurityGroupId)
+				in.VPCSecurityGroupIDs[i] = pointer.StringValue(val.VpcSecurityGroupId)
 			}
 		}
 	}
-	in.AutoMinorVersionUpgrade = aws.LateInitializeBoolPtr(in.AutoMinorVersionUpgrade, db.AutoMinorVersionUpgrade)
-	in.AvailabilityZone = aws.LateInitializeStringPtr(in.AvailabilityZone, db.AvailabilityZone)
-	in.CharacterSetName = aws.LateInitializeStringPtr(in.CharacterSetName, db.CharacterSetName)
-	in.DBName = aws.LateInitializeStringPtr(in.DBName, db.DBName)
-	in.EnablePerformanceInsights = aws.LateInitializeBoolPtr(in.EnablePerformanceInsights, db.PerformanceInsightsEnabled)
-	in.IOPS = aws.LateInitializeInt64Ptr(in.IOPS, db.Iops)
+	in.AutoMinorVersionUpgrade = pointer.LateInitialize(in.AutoMinorVersionUpgrade, db.AutoMinorVersionUpgrade)
+	in.AvailabilityZone = pointer.LateInitialize(in.AvailabilityZone, db.AvailabilityZone)
+	in.CACertificateIdentifier = pointer.LateInitialize(in.CACertificateIdentifier, db.CACertificateIdentifier)
+	in.CharacterSetName = pointer.LateInitialize(in.CharacterSetName, db.CharacterSetName)
+	in.DBName = pointer.LateInitialize(in.DBName, db.DBName)
+	in.EnablePerformanceInsights = pointer.LateInitialize(in.EnablePerformanceInsights, db.PerformanceInsightsEnabled)
+	in.IOPS = pointer.LateInitialize(in.IOPS, db.Iops)
 	kmsKey := handleKmsKey(in.KMSKeyID, db.KmsKeyId)
-	in.KMSKeyID = aws.LateInitializeStringPtr(in.KMSKeyID, kmsKey)
-	in.LicenseModel = aws.LateInitializeStringPtr(in.LicenseModel, db.LicenseModel)
-	in.MasterUsername = aws.LateInitializeStringPtr(in.MasterUsername, db.MasterUsername)
+	in.KMSKeyID = pointer.LateInitialize(in.KMSKeyID, kmsKey)
+	in.LicenseModel = pointer.LateInitialize(in.LicenseModel, db.LicenseModel)
+	in.MasterUsername = pointer.LateInitialize(in.MasterUsername, db.MasterUsername)
+	in.MaxAllocatedStorage = pointer.LateInitialize(in.MaxAllocatedStorage, db.MaxAllocatedStorage)
+	in.StorageThroughput = pointer.LateInitialize(in.StorageThroughput, db.StorageThroughput)
 
-	if aws.Int64Value(db.MonitoringInterval) > 0 {
-		in.MonitoringInterval = aws.LateInitializeInt64Ptr(in.MonitoringInterval, db.MonitoringInterval)
+	if pointer.Int64Value(db.MonitoringInterval) > 0 {
+		in.MonitoringInterval = pointer.LateInitialize(in.MonitoringInterval, db.MonitoringInterval)
 	}
 
-	in.MonitoringRoleARN = aws.LateInitializeStringPtr(in.MonitoringRoleARN, db.MonitoringRoleArn)
-	in.MultiAZ = aws.LateInitializeBoolPtr(in.MultiAZ, db.MultiAZ)
-	in.PerformanceInsightsKMSKeyID = aws.LateInitializeStringPtr(in.PerformanceInsightsKMSKeyID, db.PerformanceInsightsKMSKeyId)
-	in.PerformanceInsightsRetentionPeriod = aws.LateInitializeInt64Ptr(in.PerformanceInsightsRetentionPeriod, db.PerformanceInsightsRetentionPeriod)
-	in.PreferredMaintenanceWindow = aws.LateInitializeStringPtr(in.PreferredMaintenanceWindow, db.PreferredMaintenanceWindow)
-	in.PromotionTier = aws.LateInitializeInt64Ptr(in.PromotionTier, db.PromotionTier)
-	in.PubliclyAccessible = aws.LateInitializeBoolPtr(in.PubliclyAccessible, db.PubliclyAccessible)
-	in.Timezone = aws.LateInitializeStringPtr(in.Timezone, db.Timezone)
+	in.MonitoringRoleARN = pointer.LateInitialize(in.MonitoringRoleARN, db.MonitoringRoleArn)
+	in.MultiAZ = pointer.LateInitialize(in.MultiAZ, db.MultiAZ)
+	in.PerformanceInsightsKMSKeyID = pointer.LateInitialize(in.PerformanceInsightsKMSKeyID, db.PerformanceInsightsKMSKeyId)
+	in.PerformanceInsightsRetentionPeriod = pointer.LateInitialize(in.PerformanceInsightsRetentionPeriod, db.PerformanceInsightsRetentionPeriod)
+	in.PreferredMaintenanceWindow = pointer.LateInitialize(in.PreferredMaintenanceWindow, db.PreferredMaintenanceWindow)
+	in.PromotionTier = pointer.LateInitialize(in.PromotionTier, db.PromotionTier)
+	in.PubliclyAccessible = pointer.LateInitialize(in.PubliclyAccessible, db.PubliclyAccessible)
+	in.Timezone = pointer.LateInitialize(in.Timezone, db.Timezone)
 
 	if db.Endpoint != nil {
-		in.Port = aws.LateInitializeInt64Ptr(in.Port, db.Endpoint.Port)
+		in.Port = pointer.LateInitialize(in.Port, db.Endpoint.Port)
 	}
 
 	if len(in.DBSecurityGroups) == 0 && len(db.DBSecurityGroups) != 0 {
 		in.DBSecurityGroups = make([]string, len(db.DBSecurityGroups))
 		for i, val := range db.DBSecurityGroups {
-			in.DBSecurityGroups[i] = aws.StringValue(val.DBSecurityGroupName)
+			in.DBSecurityGroups[i] = pointer.StringValue(val.DBSecurityGroupName)
 		}
 	}
-	if aws.StringValue(in.DBSubnetGroupName) == "" && db.DBSubnetGroup != nil {
+	if pointer.StringValue(in.DBSubnetGroupName) == "" && db.DBSubnetGroup != nil {
 		in.DBSubnetGroupName = db.DBSubnetGroup.DBSubnetGroupName
 	}
 	if len(in.EnableCloudwatchLogsExports) == 0 && len(db.EnabledCloudwatchLogsExports) != 0 {
@@ -336,15 +460,12 @@ func lateInitialize(in *svcapitypes.DBInstanceParameters, out *svcsdk.DescribeDB
 	return nil
 }
 
-func (e *custom) isUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DescribeDBInstancesOutput) (bool, error) { // nolint:gocyclo
-	// (PocketMobsters): Creating a context here is a temporary thing until a future
-	// update drops for aws-controllers-k8s/code-generator
-	ctx := context.Background()
-
+func (e *custom) isUpToDate(ctx context.Context, cr *svcapitypes.DBInstance, out *svcsdk.DescribeDBInstancesOutput) (upToDate bool, diff string, err error) { //nolint:gocyclo
 	db := out.DBInstances[0]
+
 	patch, err := createPatch(out, &cr.Spec.ForProvider)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	// (PocketMobsters): Certain statuses can cause us to send excessive updates because the
 	// expected state of the kubernetes resource differs from the actual state of the remote
@@ -352,52 +473,50 @@ func (e *custom) isUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DescribeDBIn
 	// again.
 	// This could be matured a bit more for specific statuses, such as not allowing storage changes
 	// when the status is "storage-optimization"
-	status := aws.StringValue(out.DBInstances[0].DBInstanceStatus)
-	if status == "modifying" || status == "upgrading" || status == "rebooting" || status == "creating" {
-		return true, nil
+	status := pointer.StringValue(out.DBInstances[0].DBInstanceStatus)
+	if status == "modifying" || status == "upgrading" || status == "rebooting" || status == "creating" || status == "deleting" {
+		return true, "", nil
 	}
 
-	_, pwChanged, err := dbinstance.GetPassword(ctx, e.kube, cr.Spec.ForProvider.MasterUserPasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
+	passwordUpToDate, err := dbinstance.PasswordUpToDate(ctx, e.kube, cr)
 	if err != nil {
-		return false, err
+		return false, "", errors.Wrap(err, dbinstance.ErrNoPasswordUpToDate)
+	}
+	if !passwordUpToDate {
+		return false, "", nil
 	}
 
-	// (PocketMobsters): AWS reformats our preferred time windows for backups and maintenance
+	// (PocketMobsters): AWS reformats our preferred time windows for backups and maintenance,
 	// so we can't rely on automatic equality checks for them
 	maintenanceWindowChanged, err := compareTimeRanges(maintenanceWindowFormat, cr.Spec.ForProvider.PreferredMaintenanceWindow, db.PreferredMaintenanceWindow)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	backupWindowChanged, err := compareTimeRanges(backupWindowFormat, cr.Spec.ForProvider.PreferredBackupWindow, db.PreferredBackupWindow)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
-	wantedVersion := aws.StringValue(cr.Spec.ForProvider.EngineVersion)
-	currentVersion := aws.StringValue(db.EngineVersion)
+	// Depending on whether the instance was created as gp2 or modified from another type (e.g. gp3) to gp2,
+	// AWS provides different responses for IOPS/StorageThroughput (either 0 or nil).
+	// Therefore, we consider both 0 and nil to be equivalent.
+	iopsChanged := !(pointer.Int64Value(cr.Spec.ForProvider.IOPS) == pointer.Int64Value(db.Iops))
+	storageThroughputChanged := !(pointer.Int64Value(cr.Spec.ForProvider.StorageThroughput) == pointer.Int64Value(db.StorageThroughput))
 
-	versionChanged := wantedVersion != "" && wantedVersion != currentVersion
-
-	if versionChanged && aws.BoolValue(cr.Spec.ForProvider.AutoMinorVersionUpgrade) {
-		wantedMaiorList := strings.Split(wantedVersion, ".")
-		wantedMaior := wantedMaiorList[0]
-		currentMaiorList := strings.Split(currentVersion, ".")
-		currentMaior := currentMaiorList[0]
-
-		versionChanged = wantedMaior != currentMaior
-
-	}
+	versionChanged := !isEngineVersionUpToDate(cr, out)
 
 	vpcSGsChanged := !areVPCSecurityGroupIDsUpToDate(cr, db)
-
 	dbParameterGroupChanged := !isDBParameterGroupNameUpToDate(cr, db)
+	optionGroupChanged := !isOptionGroupUpToDate(cr, db)
 
-	diff := cmp.Diff(&svcapitypes.DBInstanceParameters{}, patch, cmpopts.EquateEmpty(),
+	diff = cmp.Diff(&svcapitypes.DBInstanceParameters{}, patch, cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(&xpv1.Reference{}, &xpv1.Selector{}, []xpv1.Reference{}),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "Region"),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "AllowMajorVersionUpgrade"),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "DBParameterGroupName"),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "EngineVersion"),
+		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "IOPS"),
+		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "StorageThroughput"),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "Tags"),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "SkipFinalSnapshot"),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "FinalDBSnapshotIdentifier"),
@@ -405,20 +524,25 @@ func (e *custom) isUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DescribeDBIn
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "AutogeneratePassword"),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "PreferredMaintenanceWindow"),
 		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "PreferredBackupWindow"),
+		cmpopts.IgnoreFields(svcapitypes.DBInstanceParameters{}, "OptionGroupName"),
 		cmpopts.IgnoreFields(svcapitypes.CustomDBInstanceParameters{}, "ApplyImmediately"),
 		cmpopts.IgnoreFields(svcapitypes.CustomDBInstanceParameters{}, "RestoreFrom"),
 		cmpopts.IgnoreFields(svcapitypes.CustomDBInstanceParameters{}, "VPCSecurityGroupIDs"),
+		cmpopts.IgnoreFields(svcapitypes.CustomDBInstanceParameters{}, "DeleteAutomatedBackups"),
 	)
 
-	if diff == "" && !maintenanceWindowChanged && !backupWindowChanged && !pwChanged && !versionChanged && !vpcSGsChanged && !dbParameterGroupChanged {
-		return true, nil
+	e.cache.addTags, e.cache.removeTags = utils.DiffTags(cr.Spec.ForProvider.Tags, db.TagList)
+	tagsChanged := len(e.cache.addTags) != 0 || len(e.cache.removeTags) != 0
+
+	if diff == "" && !maintenanceWindowChanged && !backupWindowChanged && !iopsChanged && !storageThroughputChanged && !versionChanged && !vpcSGsChanged && !dbParameterGroupChanged && !optionGroupChanged && !tagsChanged {
+		return true, diff, nil
 	}
 
 	diff = "Found observed difference in dbinstance\n" + diff
 	if maintenanceWindowChanged {
-		diff += "\ndesired maintanaceWindow: "
+		diff += "\ndesired maintenanceWindow: "
 		diff += *cr.Spec.ForProvider.PreferredMaintenanceWindow
-		diff += "\nobserved maintanaceWindow: "
+		diff += "\nobserved maintenanceWindow: "
 		diff += *db.PreferredMaintenanceWindow
 	}
 	if backupWindowChanged {
@@ -427,10 +551,77 @@ func (e *custom) isUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DescribeDBIn
 		diff += "\nobserved backupWindow: "
 		diff += *db.PreferredBackupWindow
 	}
+	if iopsChanged {
+		diff += fmt.Sprintf("\ndesired iops: %d \nobserved iops: %d ", pointer.Int64Value(cr.Spec.ForProvider.IOPS), pointer.Int64Value(db.Iops))
+	}
+	if storageThroughputChanged {
+		diff += fmt.Sprintf("\ndesired storageThroughput: %d \nobserved storageThroughput: %d ", pointer.Int64Value(cr.Spec.ForProvider.StorageThroughput), pointer.Int64Value(db.StorageThroughput))
+	}
+	if versionChanged {
+		diff += fmt.Sprintf("\ndesired engineVersion: %s \nobserved engineVersion: %s ", pointer.StringValue(cr.Spec.ForProvider.EngineVersion), pointer.StringValue(db.EngineVersion))
+	}
+	if vpcSGsChanged {
+		diff += fmt.Sprintf("\ndesired vpcSecurityGroupIDs: %v \nobserved vpcSecurityGroupIDs: ", cr.Spec.ForProvider.VPCSecurityGroupIDs)
+		for _, grp := range db.VpcSecurityGroups {
+			diff += fmt.Sprintf("\n - %s ", pointer.StringValue(grp.VpcSecurityGroupId))
+		}
+	}
+	if dbParameterGroupChanged {
+		diff += fmt.Sprintf("\ndesired dbParameterGroupName: %s \nobserved dbParameterGroupName: %s ", pointer.StringValue(cr.Spec.ForProvider.DBParameterGroupName), pointer.StringValue(db.DBParameterGroups[0].DBParameterGroupName))
+	}
+	if optionGroupChanged {
+		diff += fmt.Sprintf("\ndesired optionGroupName: %s \nobserved optionGroupName: %s ", pointer.StringValue(cr.Spec.ForProvider.OptionGroupName), pointer.StringValue(db.OptionGroupMemberships[0].OptionGroupName))
+	}
+	if tagsChanged {
+		diff += fmt.Sprintf("\nadd %d tag(s) and remove %d tag(s)", len(e.cache.addTags), len(e.cache.removeTags))
+	}
 
 	log.Println(diff)
 
-	return false, nil
+	return false, diff, nil
+}
+
+func isEngineVersionUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DescribeDBInstancesOutput) bool {
+	// If EngineVersion is not set, AWS sets a default value,
+	// so we do not try to update in this case
+	if cr.Spec.ForProvider.EngineVersion != nil {
+		if out.DBInstances[0].EngineVersion == nil {
+			return false
+		}
+
+		// Upgrade is only necessary if the spec version is higher.
+		// Downgrades are not possible in pointer.
+		c := utils.CompareEngineVersions(*cr.Spec.ForProvider.EngineVersion, *out.DBInstances[0].EngineVersion)
+		return c <= 0
+	}
+	return true
+}
+
+func isOptionGroupUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DBInstance) bool {
+	// If OptionGroupName is not set, AWS sets a default OptionGroup,
+	// so we do not try to update in this case
+	if cr.Spec.ForProvider.OptionGroupName != nil {
+		for _, group := range out.OptionGroupMemberships {
+			if group.OptionGroupName != nil && (pointer.StringValue(group.OptionGroupName) == pointer.StringValue(cr.Spec.ForProvider.OptionGroupName)) {
+
+				switch pointer.StringValue(group.Status) {
+				case "pending-maintenance-apply":
+					// If ApplyImmediately was turned on after the OptionGroup change was requested,
+					// we can make a new Modify request
+					if pointer.BoolValue(cr.Spec.ForProvider.ApplyImmediately) {
+						return false
+					}
+					return true
+				case "pending-maintenance-removal":
+					return false
+				default: // "in-sync", "applying", "pending-apply", "pending-removal", "removing", "failed"
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func createPatch(out *svcsdk.DescribeDBInstancesOutput, target *svcapitypes.DBInstanceParameters) (*svcapitypes.DBInstanceParameters, error) {
@@ -440,7 +631,7 @@ func createPatch(out *svcsdk.DescribeDBInstancesOutput, target *svcapitypes.DBIn
 		return nil, err
 	}
 	currentParams.KMSKeyID = handleKmsKey(target.KMSKeyID, currentParams.KMSKeyID)
-	jsonPatch, err := aws.CreateJSONPatch(currentParams, target)
+	jsonPatch, err := jsonpatch.CreateJSONPatch(currentParams, target)
 	if err != nil {
 		return nil, err
 	}
@@ -452,11 +643,11 @@ func createPatch(out *svcsdk.DescribeDBInstancesOutput, target *svcapitypes.DBIn
 }
 
 func compareTimeRanges(format string, expectedWindow *string, actualWindow *string) (bool, error) {
-	if aws.StringValue(expectedWindow) == "" {
+	if pointer.StringValue(expectedWindow) == "" {
 		// no window to set, don't bother
 		return false, nil
 	}
-	if aws.StringValue(actualWindow) == "" {
+	if pointer.StringValue(actualWindow) == "" {
 		// expected is set but actual is not, so we should set it
 		return true, nil
 	}
@@ -480,6 +671,11 @@ func compareTimeRanges(format string, expectedWindow *string, actualWindow *stri
 }
 
 func areVPCSecurityGroupIDsUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DBInstance) bool {
+	// VPCSecurityGroupIDs is ignored for instances that belong to a cluster.
+	if out.DBClusterIdentifier != nil {
+		return true
+	}
+
 	desiredIDs := cr.Spec.ForProvider.VPCSecurityGroupIDs
 
 	// if user is fine with default SG or lets DBCluster manage it
@@ -517,7 +713,7 @@ func isDBParameterGroupNameUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DBIn
 
 	for _, grp := range actualGroups {
 
-		if aws.StringValue(grp.DBParameterGroupName) == aws.StringValue(desiredGroup) {
+		if pointer.StringValue(grp.DBParameterGroupName) == pointer.StringValue(desiredGroup) {
 			return true
 		}
 
@@ -529,30 +725,12 @@ func isDBParameterGroupNameUpToDate(cr *svcapitypes.DBInstance, out *svcsdk.DBIn
 func filterList(cr *svcapitypes.DBInstance, obj *svcsdk.DescribeDBInstancesOutput) *svcsdk.DescribeDBInstancesOutput {
 	resp := &svcsdk.DescribeDBInstancesOutput{}
 	for _, dbInstance := range obj.DBInstances {
-		if aws.StringValue(dbInstance.DBInstanceIdentifier) == meta.GetExternalName(cr) {
+		if pointer.StringValue(dbInstance.DBInstanceIdentifier) == meta.GetExternalName(cr) {
 			resp.DBInstances = append(resp.DBInstances, dbInstance)
 			break
 		}
 	}
 	return resp
-}
-
-func (e *custom) savePasswordSecret(ctx context.Context, cr *svcapitypes.DBInstance, pw string) error {
-	if cr.Spec.ForProvider.MasterUserPasswordSecretRef == nil {
-		return errors.New("no MasterUserPasswordSecretRef given, unable to store password")
-	}
-	patcher := resource.NewAPIPatchingApplicator(e.kube)
-	ref := cr.Spec.ForProvider.MasterUserPasswordSecretRef
-	sc := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ref.Name,
-			Namespace: ref.Namespace,
-		},
-		Data: map[string][]byte{
-			ref.Key: []byte(pw),
-		},
-	}
-	return patcher.Apply(ctx, sc)
 }
 
 func handleKmsKey(inKey *string, dbKey *string) *string {
@@ -562,4 +740,21 @@ func handleKmsKey(inKey *string, dbKey *string) *string {
 		return &keyID
 	}
 	return dbKey
+}
+
+// isStorageTypeGP3BelowAllocatedStorageThreshold returns true if storageType is gp3 and allocatedStorage is below engine specific threshold
+// See also https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage.
+func isStorageTypeGP3BelowAllocatedStorageThreshold(cr *svcapitypes.DBInstance) bool {
+	if pointer.StringValue(cr.Spec.ForProvider.StorageType) != "gp3" {
+		return false
+	}
+
+	switch allocatedStorage, engine := pointer.Int64Value(cr.Spec.ForProvider.AllocatedStorage), pointer.StringValue(cr.Spec.ForProvider.Engine); engine {
+	case "mariadb", "mysql", "postgres":
+		return allocatedStorage < 400
+	case "oracle-ee", "oracle-ee-cdb", "oracle-se2", "oracle-se2-cdb":
+		return allocatedStorage < 200
+	}
+
+	return false
 }

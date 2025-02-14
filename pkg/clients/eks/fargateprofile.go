@@ -24,7 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/crossplane-contrib/provider-aws/apis/eks/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // GenerateCreateFargateProfileInput from FargateProfileInputParameters.
@@ -50,12 +50,12 @@ func GenerateCreateFargateProfileInput(name string, p v1beta1.FargateProfilePara
 
 // GenerateFargateProfileObservation is used to produce FargateProfileObservation
 // from eks.FargateProfile.
-func GenerateFargateProfileObservation(fp *ekstypes.FargateProfile) v1beta1.FargateProfileObservation { // nolint:gocyclo
+func GenerateFargateProfileObservation(fp *ekstypes.FargateProfile) v1beta1.FargateProfileObservation {
 	if fp == nil {
 		return v1beta1.FargateProfileObservation{}
 	}
 	o := v1beta1.FargateProfileObservation{
-		FargateProfileArn: awsclients.StringValue(fp.FargateProfileArn),
+		FargateProfileArn: pointer.StringValue(fp.FargateProfileArn),
 		Status:            v1beta1.FargateProfileStatusType(fp.Status),
 	}
 	if fp.CreatedAt != nil {
@@ -66,7 +66,7 @@ func GenerateFargateProfileObservation(fp *ekstypes.FargateProfile) v1beta1.Farg
 
 // LateInitializeFargateProfile fills the empty fields in *FargateProfileParameters with the
 // values seen in eks.FargateProfile.
-func LateInitializeFargateProfile(in *v1beta1.FargateProfileParameters, fp *ekstypes.FargateProfile) { // nolint:gocyclo
+func LateInitializeFargateProfile(in *v1beta1.FargateProfileParameters, fp *ekstypes.FargateProfile) {
 	if fp == nil {
 		return
 	}
@@ -84,6 +84,6 @@ func LateInitializeFargateProfile(in *v1beta1.FargateProfileParameters, fp *ekst
 
 // IsFargateProfileUpToDate checks whether there is a change in the tags.
 // Any other field is immutable and can't be updated.
-func IsFargateProfileUpToDate(p v1beta1.FargateProfileParameters, fp *ekstypes.FargateProfile) bool { // nolint:gocyclo
+func IsFargateProfileUpToDate(p v1beta1.FargateProfileParameters, fp *ekstypes.FargateProfile) bool {
 	return cmp.Equal(p.Tags, fp.Tags, cmpopts.EquateEmpty())
 }

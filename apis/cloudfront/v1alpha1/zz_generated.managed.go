@@ -30,17 +30,14 @@ func (mg *CachePolicy) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this CachePolicy.
+func (mg *CachePolicy) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this CachePolicy.
 func (mg *CachePolicy) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this CachePolicy.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *CachePolicy) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this CachePolicy.
@@ -63,17 +60,14 @@ func (mg *CachePolicy) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this CachePolicy.
+func (mg *CachePolicy) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this CachePolicy.
 func (mg *CachePolicy) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this CachePolicy.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *CachePolicy) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this CachePolicy.
@@ -96,17 +90,14 @@ func (mg *CloudFrontOriginAccessIdentity) GetDeletionPolicy() xpv1.DeletionPolic
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this CloudFrontOriginAccessIdentity.
+func (mg *CloudFrontOriginAccessIdentity) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this CloudFrontOriginAccessIdentity.
 func (mg *CloudFrontOriginAccessIdentity) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this CloudFrontOriginAccessIdentity.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *CloudFrontOriginAccessIdentity) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this CloudFrontOriginAccessIdentity.
@@ -129,17 +120,14 @@ func (mg *CloudFrontOriginAccessIdentity) SetDeletionPolicy(r xpv1.DeletionPolic
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this CloudFrontOriginAccessIdentity.
+func (mg *CloudFrontOriginAccessIdentity) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this CloudFrontOriginAccessIdentity.
 func (mg *CloudFrontOriginAccessIdentity) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this CloudFrontOriginAccessIdentity.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *CloudFrontOriginAccessIdentity) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this CloudFrontOriginAccessIdentity.
@@ -162,17 +150,14 @@ func (mg *Distribution) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this Distribution.
+func (mg *Distribution) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this Distribution.
 func (mg *Distribution) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this Distribution.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *Distribution) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this Distribution.
@@ -195,17 +180,14 @@ func (mg *Distribution) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this Distribution.
+func (mg *Distribution) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this Distribution.
 func (mg *Distribution) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this Distribution.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *Distribution) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this Distribution.
@@ -215,6 +197,66 @@ func (mg *Distribution) SetPublishConnectionDetailsTo(r *xpv1.PublishConnectionD
 
 // SetWriteConnectionSecretToReference of this Distribution.
 func (mg *Distribution) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
+	mg.Spec.WriteConnectionSecretToReference = r
+}
+
+// GetCondition of this OriginAccessControl.
+func (mg *OriginAccessControl) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+	return mg.Status.GetCondition(ct)
+}
+
+// GetDeletionPolicy of this OriginAccessControl.
+func (mg *OriginAccessControl) GetDeletionPolicy() xpv1.DeletionPolicy {
+	return mg.Spec.DeletionPolicy
+}
+
+// GetManagementPolicies of this OriginAccessControl.
+func (mg *OriginAccessControl) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
+// GetProviderConfigReference of this OriginAccessControl.
+func (mg *OriginAccessControl) GetProviderConfigReference() *xpv1.Reference {
+	return mg.Spec.ProviderConfigReference
+}
+
+// GetPublishConnectionDetailsTo of this OriginAccessControl.
+func (mg *OriginAccessControl) GetPublishConnectionDetailsTo() *xpv1.PublishConnectionDetailsTo {
+	return mg.Spec.PublishConnectionDetailsTo
+}
+
+// GetWriteConnectionSecretToReference of this OriginAccessControl.
+func (mg *OriginAccessControl) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
+	return mg.Spec.WriteConnectionSecretToReference
+}
+
+// SetConditions of this OriginAccessControl.
+func (mg *OriginAccessControl) SetConditions(c ...xpv1.Condition) {
+	mg.Status.SetConditions(c...)
+}
+
+// SetDeletionPolicy of this OriginAccessControl.
+func (mg *OriginAccessControl) SetDeletionPolicy(r xpv1.DeletionPolicy) {
+	mg.Spec.DeletionPolicy = r
+}
+
+// SetManagementPolicies of this OriginAccessControl.
+func (mg *OriginAccessControl) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
+// SetProviderConfigReference of this OriginAccessControl.
+func (mg *OriginAccessControl) SetProviderConfigReference(r *xpv1.Reference) {
+	mg.Spec.ProviderConfigReference = r
+}
+
+// SetPublishConnectionDetailsTo of this OriginAccessControl.
+func (mg *OriginAccessControl) SetPublishConnectionDetailsTo(r *xpv1.PublishConnectionDetailsTo) {
+	mg.Spec.PublishConnectionDetailsTo = r
+}
+
+// SetWriteConnectionSecretToReference of this OriginAccessControl.
+func (mg *OriginAccessControl) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
 	mg.Spec.WriteConnectionSecretToReference = r
 }
 
@@ -228,17 +270,14 @@ func (mg *ResponseHeadersPolicy) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this ResponseHeadersPolicy.
+func (mg *ResponseHeadersPolicy) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this ResponseHeadersPolicy.
 func (mg *ResponseHeadersPolicy) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this ResponseHeadersPolicy.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *ResponseHeadersPolicy) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this ResponseHeadersPolicy.
@@ -261,17 +300,14 @@ func (mg *ResponseHeadersPolicy) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this ResponseHeadersPolicy.
+func (mg *ResponseHeadersPolicy) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this ResponseHeadersPolicy.
 func (mg *ResponseHeadersPolicy) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this ResponseHeadersPolicy.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *ResponseHeadersPolicy) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this ResponseHeadersPolicy.

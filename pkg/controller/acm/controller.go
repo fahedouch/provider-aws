@@ -22,11 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
 	awsacmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -34,12 +29,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/acm/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/acm"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -49,8 +50,6 @@ const (
 	errDelete           = "failed to delete the Certificate resource"
 	errUpdate           = "failed to update the Certificate resource"
 	errSDK              = "empty Certificate received from ACM API"
-
-	errKubeUpdateFailed = "cannot late initialize Certificate"
 
 	errAddTagsFailed    = "cannot add tags to Certificate"
 	errListTagsFailed   = "failed to list tags for Certificate"
@@ -66,20 +65,32 @@ func SetupCertificate(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{client: mgr.GetClient(), newClientFn: acm.NewClient}),
+		managed.WithConnectionPublishers(),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.CertificateGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.Certificate{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.CertificateGroupVersionKind),
-			managed.WithExternalConnecter(&connector{client: mgr.GetClient(), newClientFn: acm.NewClient}),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithInitializers(&tagger{kube: mgr.GetClient()}),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -92,7 +103,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.client, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.client, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +132,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	})
 
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(acm.IsErrorNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(acm.IsErrorNotFound, err), errGet)
 	}
 
 	if response.Certificate == nil {
@@ -141,7 +152,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		CertificateArn: aws.String(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(acm.IsErrorNotFound, err), errListTagsFailed)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(acm.IsErrorNotFound, err), errListTagsFailed)
 	}
 
 	// TODO(muvaf): We can possibly call `GetCertificate` and publish the actual
@@ -161,14 +172,14 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 	}
 	response, err := e.client.RequestCertificate(ctx, acm.GenerateCreateCertificateInput(cr.Spec.ForProvider))
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 	meta.SetExternalName(cr, aws.ToString(response.CertificateArn))
 	return managed.ExternalCreation{}, nil
 
 }
 
-func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { // nolint:gocyclo
+func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) {
 	cr, ok := mgd.(*v1beta1.Certificate)
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
@@ -177,7 +188,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		CertificateArn: aws.String(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(acm.IsErrorNotFound, err), errListTagsFailed)
+		return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(acm.IsErrorNotFound, err), errListTagsFailed)
 	}
 
 	add, remove := acm.DiffTags(cr.Spec.ForProvider.Tags, currentTags.Tags)
@@ -186,7 +197,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			CertificateArn: aws.String(meta.GetExternalName(cr)),
 			Tags:           remove,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errRemoveTagsFailed)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errRemoveTagsFailed)
 		}
 	}
 	if len(add) != 0 {
@@ -194,7 +205,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			CertificateArn: aws.String(meta.GetExternalName(cr)),
 			Tags:           add,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errAddTagsFailed)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errAddTagsFailed)
 		}
 	}
 
@@ -207,47 +218,26 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 				CertificateTransparencyLoggingPreference: awsacmtypes.CertificateTransparencyLoggingPreference(cr.Spec.ForProvider.Options.CertificateTransparencyLoggingPreference),
 			},
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 	}
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.Certificate)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	_, err := e.client.DeleteCertificate(ctx, &awsacm.DeleteCertificateInput{
 		CertificateArn: aws.String(meta.GetExternalName(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(acm.IsErrorNotFound, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(acm.IsErrorNotFound, err), errDelete)
 }
 
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mgd resource.Managed) error {
-	cr, ok := mgd.(*v1beta1.Certificate)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-	added := false
-	tagMap := map[string]string{}
-	for _, t := range cr.Spec.ForProvider.Tags {
-		tagMap[t.Key] = t.Value
-	}
-	for k, v := range resource.GetExternalTags(mgd) {
-		if tagMap[k] != v {
-			cr.Spec.ForProvider.Tags = append(cr.Spec.ForProvider.Tags, v1beta1.Tag{Key: k, Value: v})
-			added = true
-		}
-	}
-	if !added {
-		return nil
-	}
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

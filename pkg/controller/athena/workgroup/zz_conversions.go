@@ -42,21 +42,37 @@ func GenerateWorkGroup(resp *svcsdk.GetWorkGroupOutput) *svcapitypes.WorkGroup {
 
 	if resp.WorkGroup.Configuration != nil {
 		f0 := &svcapitypes.WorkGroupConfiguration{}
+		if resp.WorkGroup.Configuration.AdditionalConfiguration != nil {
+			f0.AdditionalConfiguration = resp.WorkGroup.Configuration.AdditionalConfiguration
+		}
 		if resp.WorkGroup.Configuration.BytesScannedCutoffPerQuery != nil {
 			f0.BytesScannedCutoffPerQuery = resp.WorkGroup.Configuration.BytesScannedCutoffPerQuery
+		}
+		if resp.WorkGroup.Configuration.CustomerContentEncryptionConfiguration != nil {
+			f0f2 := &svcapitypes.CustomerContentEncryptionConfiguration{}
+			if resp.WorkGroup.Configuration.CustomerContentEncryptionConfiguration.KmsKey != nil {
+				f0f2.KMSKey = resp.WorkGroup.Configuration.CustomerContentEncryptionConfiguration.KmsKey
+			}
+			f0.CustomerContentEncryptionConfiguration = f0f2
+		}
+		if resp.WorkGroup.Configuration.EnableMinimumEncryptionConfiguration != nil {
+			f0.EnableMinimumEncryptionConfiguration = resp.WorkGroup.Configuration.EnableMinimumEncryptionConfiguration
 		}
 		if resp.WorkGroup.Configuration.EnforceWorkGroupConfiguration != nil {
 			f0.EnforceWorkGroupConfiguration = resp.WorkGroup.Configuration.EnforceWorkGroupConfiguration
 		}
 		if resp.WorkGroup.Configuration.EngineVersion != nil {
-			f0f2 := &svcapitypes.EngineVersion{}
+			f0f5 := &svcapitypes.EngineVersion{}
 			if resp.WorkGroup.Configuration.EngineVersion.EffectiveEngineVersion != nil {
-				f0f2.EffectiveEngineVersion = resp.WorkGroup.Configuration.EngineVersion.EffectiveEngineVersion
+				f0f5.EffectiveEngineVersion = resp.WorkGroup.Configuration.EngineVersion.EffectiveEngineVersion
 			}
 			if resp.WorkGroup.Configuration.EngineVersion.SelectedEngineVersion != nil {
-				f0f2.SelectedEngineVersion = resp.WorkGroup.Configuration.EngineVersion.SelectedEngineVersion
+				f0f5.SelectedEngineVersion = resp.WorkGroup.Configuration.EngineVersion.SelectedEngineVersion
 			}
-			f0.EngineVersion = f0f2
+			f0.EngineVersion = f0f5
+		}
+		if resp.WorkGroup.Configuration.ExecutionRole != nil {
+			f0.ExecutionRole = resp.WorkGroup.Configuration.ExecutionRole
 		}
 		if resp.WorkGroup.Configuration.PublishCloudWatchMetricsEnabled != nil {
 			f0.PublishCloudWatchMetricsEnabled = resp.WorkGroup.Configuration.PublishCloudWatchMetricsEnabled
@@ -65,31 +81,31 @@ func GenerateWorkGroup(resp *svcsdk.GetWorkGroupOutput) *svcapitypes.WorkGroup {
 			f0.RequesterPaysEnabled = resp.WorkGroup.Configuration.RequesterPaysEnabled
 		}
 		if resp.WorkGroup.Configuration.ResultConfiguration != nil {
-			f0f5 := &svcapitypes.ResultConfiguration{}
+			f0f9 := &svcapitypes.ResultConfiguration{}
 			if resp.WorkGroup.Configuration.ResultConfiguration.AclConfiguration != nil {
-				f0f5f0 := &svcapitypes.ACLConfiguration{}
+				f0f9f0 := &svcapitypes.ACLConfiguration{}
 				if resp.WorkGroup.Configuration.ResultConfiguration.AclConfiguration.S3AclOption != nil {
-					f0f5f0.S3ACLOption = resp.WorkGroup.Configuration.ResultConfiguration.AclConfiguration.S3AclOption
+					f0f9f0.S3ACLOption = resp.WorkGroup.Configuration.ResultConfiguration.AclConfiguration.S3AclOption
 				}
-				f0f5.ACLConfiguration = f0f5f0
+				f0f9.ACLConfiguration = f0f9f0
 			}
 			if resp.WorkGroup.Configuration.ResultConfiguration.EncryptionConfiguration != nil {
-				f0f5f1 := &svcapitypes.EncryptionConfiguration{}
+				f0f9f1 := &svcapitypes.EncryptionConfiguration{}
 				if resp.WorkGroup.Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption != nil {
-					f0f5f1.EncryptionOption = resp.WorkGroup.Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption
+					f0f9f1.EncryptionOption = resp.WorkGroup.Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption
 				}
 				if resp.WorkGroup.Configuration.ResultConfiguration.EncryptionConfiguration.KmsKey != nil {
-					f0f5f1.KMSKey = resp.WorkGroup.Configuration.ResultConfiguration.EncryptionConfiguration.KmsKey
+					f0f9f1.KMSKey = resp.WorkGroup.Configuration.ResultConfiguration.EncryptionConfiguration.KmsKey
 				}
-				f0f5.EncryptionConfiguration = f0f5f1
+				f0f9.EncryptionConfiguration = f0f9f1
 			}
 			if resp.WorkGroup.Configuration.ResultConfiguration.ExpectedBucketOwner != nil {
-				f0f5.ExpectedBucketOwner = resp.WorkGroup.Configuration.ResultConfiguration.ExpectedBucketOwner
+				f0f9.ExpectedBucketOwner = resp.WorkGroup.Configuration.ResultConfiguration.ExpectedBucketOwner
 			}
 			if resp.WorkGroup.Configuration.ResultConfiguration.OutputLocation != nil {
-				f0f5.OutputLocation = resp.WorkGroup.Configuration.ResultConfiguration.OutputLocation
+				f0f9.OutputLocation = resp.WorkGroup.Configuration.ResultConfiguration.OutputLocation
 			}
-			f0.ResultConfiguration = f0f5
+			f0.ResultConfiguration = f0f9
 		}
 		cr.Spec.ForProvider.Configuration = f0
 	} else {
@@ -110,21 +126,37 @@ func GenerateCreateWorkGroupInput(cr *svcapitypes.WorkGroup) *svcsdk.CreateWorkG
 
 	if cr.Spec.ForProvider.Configuration != nil {
 		f0 := &svcsdk.WorkGroupConfiguration{}
+		if cr.Spec.ForProvider.Configuration.AdditionalConfiguration != nil {
+			f0.SetAdditionalConfiguration(*cr.Spec.ForProvider.Configuration.AdditionalConfiguration)
+		}
 		if cr.Spec.ForProvider.Configuration.BytesScannedCutoffPerQuery != nil {
 			f0.SetBytesScannedCutoffPerQuery(*cr.Spec.ForProvider.Configuration.BytesScannedCutoffPerQuery)
+		}
+		if cr.Spec.ForProvider.Configuration.CustomerContentEncryptionConfiguration != nil {
+			f0f2 := &svcsdk.CustomerContentEncryptionConfiguration{}
+			if cr.Spec.ForProvider.Configuration.CustomerContentEncryptionConfiguration.KMSKey != nil {
+				f0f2.SetKmsKey(*cr.Spec.ForProvider.Configuration.CustomerContentEncryptionConfiguration.KMSKey)
+			}
+			f0.SetCustomerContentEncryptionConfiguration(f0f2)
+		}
+		if cr.Spec.ForProvider.Configuration.EnableMinimumEncryptionConfiguration != nil {
+			f0.SetEnableMinimumEncryptionConfiguration(*cr.Spec.ForProvider.Configuration.EnableMinimumEncryptionConfiguration)
 		}
 		if cr.Spec.ForProvider.Configuration.EnforceWorkGroupConfiguration != nil {
 			f0.SetEnforceWorkGroupConfiguration(*cr.Spec.ForProvider.Configuration.EnforceWorkGroupConfiguration)
 		}
 		if cr.Spec.ForProvider.Configuration.EngineVersion != nil {
-			f0f2 := &svcsdk.EngineVersion{}
+			f0f5 := &svcsdk.EngineVersion{}
 			if cr.Spec.ForProvider.Configuration.EngineVersion.EffectiveEngineVersion != nil {
-				f0f2.SetEffectiveEngineVersion(*cr.Spec.ForProvider.Configuration.EngineVersion.EffectiveEngineVersion)
+				f0f5.SetEffectiveEngineVersion(*cr.Spec.ForProvider.Configuration.EngineVersion.EffectiveEngineVersion)
 			}
 			if cr.Spec.ForProvider.Configuration.EngineVersion.SelectedEngineVersion != nil {
-				f0f2.SetSelectedEngineVersion(*cr.Spec.ForProvider.Configuration.EngineVersion.SelectedEngineVersion)
+				f0f5.SetSelectedEngineVersion(*cr.Spec.ForProvider.Configuration.EngineVersion.SelectedEngineVersion)
 			}
-			f0.SetEngineVersion(f0f2)
+			f0.SetEngineVersion(f0f5)
+		}
+		if cr.Spec.ForProvider.Configuration.ExecutionRole != nil {
+			f0.SetExecutionRole(*cr.Spec.ForProvider.Configuration.ExecutionRole)
 		}
 		if cr.Spec.ForProvider.Configuration.PublishCloudWatchMetricsEnabled != nil {
 			f0.SetPublishCloudWatchMetricsEnabled(*cr.Spec.ForProvider.Configuration.PublishCloudWatchMetricsEnabled)
@@ -133,31 +165,31 @@ func GenerateCreateWorkGroupInput(cr *svcapitypes.WorkGroup) *svcsdk.CreateWorkG
 			f0.SetRequesterPaysEnabled(*cr.Spec.ForProvider.Configuration.RequesterPaysEnabled)
 		}
 		if cr.Spec.ForProvider.Configuration.ResultConfiguration != nil {
-			f0f5 := &svcsdk.ResultConfiguration{}
+			f0f9 := &svcsdk.ResultConfiguration{}
 			if cr.Spec.ForProvider.Configuration.ResultConfiguration.ACLConfiguration != nil {
-				f0f5f0 := &svcsdk.AclConfiguration{}
+				f0f9f0 := &svcsdk.AclConfiguration{}
 				if cr.Spec.ForProvider.Configuration.ResultConfiguration.ACLConfiguration.S3ACLOption != nil {
-					f0f5f0.SetS3AclOption(*cr.Spec.ForProvider.Configuration.ResultConfiguration.ACLConfiguration.S3ACLOption)
+					f0f9f0.SetS3AclOption(*cr.Spec.ForProvider.Configuration.ResultConfiguration.ACLConfiguration.S3ACLOption)
 				}
-				f0f5.SetAclConfiguration(f0f5f0)
+				f0f9.SetAclConfiguration(f0f9f0)
 			}
 			if cr.Spec.ForProvider.Configuration.ResultConfiguration.EncryptionConfiguration != nil {
-				f0f5f1 := &svcsdk.EncryptionConfiguration{}
+				f0f9f1 := &svcsdk.EncryptionConfiguration{}
 				if cr.Spec.ForProvider.Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption != nil {
-					f0f5f1.SetEncryptionOption(*cr.Spec.ForProvider.Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption)
+					f0f9f1.SetEncryptionOption(*cr.Spec.ForProvider.Configuration.ResultConfiguration.EncryptionConfiguration.EncryptionOption)
 				}
 				if cr.Spec.ForProvider.Configuration.ResultConfiguration.EncryptionConfiguration.KMSKey != nil {
-					f0f5f1.SetKmsKey(*cr.Spec.ForProvider.Configuration.ResultConfiguration.EncryptionConfiguration.KMSKey)
+					f0f9f1.SetKmsKey(*cr.Spec.ForProvider.Configuration.ResultConfiguration.EncryptionConfiguration.KMSKey)
 				}
-				f0f5.SetEncryptionConfiguration(f0f5f1)
+				f0f9.SetEncryptionConfiguration(f0f9f1)
 			}
 			if cr.Spec.ForProvider.Configuration.ResultConfiguration.ExpectedBucketOwner != nil {
-				f0f5.SetExpectedBucketOwner(*cr.Spec.ForProvider.Configuration.ResultConfiguration.ExpectedBucketOwner)
+				f0f9.SetExpectedBucketOwner(*cr.Spec.ForProvider.Configuration.ResultConfiguration.ExpectedBucketOwner)
 			}
 			if cr.Spec.ForProvider.Configuration.ResultConfiguration.OutputLocation != nil {
-				f0f5.SetOutputLocation(*cr.Spec.ForProvider.Configuration.ResultConfiguration.OutputLocation)
+				f0f9.SetOutputLocation(*cr.Spec.ForProvider.Configuration.ResultConfiguration.OutputLocation)
 			}
-			f0.SetResultConfiguration(f0f5)
+			f0.SetResultConfiguration(f0f9)
 		}
 		res.SetConfiguration(f0)
 	}

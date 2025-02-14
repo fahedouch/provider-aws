@@ -20,6 +20,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/request"
 	svcsdk "github.com/aws/aws-sdk-go/service/apigateway"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
@@ -28,7 +29,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/crossplane-contrib/provider-aws/apis/apigateway/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/apigateway/fake"
 )
 
@@ -62,8 +62,8 @@ func Resource(m ...apiModifier) *v1alpha1.Resource {
 	return cr
 }
 
-var _ managed.ExternalClient = &external{}
-var _ managed.ExternalConnecter = &connector{}
+var _ managed.TypedExternalClient[*v1alpha1.Resource] = &external{}
+var _ managed.TypedExternalConnecter[*v1alpha1.Resource] = &connector{}
 
 func TestPreCreate(t *testing.T) {
 	type want struct {
@@ -244,7 +244,7 @@ func TestIsUpToDate(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			// Act
-			result, err := isUpToDate(tc.args.cr, tc.args.obj)
+			result, _, err := isUpToDate(context.Background(), tc.args.cr, tc.args.obj)
 			if err != nil {
 				panic(err)
 			}

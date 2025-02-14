@@ -4,18 +4,19 @@ import (
 	"context"
 
 	svcsdk "github.com/aws/aws-sdk-go/service/dax"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/google/go-cmp/cmp"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
+	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/dax/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupCluster adds a controller that reconciles Cluster.
@@ -32,21 +33,34 @@ func SetupCluster(mgr ctrl.Manager, o controller.Options) error {
 			e.isUpToDate = isUpToDate
 		},
 	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.ClusterGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Cluster{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.ClusterGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithInitializers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name)))))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Cluster, obj *svcsdk.DescribeClustersInput) error {
-	obj.ClusterNames = append(obj.ClusterNames, awsclients.String(meta.GetExternalName(cr)))
+	obj.ClusterNames = append(obj.ClusterNames, pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)))
 	return nil
 }
 
@@ -54,7 +68,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Cluster, resp *svcsdk.Descri
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	switch awsclients.StringValue(resp.Clusters[0].Status) {
+	switch pointer.StringValue(resp.Clusters[0].Status) {
 	case "available", "modifying":
 		cr.SetConditions(xpv1.Available())
 	case "creating":
@@ -67,7 +81,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Cluster, resp *svcsdk.Descri
 
 func preCreate(_ context.Context, cr *svcapitypes.Cluster, obj *svcsdk.CreateClusterInput) error {
 	meta.SetExternalName(cr, cr.Name)
-	obj.ClusterName = awsclients.String(meta.GetExternalName(cr))
+	obj.ClusterName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.IamRoleArn = cr.Spec.ForProvider.IAMRoleARN
 	obj.ParameterGroupName = cr.Spec.ForProvider.ParameterGroupName
 	obj.SubnetGroupName = cr.Spec.ForProvider.SubnetGroupName
@@ -77,21 +91,21 @@ func preCreate(_ context.Context, cr *svcapitypes.Cluster, obj *svcsdk.CreateClu
 }
 
 func preUpdate(_ context.Context, cr *svcapitypes.Cluster, obj *svcsdk.UpdateClusterInput) error {
-	obj.ClusterName = awsclients.String(meta.GetExternalName(cr))
+	obj.ClusterName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.NotificationTopicArn = cr.Spec.ForProvider.NotificationTopicARN
 	if cr.Spec.ForProvider.ParameterGroupName != nil {
-		obj.ParameterGroupName = awsclients.String(*cr.Spec.ForProvider.ParameterGroupName)
+		obj.ParameterGroupName = pointer.ToOrNilIfZeroValue(*cr.Spec.ForProvider.ParameterGroupName)
 	}
 	if cr.Spec.ForProvider.SecurityGroupIDs != nil {
 		for _, s := range cr.Spec.ForProvider.SecurityGroupIDs {
-			obj.SecurityGroupIds = append(obj.SecurityGroupIds, awsclients.String(*s))
+			obj.SecurityGroupIds = append(obj.SecurityGroupIds, pointer.ToOrNilIfZeroValue(*s))
 		}
 	}
 	return nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Cluster, obj *svcsdk.DeleteClusterInput) (bool, error) {
-	obj.ClusterName = awsclients.String(meta.GetExternalName(cr))
+	obj.ClusterName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
@@ -103,8 +117,8 @@ func lateInitialize(in *svcapitypes.ClusterParameters, out *svcsdk.DescribeClust
 			in.AvailabilityZones[i] = group.AvailabilityZone
 		}
 	}
-	in.ClusterEndpointEncryptionType = awsclients.LateInitializeStringPtr(in.ClusterEndpointEncryptionType, c.ClusterEndpointEncryptionType)
-	in.PreferredMaintenanceWindow = awsclients.LateInitializeStringPtr(in.PreferredMaintenanceWindow, c.PreferredMaintenanceWindow)
+	in.ClusterEndpointEncryptionType = pointer.LateInitialize(in.ClusterEndpointEncryptionType, c.ClusterEndpointEncryptionType)
+	in.PreferredMaintenanceWindow = pointer.LateInitialize(in.PreferredMaintenanceWindow, c.PreferredMaintenanceWindow)
 	if in.SecurityGroupIDs == nil {
 		in.SecurityGroupIDs = make([]*string, len(c.SecurityGroups))
 		for i, group := range c.SecurityGroups {
@@ -114,39 +128,39 @@ func lateInitialize(in *svcapitypes.ClusterParameters, out *svcsdk.DescribeClust
 	return nil
 }
 
-func isUpToDate(cr *svcapitypes.Cluster, output *svcsdk.DescribeClustersOutput) (bool, error) {
+func isUpToDate(_ context.Context, cr *svcapitypes.Cluster, output *svcsdk.DescribeClustersOutput) (bool, string, error) {
 	in := cr.Spec.ForProvider
 	out := output.Clusters[0]
 
 	notUpToDate := isNotUpToDate(in, out)
 
 	if notUpToDate {
-		return false, nil
+		return false, "", nil
 	}
 
 	parameterGroupNotEqualNotNil := isUpToDateParameterGroup(in, out)
 
 	if parameterGroupNotEqualNotNil {
-		return false, nil
+		return false, "", nil
 	}
 
 	notificationTopicArnNotEqualNotNil := isUpToDateNotificationTopicArn(in, out)
 
 	if notificationTopicArnNotEqualNotNil {
-		return false, nil
+		return false, "", nil
 	}
 
 	outSecurityGroupIds := getOutSecurityIds(out)
 	if !cmp.Equal(in.SecurityGroupIDs, outSecurityGroupIds) {
-		return false, nil
+		return false, "", nil
 	}
 
 	outAvailabilityZones := getOutAvailabilityZones(out)
 	if !cmp.Equal(in.AvailabilityZones, outAvailabilityZones) {
-		return false, nil
+		return false, "", nil
 	}
 
-	return true, nil
+	return true, "", nil
 }
 
 func isNotUpToDate(in svcapitypes.ClusterParameters, out *svcsdk.Cluster) (unequal bool) {

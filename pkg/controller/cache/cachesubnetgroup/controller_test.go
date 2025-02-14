@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-   http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,17 +22,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscache "github.com/aws/aws-sdk-go-v2/service/elasticache"
 	awscachetypes "github.com/aws/aws-sdk-go-v2/service/elasticache/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
 	"github.com/crossplane-contrib/provider-aws/apis/cache/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/elasticache"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/elasticache/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -142,7 +141,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  csg(),
-				err: awsclient.Wrap(errBoom, errDescribeSubnetGroup),
+				err: errorutils.Wrap(errBoom, errDescribeSubnetGroup),
 			},
 		},
 	}
@@ -212,7 +211,7 @@ func TestCreate(t *testing.T) {
 					SubnetIDs:   []string{subnetID},
 					Description: sgDescription,
 				})), withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreateSubnetGroup),
+				err: errorutils.Wrap(errBoom, errCreateSubnetGroup),
 			},
 		},
 	}
@@ -282,7 +281,7 @@ func TestUpdate(t *testing.T) {
 					SubnetIDs:   []string{subnetID},
 					Description: sgDescription,
 				}))),
-				err: awsclient.Wrap(errBoom, errModifySubnetGroup),
+				err: errorutils.Wrap(errBoom, errModifySubnetGroup),
 			},
 		},
 	}
@@ -351,7 +350,7 @@ func TestDelete(t *testing.T) {
 					SubnetIDs:   []string{subnetID},
 					Description: sgDescription,
 				})), withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDeleteSubnetGroup),
+				err: errorutils.Wrap(errBoom, errDeleteSubnetGroup),
 			},
 		},
 	}
@@ -359,7 +358,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.cache}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

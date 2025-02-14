@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/elbv2/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.LoadBalancer)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.LoadBalancer) (managed.TypedExternalClient[*svcapitypes.LoadBalancer], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.LoadBalancer)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.LoadBalancer) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,7 +74,7 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeLoadBalancersWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	resp = e.filterList(cr, resp)
 	if len(resp.LoadBalancers) == 0 {
@@ -92,23 +85,23 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateLoadBalancer(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.LoadBalancer)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.LoadBalancer) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateLoadBalancerInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -116,7 +109,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateLoadBalancerWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	found := false
@@ -180,6 +173,11 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		} else {
 			cr.Status.AtProvider.DNSName = nil
 		}
+		if elem.EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic != nil {
+			cr.Status.AtProvider.EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic = elem.EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic
+		} else {
+			cr.Status.AtProvider.EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic = nil
+		}
 		if elem.IpAddressType != nil {
 			cr.Spec.ForProvider.IPAddressType = elem.IpAddressType
 		} else {
@@ -201,25 +199,25 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 			cr.Spec.ForProvider.Scheme = nil
 		}
 		if elem.SecurityGroups != nil {
-			f9 := []*string{}
-			for _, f9iter := range elem.SecurityGroups {
-				var f9elem string
-				f9elem = *f9iter
-				f9 = append(f9, &f9elem)
+			f10 := []*string{}
+			for _, f10iter := range elem.SecurityGroups {
+				var f10elem string
+				f10elem = *f10iter
+				f10 = append(f10, &f10elem)
 			}
-			cr.Spec.ForProvider.SecurityGroups = f9
+			cr.Spec.ForProvider.SecurityGroups = f10
 		} else {
 			cr.Spec.ForProvider.SecurityGroups = nil
 		}
 		if elem.State != nil {
-			f10 := &svcapitypes.LoadBalancerState{}
+			f11 := &svcapitypes.LoadBalancerState{}
 			if elem.State.Code != nil {
-				f10.Code = elem.State.Code
+				f11.Code = elem.State.Code
 			}
 			if elem.State.Reason != nil {
-				f10.Reason = elem.State.Reason
+				f11.Reason = elem.State.Reason
 			}
-			cr.Status.AtProvider.State = f10
+			cr.Status.AtProvider.State = f11
 		} else {
 			cr.Status.AtProvider.State = nil
 		}
@@ -243,27 +241,28 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	return e.update(ctx, mg)
+func (e *external) Update(ctx context.Context, cr *svcapitypes.LoadBalancer) (managed.ExternalUpdate, error) {
+	return e.update(ctx, cr)
 
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.LoadBalancer)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.LoadBalancer) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteLoadBalancerInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteLoadBalancerWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -296,12 +295,12 @@ type external struct {
 	postObserve    func(context.Context, *svcapitypes.LoadBalancer, *svcsdk.DescribeLoadBalancersOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	filterList     func(*svcapitypes.LoadBalancer, *svcsdk.DescribeLoadBalancersOutput) *svcsdk.DescribeLoadBalancersOutput
 	lateInitialize func(*svcapitypes.LoadBalancerParameters, *svcsdk.DescribeLoadBalancersOutput) error
-	isUpToDate     func(*svcapitypes.LoadBalancer, *svcsdk.DescribeLoadBalancersOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.LoadBalancer, *svcsdk.DescribeLoadBalancersOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.LoadBalancer, *svcsdk.CreateLoadBalancerInput) error
 	postCreate     func(context.Context, *svcapitypes.LoadBalancer, *svcsdk.CreateLoadBalancerOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.LoadBalancer, *svcsdk.DeleteLoadBalancerInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.LoadBalancer, *svcsdk.DeleteLoadBalancerOutput, error) error
-	update         func(context.Context, cpresource.Managed) (managed.ExternalUpdate, error)
+	postDelete     func(context.Context, *svcapitypes.LoadBalancer, *svcsdk.DeleteLoadBalancerOutput, error) (managed.ExternalDelete, error)
+	update         func(context.Context, *svcapitypes.LoadBalancer) (managed.ExternalUpdate, error)
 }
 
 func nopPreObserve(context.Context, *svcapitypes.LoadBalancer, *svcsdk.DescribeLoadBalancersInput) error {
@@ -317,8 +316,8 @@ func nopFilterList(_ *svcapitypes.LoadBalancer, list *svcsdk.DescribeLoadBalance
 func nopLateInitialize(*svcapitypes.LoadBalancerParameters, *svcsdk.DescribeLoadBalancersOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.LoadBalancer, *svcsdk.DescribeLoadBalancersOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.LoadBalancer, *svcsdk.DescribeLoadBalancersOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.LoadBalancer, *svcsdk.CreateLoadBalancerInput) error {
@@ -330,9 +329,9 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.LoadBalancer, _ *svcsdk.Cre
 func nopPreDelete(context.Context, *svcapitypes.LoadBalancer, *svcsdk.DeleteLoadBalancerInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.LoadBalancer, _ *svcsdk.DeleteLoadBalancerOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.LoadBalancer, _ *svcsdk.DeleteLoadBalancerOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
-func nopUpdate(context.Context, cpresource.Managed) (managed.ExternalUpdate, error) {
+func nopUpdate(context.Context, *svcapitypes.LoadBalancer) (managed.ExternalUpdate, error) {
 	return managed.ExternalUpdate{}, nil
 }

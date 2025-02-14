@@ -6,8 +6,6 @@ PROJECT_REPO := github.com/crossplane-contrib/$(PROJECT_NAME)
 
 PLATFORMS ?= linux_amd64 linux_arm64
 
-CODE_GENERATOR_REPO ?= https://github.com/aws-controllers-k8s/code-generator.git
-CODE_GENERATOR_COMMIT ?= 6acf40fe3e3cfd97b799ef7cbf1e89e01c3db8f7
 GENERATED_SERVICES ?= $(shell find ./apis -type f -name generator-config.yaml | cut -d/ -f 3 | tr '\n' ' ')
 
 # kind-related versions
@@ -41,13 +39,16 @@ GO_STATIC_PACKAGES = $(GO_PROJECT)/cmd/provider
 GO_LDFLAGS += -X $(GO_PROJECT)/pkg/version.Version=$(VERSION)
 GO_SUBDIRS += cmd pkg apis
 GO111MODULE = on
+GOLANGCILINT_VERSION := $(shell grep 'GOLANGCI_VERSION' .github/workflows/ci.yml | sed -n 's/.*: *["'\'']*v\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p')
 -include build/makelib/golang.mk
 
 # ====================================================================================
 # Setup Kubernetes tools
 
-UP_VERSION = v0.13.0
+UP_VERSION = v0.27.0
 UP_CHANNEL = stable
+UPTEST_VERSION = v0.11.0
+
 -include build/makelib/k8s_tools.mk
 
 # ====================================================================================
@@ -100,7 +101,7 @@ manifests:
 e2e.run: test-integration
 
 # Run integration tests.
-test-integration: $(KIND) $(KUBECTL) $(UP) $(HELM3)
+test-integration: $(KIND) $(KUBECTL) $(UP) $(HELM)
 	@$(INFO) running integration tests using kind $(KIND_VERSION)
 	@KIND_NODE_IMAGE_TAG=${KIND_NODE_IMAGE_TAG} $(ROOT_DIR)/cluster/local/integration_tests.sh || $(FAIL)
 	@$(OK) integration tests passed
@@ -135,27 +136,45 @@ run: go.build
 .PHONY: cobertura manifests submodules fallthrough test-integration run crds.clean
 
 AWS_SDK_GO_VERSION ?= $(shell awk '/github.com\/aws\/aws-sdk-go / { print $$2 }' < go.mod)
+ACK_VERSION ?= $(shell awk '/github.com\/aws-controllers-k8s\/code-generator / { print $$2 }' < go.mod)
+ACK_GENERATE_DIR ?= $(CACHE_DIR)/ack-generate
+ACK_GENERATE ?= $(ACK_GENERATE_DIR)/ack-generate_$(ACK_VERSION)
 
-# NOTE(muvaf): ACK Code Generator is a separate Go module, hence we need to
-# be in its root directory to call "go run" properly.
-services: $(GOIMPORTS)
-	@if [ ! -d "$(WORK_DIR)" ]; then \
-		$(INFO) creating $(WORK_DIR) folder; \
-		mkdir $(WORK_DIR); \
-	fi
-	@if [ ! -d "$(WORK_DIR)/code-generator" ]; then \
-		cd $(WORK_DIR) && git clone "$(CODE_GENERATOR_REPO)"; \
-	fi
-	@cd $(WORK_DIR)/code-generator && git fetch origin && git checkout $(CODE_GENERATOR_COMMIT) && go build -tags codegen -o ack-generate cmd/ack-generate/main.go
+# Because ack-generate is executed many times during generate, we build a binary
+# to speed up code generation compared to go run.
+$(ACK_GENERATE):
+	@$(INFO) Building ack-generate $(ACK_VERSION)
+	@mkdir -p "$(ACK_GENERATE_DIR)"
+	@$(GO) build -o "$(ACK_GENERATE)" -tags codegen github.com/aws-controllers-k8s/code-generator/cmd/ack-generate || $(FAIL)
+	@$(OK) Built ack-generate $(ACK_VERSION)
+
+services: $(ACK_GENERATE) $(GOIMPORTS)
 	@for svc in $(SERVICES); do \
 		$(INFO) Generating $$svc controllers and CRDs; \
 		PATH="${PATH}:$(TOOLS_HOST_DIR)"; \
-		cd $(WORK_DIR)/code-generator && ./ack-generate crossplane --aws-sdk-go-version $(AWS_SDK_GO_VERSION) $$svc --output ../../ || exit 1; \
+		$(ACK_GENERATE) crossplane --aws-sdk-go-version $(AWS_SDK_GO_VERSION) $$svc --output=./ || exit 1; \
 		$(OK) Generating $$svc controllers and CRDs; \
 	done
 
 services.all:
 	@$(MAKE) services SERVICES="$(GENERATED_SERVICES)"
+
+crddiff: $(UPTEST)
+	@$(INFO) Checking breaking CRD schema changes
+	@for crd in $${MODIFIED_CRD_LIST}; do \
+		if ! git cat-file -e "$${GITHUB_BASE_REF}:$${crd}" 2>/dev/null; then \
+			echo "CRD $${crd} does not exist in the $${GITHUB_BASE_REF} branch. Skipping..." ; \
+			continue ; \
+		fi ; \
+		echo "Checking $${crd} for breaking API changes..." ; \
+		changes_detected=$$($(UPTEST) crddiff revision <(git cat-file -p "$${GITHUB_BASE_REF}:$${crd}") "$${crd}" 2>&1) ; \
+		if [[ $$? != 0 ]] ; then \
+			printf "\033[31m"; echo "Breaking change detected!"; printf "\033[0m" ; \
+			echo "$${changes_detected}" ; \
+			echo ; \
+		fi ; \
+	done
+	@$(OK) Checking breaking CRD schema changes
 
 # ====================================================================================
 # Special Targets

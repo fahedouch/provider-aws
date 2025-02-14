@@ -31,9 +31,10 @@ import (
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cloudfront/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	"github.com/crossplane-contrib/provider-aws/pkg/controller/cloudfront"
+	cloudfront "github.com/crossplane-contrib/provider-aws/pkg/controller/cloudfront/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupCachePolicy adds a controller that reconciles CachePolicy.
@@ -45,30 +46,42 @@ func SetupCachePolicy(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{
+			kube: mgr.GetClient(),
+			opts: []option{
+				func(e *external) {
+					e.preObserve = preObserve
+					e.postObserve = postObserve
+					e.postCreate = postCreate
+					e.lateInitialize = lateInitialize
+					e.preUpdate = preUpdate
+					e.isUpToDate = isUpToDate
+					e.preDelete = preDelete
+				},
+			},
+		}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.CachePolicyGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.CachePolicy{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.CachePolicyGroupVersionKind),
-			managed.WithExternalConnecter(&connector{
-				kube: mgr.GetClient(),
-				opts: []option{
-					func(e *external) {
-						e.preObserve = preObserve
-						e.postObserve = postObserve
-						e.postCreate = postCreate
-						e.lateInitialize = lateInitialize
-						e.preUpdate = preUpdate
-						e.isUpToDate = isUpToDate
-						e.preDelete = preDelete
-					},
-				},
-			}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func postCreate(_ context.Context, cp *svcapitypes.CachePolicy, cpo *svcsdk.CreateCachePolicyOutput,
@@ -77,12 +90,12 @@ func postCreate(_ context.Context, cp *svcapitypes.CachePolicy, cpo *svcsdk.Crea
 		return managed.ExternalCreation{}, err
 	}
 
-	meta.SetExternalName(cp, awsclients.StringValue(cpo.CachePolicy.Id))
+	meta.SetExternalName(cp, pointer.StringValue(cpo.CachePolicy.Id))
 	return ec, nil
 }
 
 func preObserve(_ context.Context, cp *svcapitypes.CachePolicy, gpi *svcsdk.GetCachePolicyInput) error {
-	gpi.Id = awsclients.String(meta.GetExternalName(cp))
+	gpi.Id = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cp))
 	return nil
 }
 
@@ -96,14 +109,14 @@ func postObserve(_ context.Context, cp *svcapitypes.CachePolicy, _ *svcsdk.GetCa
 }
 
 func preUpdate(_ context.Context, cp *svcapitypes.CachePolicy, upi *svcsdk.UpdateCachePolicyInput) error {
-	upi.Id = awsclients.String(meta.GetExternalName(cp))
-	upi.SetIfMatch(awsclients.StringValue(cp.Status.AtProvider.ETag))
+	upi.Id = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cp))
+	upi.SetIfMatch(pointer.StringValue(cp.Status.AtProvider.ETag))
 	return nil
 }
 
 func preDelete(_ context.Context, cp *svcapitypes.CachePolicy, dpi *svcsdk.DeleteCachePolicyInput) (bool, error) {
-	dpi.Id = awsclients.String(meta.GetExternalName(cp))
-	dpi.SetIfMatch(awsclients.StringValue(cp.Status.AtProvider.ETag))
+	dpi.Id = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cp))
+	dpi.SetIfMatch(pointer.StringValue(cp.Status.AtProvider.ETag))
 	return false, nil
 }
 
@@ -115,7 +128,7 @@ func lateInitialize(in *svcapitypes.CachePolicyParameters, gpo *svcsdk.GetCacheP
 	return err
 }
 
-func isUpToDate(cp *svcapitypes.CachePolicy, gpo *svcsdk.GetCachePolicyOutput) (bool, error) {
+func isUpToDate(_ context.Context, cp *svcapitypes.CachePolicy, gpo *svcsdk.GetCachePolicyOutput) (bool, string, error) {
 	return cloudfront.IsUpToDate(gpo.CachePolicy.CachePolicyConfig, cp.Spec.ForProvider.CachePolicyConfig,
 		mappingOptions...)
 }

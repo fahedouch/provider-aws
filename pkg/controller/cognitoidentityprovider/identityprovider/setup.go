@@ -17,24 +17,24 @@ import (
 	"context"
 	"reflect"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	svcsdk "github.com/aws/aws-sdk-go/service/cognitoidentityprovider"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/cognitoidentityprovider/cognitoidentityprovideriface"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cognitoidentityprovider/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/cognitoidentityprovider"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupIdentityProvider adds a controller that reconciles IdentityProvider.
@@ -59,18 +59,30 @@ func SetupIdentityProvider(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.IdentityProviderGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.IdentityProvider{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.IdentityProviderGroupVersionKind),
-			managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type custom struct {
@@ -81,13 +93,13 @@ type custom struct {
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.IdentityProvider, obj *svcsdk.DescribeIdentityProviderInput) error {
-	obj.ProviderName = awsclients.String(meta.GetExternalName(cr))
+	obj.ProviderName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.UserPoolId = cr.Spec.ForProvider.UserPoolID
 	return nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.IdentityProvider, obj *svcsdk.DeleteIdentityProviderInput) (bool, error) {
-	obj.ProviderName = awsclients.String(meta.GetExternalName(cr))
+	obj.ProviderName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.UserPoolId = cr.Spec.ForProvider.UserPoolID
 	return false, nil
 }
@@ -104,7 +116,7 @@ func postObserve(_ context.Context, cr *svcapitypes.IdentityProvider, obj *svcsd
 
 func (e *custom) preCreate(ctx context.Context, cr *svcapitypes.IdentityProvider, obj *svcsdk.CreateIdentityProviderInput) error {
 	obj.UserPoolId = cr.Spec.ForProvider.UserPoolID
-	obj.ProviderName = awsclients.String(meta.GetExternalName(cr))
+	obj.ProviderName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 
 	providerDetails, err := e.resolver.GetProviderDetails(ctx, e.kube, &cr.Spec.ForProvider.ProviderDetailsSecretRef)
 	if err != nil {
@@ -117,7 +129,7 @@ func (e *custom) preCreate(ctx context.Context, cr *svcapitypes.IdentityProvider
 
 func (e *custom) preUpdate(ctx context.Context, cr *svcapitypes.IdentityProvider, obj *svcsdk.UpdateIdentityProviderInput) error {
 	obj.UserPoolId = cr.Spec.ForProvider.UserPoolID
-	obj.ProviderName = awsclients.String(meta.GetExternalName(cr))
+	obj.ProviderName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 
 	providerDetails, err := e.resolver.GetProviderDetails(ctx, e.kube, &cr.Spec.ForProvider.ProviderDetailsSecretRef)
 	if err != nil {
@@ -128,13 +140,11 @@ func (e *custom) preUpdate(ctx context.Context, cr *svcapitypes.IdentityProvider
 	return nil
 }
 
-func (e *custom) isUpToDate(cr *svcapitypes.IdentityProvider, resp *svcsdk.DescribeIdentityProviderOutput) (bool, error) {
+func (e *custom) isUpToDate(ctx context.Context, cr *svcapitypes.IdentityProvider, resp *svcsdk.DescribeIdentityProviderOutput) (bool, string, error) {
 	provider := resp.IdentityProvider
-
-	ctx := context.Background()
 	p, err := e.resolver.GetProviderDetails(ctx, e.kube, &cr.Spec.ForProvider.ProviderDetailsSecretRef)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	providerDetails := p
 
@@ -142,9 +152,9 @@ func (e *custom) isUpToDate(cr *svcapitypes.IdentityProvider, resp *svcsdk.Descr
 	case !reflect.DeepEqual(cr.Spec.ForProvider.AttributeMapping, provider.AttributeMapping),
 		cr.Spec.ForProvider.IDpIdentifiers != nil && !reflect.DeepEqual(cr.Spec.ForProvider.IDpIdentifiers, provider.IdpIdentifiers),
 		!reflect.DeepEqual(providerDetails, provider.ProviderDetails):
-		return false, nil
+		return false, "", nil
 	}
-	return true, nil
+	return true, "", nil
 }
 
 func lateInitialize(cr *svcapitypes.IdentityProviderParameters, current *svcsdk.DescribeIdentityProviderOutput) error {

@@ -20,17 +20,9 @@ import (
 	"context"
 	"strconv"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/docdb"
 	"github.com/aws/aws-sdk-go/service/docdb/docdbiface"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -39,19 +31,31 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/password"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/docdb/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/docdb"
+	"github.com/crossplane-contrib/provider-aws/pkg/controller/docdb/utils"
+	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/docdb/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
-	errNotDBCluster            = "managed resource is not a DB Cluster custom resource"
-	errKubeUpdateFailed        = "cannot update DBCluster instance custom resource"
-	errGetPasswordSecretFailed = "cannot get password secret"
-	errSaveSecretFailed        = "failed to save generated password to Kubernetes secret"
+	errNotDBCluster             = "managed resource is not a DB Cluster custom resource"
+	errKubeUpdateFailed         = "cannot update DBCluster instance custom resource"
+	errGetPasswordSecretFailed  = "cannot get password secret"
+	errSaveSecretFailed         = "failed to save generated password to Kubernetes secret"
+	errRestore                  = "cannot restore DBCluster in AWS"
+	errUnknownRestoreFromSource = "unknown restoreFrom source"
 )
 
 // SetupDBCluster adds a controller that reconciles a DBCluster.
@@ -64,19 +68,31 @@ func SetupDBCluster(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.DBClusterGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		For(&svcapitypes.DBCluster{}).
 		WithOptions(o.ForControllerRuntime()).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.DBClusterGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		WithEventFilter(resource.DesiredStateChanged()).
+		Complete(r)
 }
 
 func setupExternal(e *external) {
@@ -99,7 +115,7 @@ type hooks struct {
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.DBCluster, obj *svcsdk.DescribeDBClustersInput) error {
-	obj.DBClusterIdentifier = awsclient.String(meta.GetExternalName(cr))
+	obj.DBClusterIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -108,15 +124,19 @@ func (e *hooks) postObserve(ctx context.Context, cr *svcapitypes.DBCluster, resp
 		return managed.ExternalObservation{}, err
 	}
 
+	cluster := resp.DBClusters[0]
+	cr.Status.AtProvider.EngineVersion = cluster.EngineVersion
+
 	obs.ConnectionDetails = getConnectionDetails(cr)
 
-	pw, _, _ := e.getPasswordFromRef(ctx, cr.Spec.ForProvider.MasterUserPasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
-
-	if pw != "" {
-		obs.ConnectionDetails[xpv1.ResourceCredentialsSecretPasswordKey] = []byte(pw)
+	if !meta.WasDeleted(cr) {
+		pw, _, _ := e.getPasswordFromRef(ctx, cr.Spec.ForProvider.MasterUserPasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
+		if pw != "" {
+			obs.ConnectionDetails[xpv1.ResourceCredentialsSecretPasswordKey] = []byte(pw)
+		}
 	}
 
-	switch awsclient.StringValue(cr.Status.AtProvider.Status) {
+	switch pointer.StringValue(cr.Status.AtProvider.Status) {
 	case svcapitypes.DocDBInstanceStateAvailable:
 		cr.Status.SetConditions(xpv1.Available())
 	case svcapitypes.DocDBInstanceStateCreating:
@@ -129,23 +149,23 @@ func (e *hooks) postObserve(ctx context.Context, cr *svcapitypes.DBCluster, resp
 	return obs, nil
 }
 
-func lateInitialize(cr *svcapitypes.DBClusterParameters, resp *svcsdk.DescribeDBClustersOutput) error { // nolint:gocyclo
+func lateInitialize(cr *svcapitypes.DBClusterParameters, resp *svcsdk.DescribeDBClustersOutput) error {
 	cluster := resp.DBClusters[0]
 
 	if cr.AvailabilityZones == nil {
 		cr.AvailabilityZones = cluster.AvailabilityZones
 	}
 
-	cr.BackupRetentionPeriod = awsclient.LateInitializeInt64Ptr(cr.BackupRetentionPeriod, cluster.BackupRetentionPeriod)
-	cr.DBClusterParameterGroupName = awsclient.LateInitializeStringPtr(cr.DBClusterParameterGroupName, cluster.DBClusterParameterGroup)
-	cr.DBSubnetGroupName = awsclient.LateInitializeStringPtr(cr.DBSubnetGroupName, cluster.DBSubnetGroup)
-	cr.DeletionProtection = awsclient.LateInitializeBoolPtr(cr.DeletionProtection, cluster.DeletionProtection)
-	cr.EngineVersion = awsclient.LateInitializeStringPtr(cr.EngineVersion, cluster.EngineVersion)
-	cr.KMSKeyID = awsclient.LateInitializeStringPtr(cr.KMSKeyID, cluster.KmsKeyId)
-	cr.Port = awsclient.LateInitializeInt64Ptr(cr.Port, cluster.Port)
-	cr.PreferredBackupWindow = awsclient.LateInitializeStringPtr(cr.PreferredBackupWindow, cluster.PreferredBackupWindow)
-	cr.PreferredMaintenanceWindow = awsclient.LateInitializeStringPtr(cr.PreferredMaintenanceWindow, cluster.PreferredMaintenanceWindow)
-	cr.StorageEncrypted = awsclient.LateInitializeBoolPtr(cr.StorageEncrypted, cluster.StorageEncrypted)
+	cr.BackupRetentionPeriod = pointer.LateInitialize(cr.BackupRetentionPeriod, cluster.BackupRetentionPeriod)
+	cr.DBClusterParameterGroupName = pointer.LateInitialize(cr.DBClusterParameterGroupName, cluster.DBClusterParameterGroup)
+	cr.DBSubnetGroupName = pointer.LateInitialize(cr.DBSubnetGroupName, cluster.DBSubnetGroup)
+	cr.DeletionProtection = pointer.LateInitialize(cr.DeletionProtection, cluster.DeletionProtection)
+	cr.EngineVersion = pointer.LateInitialize(cr.EngineVersion, cluster.EngineVersion)
+	cr.KMSKeyID = pointer.LateInitialize(cr.KMSKeyID, cluster.KmsKeyId)
+	cr.Port = pointer.LateInitialize(cr.Port, cluster.Port)
+	cr.PreferredBackupWindow = pointer.LateInitialize(cr.PreferredBackupWindow, cluster.PreferredBackupWindow)
+	cr.PreferredMaintenanceWindow = pointer.LateInitialize(cr.PreferredMaintenanceWindow, cluster.PreferredMaintenanceWindow)
+	cr.StorageEncrypted = pointer.LateInitialize(cr.StorageEncrypted, cluster.StorageEncrypted)
 
 	if cr.EnableCloudwatchLogsExports == nil {
 		cr.EnableCloudwatchLogsExports = cluster.EnabledCloudwatchLogsExports
@@ -160,31 +180,36 @@ func lateInitialize(cr *svcapitypes.DBClusterParameters, resp *svcsdk.DescribeDB
 	return nil
 }
 
-func (e *hooks) isUpToDate(cr *svcapitypes.DBCluster, resp *svcsdk.DescribeDBClustersOutput) (bool, error) { // nolint:gocyclo
+func (e *hooks) isUpToDate(ctx context.Context, cr *svcapitypes.DBCluster, resp *svcsdk.DescribeDBClustersOutput) (bool, string, error) {
 	cluster := resp.DBClusters[0]
 
-	ctx := context.Background()
+	if pointer.StringValue(cluster.Status) == svcapitypes.DocDBInstanceStateModifying || pointer.StringValue(cluster.Status) == svcapitypes.DocDBInstanceStateUpgrading {
+		return true, "", nil
+	}
+
 	_, pwChanged, err := e.getPasswordFromRef(ctx, cr.Spec.ForProvider.MasterUserPasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
 	if err != nil || pwChanged {
-		return false, err
+		return false, "", err
 	}
 
 	switch {
-	case awsclient.Int64Value(cr.Spec.ForProvider.BackupRetentionPeriod) != awsclient.Int64Value(cluster.BackupRetentionPeriod),
-		awsclient.StringValue(cr.Spec.ForProvider.DBClusterParameterGroupName) != awsclient.StringValue(cluster.DBClusterParameterGroup),
-		awsclient.BoolValue(cr.Spec.ForProvider.DeletionProtection) != awsclient.BoolValue(cluster.DeletionProtection),
+	case pointer.Int64Value(cr.Spec.ForProvider.BackupRetentionPeriod) != pointer.Int64Value(cluster.BackupRetentionPeriod),
+		pointer.StringValue(cr.Spec.ForProvider.DBClusterParameterGroupName) != pointer.StringValue(cluster.DBClusterParameterGroup),
+		pointer.BoolValue(cr.Spec.ForProvider.DeletionProtection) != pointer.BoolValue(cluster.DeletionProtection),
 		!areSameElements(cr.Spec.ForProvider.EnableCloudwatchLogsExports, cluster.EnabledCloudwatchLogsExports),
-		awsclient.Int64Value(cr.Spec.ForProvider.Port) != awsclient.Int64Value(cluster.Port),
-		awsclient.StringValue(cr.Spec.ForProvider.PreferredBackupWindow) != awsclient.StringValue(cluster.PreferredBackupWindow),
-		awsclient.StringValue(cr.Spec.ForProvider.PreferredMaintenanceWindow) != awsclient.StringValue(cluster.PreferredMaintenanceWindow):
-		return false, nil
+		!isEngineVersionUpToDate(cr, resp),
+		pointer.Int64Value(cr.Spec.ForProvider.Port) != pointer.Int64Value(cluster.Port),
+		pointer.StringValue(cr.Spec.ForProvider.PreferredBackupWindow) != pointer.StringValue(cluster.PreferredBackupWindow),
+		pointer.StringValue(cr.Spec.ForProvider.PreferredMaintenanceWindow) != pointer.StringValue(cluster.PreferredMaintenanceWindow):
+		return false, "", nil
 	}
 
-	return svcutils.AreTagsUpToDate(e.client, cr.Spec.ForProvider.Tags, cluster.DBClusterArn)
+	areTagsUpToDate, err := svcutils.AreTagsUpToDate(e.client, cr.Spec.ForProvider.Tags, cluster.DBClusterArn)
+	return areTagsUpToDate, "", err
 }
 
 func (e *hooks) preUpdate(ctx context.Context, cr *svcapitypes.DBCluster, obj *svcsdk.ModifyDBClusterInput) error {
-	obj.DBClusterIdentifier = awsclient.String(meta.GetExternalName(cr))
+	obj.DBClusterIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.CloudwatchLogsExportConfiguration = generateCloudWatchExportConfiguration(
 		cr.Spec.ForProvider.EnableCloudwatchLogsExports,
 		cr.Status.AtProvider.EnabledCloudwatchLogsExports)
@@ -197,19 +222,58 @@ func (e *hooks) preUpdate(ctx context.Context, cr *svcapitypes.DBCluster, obj *s
 	if pwchanged {
 		obj.MasterUserPassword = aws.String(pw)
 	}
+
+	// ModifyDBCluster() returns error, when trying to upgrade major (minor is fine) EngineVersion:
+	// "Cannot change VPC security group while doing a major version upgrade."
+	// therefore EngineVersion update is entirely done separately in postUpdate
+	obj.EngineVersion = nil
+	// In case of a custom DBClusterParameterGroup, AWS requires for a major version update that
+	// EngineVersion and DBClusterParameterGroupName are in the same ModifyDBCluster()-call
+	obj.DBClusterParameterGroupName = nil
+
 	return nil
 }
 
-func (e *hooks) postUpdate(_ context.Context, cr *svcapitypes.DBCluster, resp *svcsdk.ModifyDBClusterOutput, upd managed.ExternalUpdate, err error) (managed.ExternalUpdate, error) {
+func (e *hooks) postUpdate(ctx context.Context, cr *svcapitypes.DBCluster, resp *svcsdk.ModifyDBClusterOutput, upd managed.ExternalUpdate, err error) (managed.ExternalUpdate, error) {
 	if err != nil {
 		return managed.ExternalUpdate{}, err
+	}
+
+	input := GenerateDescribeDBClustersInput(cr)
+	// GenerateDescribeDBClustersInput returns an empty DescribeDBClustersInput
+	// and the function is generated by ack-generate, so we manually need to set the
+	// DBClusterIdentifier
+	input.DBClusterIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
+	out, err := e.client.DescribeDBClustersWithContext(ctx, input)
+	if err != nil {
+		return managed.ExternalUpdate{}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+	}
+
+	needsEngineVersionUpdate := !isEngineVersionUpToDate(cr, out)
+	needsDBClusterParamGroupUpdate := pointer.StringValue(cr.Spec.ForProvider.DBClusterParameterGroupName) != pointer.StringValue(out.DBClusters[0].DBClusterParameterGroup)
+	needsPostUpdate := needsEngineVersionUpdate || needsDBClusterParamGroupUpdate
+
+	if needsPostUpdate {
+		modifyInput := &svcsdk.ModifyDBClusterInput{
+			DBClusterIdentifier:         pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+			ApplyImmediately:            cr.Spec.ForProvider.ApplyImmediately,
+			DBClusterParameterGroupName: cr.Spec.ForProvider.DBClusterParameterGroupName,
+		}
+		if needsEngineVersionUpdate {
+			modifyInput.EngineVersion = cr.Spec.ForProvider.EngineVersion
+			modifyInput.AllowMajorVersionUpgrade = cr.Spec.ForProvider.AllowMajorVersionUpgrade
+		}
+
+		if _, err = e.client.ModifyDBClusterWithContext(ctx, modifyInput); err != nil {
+			return managed.ExternalUpdate{}, err
+		}
 	}
 
 	return upd, svcutils.UpdateTagsForResource(e.client, cr.Spec.ForProvider.Tags, resp.DBCluster.DBClusterArn)
 }
 
-func (e *hooks) preCreate(ctx context.Context, cr *svcapitypes.DBCluster, obj *svcsdk.CreateDBClusterInput) error {
-	obj.DBClusterIdentifier = awsclient.String(meta.GetExternalName(cr))
+func (e *hooks) preCreate(ctx context.Context, cr *svcapitypes.DBCluster, obj *svcsdk.CreateDBClusterInput) error { //nolint:gocyclo
+	obj.DBClusterIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 
 	pw, _, err := e.getPasswordFromRef(ctx, cr.Spec.ForProvider.MasterUserPasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
 	if resource.IgnoreNotFound(err) != nil {
@@ -225,7 +289,29 @@ func (e *hooks) preCreate(ctx context.Context, cr *svcapitypes.DBCluster, obj *s
 		}
 	}
 
-	obj.MasterUserPassword = awsclient.String(pw)
+	obj.MasterUserPassword = pointer.ToOrNilIfZeroValue(pw)
+	if cr.Spec.ForProvider.RestoreFrom != nil {
+		switch cr.Spec.ForProvider.RestoreFrom.Source {
+		case svcapitypes.RestoreSourceSnapshot:
+			input := generateRestoreDBClusterFromSnapshotInput(cr)
+			input.DBClusterIdentifier = obj.DBClusterIdentifier
+			input.VpcSecurityGroupIds = obj.VpcSecurityGroupIds
+
+			if _, err = e.client.RestoreDBClusterFromSnapshotWithContext(ctx, input); err != nil {
+				return errors.Wrap(err, errRestore)
+			}
+		case svcapitypes.RestoreSourcePointInTime:
+			input := generateRestoreDBClusterToPointInTimeInput(cr)
+			input.DBClusterIdentifier = obj.DBClusterIdentifier
+			input.VpcSecurityGroupIds = obj.VpcSecurityGroupIds
+
+			if _, err = e.client.RestoreDBClusterToPointInTimeWithContext(ctx, input); err != nil {
+				return errors.Wrap(err, errRestore)
+			}
+		default:
+			return errors.New(errUnknownRestoreFromSource)
+		}
+	}
 	return nil
 }
 
@@ -243,13 +329,96 @@ func (e *hooks) postCreate(ctx context.Context, cr *svcapitypes.DBCluster, resp 
 		cre.ConnectionDetails[xpv1.ResourceCredentialsSecretPasswordKey] = []byte(pw)
 	}
 
-	cre.ConnectionDetails[xpv1.ResourceCredentialsSecretUserKey] = []byte(awsclient.StringValue(cr.Spec.ForProvider.MasterUsername))
+	cre.ConnectionDetails[xpv1.ResourceCredentialsSecretUserKey] = []byte(pointer.StringValue(cr.Spec.ForProvider.MasterUsername))
 	// Tags are added during update
 	return cre, nil
 }
 
+func generateRestoreDBClusterFromSnapshotInput(cr *svcapitypes.DBCluster) *svcsdk.RestoreDBClusterFromSnapshotInput { //nolint:gocyclo
+	res := &svcsdk.RestoreDBClusterFromSnapshotInput{}
+
+	if cr.Spec.ForProvider.AvailabilityZones != nil {
+		res.SetAvailabilityZones(cr.Spec.ForProvider.AvailabilityZones)
+	}
+
+	if cr.Spec.ForProvider.DBSubnetGroupName != nil {
+		res.SetDBSubnetGroupName(*cr.Spec.ForProvider.DBSubnetGroupName)
+	}
+
+	if cr.Spec.ForProvider.DeletionProtection != nil {
+		res.SetDeletionProtection(*cr.Spec.ForProvider.DeletionProtection)
+	}
+
+	if cr.Spec.ForProvider.EnableCloudwatchLogsExports != nil {
+		res.SetEnableCloudwatchLogsExports(cr.Spec.ForProvider.EnableCloudwatchLogsExports)
+	}
+
+	if cr.Spec.ForProvider.Engine != nil {
+		res.SetEngine(*cr.Spec.ForProvider.Engine)
+	}
+
+	if cr.Spec.ForProvider.EngineVersion != nil {
+		res.SetEngineVersion(*cr.Spec.ForProvider.EngineVersion)
+	}
+
+	if cr.Spec.ForProvider.KMSKeyID != nil {
+		res.SetKmsKeyId(*cr.Spec.ForProvider.KMSKeyID)
+	}
+
+	if cr.Spec.ForProvider.Port != nil {
+		res.SetPort(*cr.Spec.ForProvider.Port)
+	}
+
+	if cr.Spec.ForProvider.RestoreFrom != nil && cr.Spec.ForProvider.RestoreFrom.Snapshot != nil {
+		res.SetSnapshotIdentifier(cr.Spec.ForProvider.RestoreFrom.Snapshot.SnapshotIdentifier)
+	}
+
+	if cr.Spec.ForProvider.Tags != nil {
+		var tags []*svcsdk.Tag
+		for _, tag := range cr.Spec.ForProvider.Tags {
+			tags = append(tags, &svcsdk.Tag{Key: tag.Key, Value: tag.Value})
+		}
+
+		res.SetTags(tags)
+	}
+
+	return res
+}
+
+func generateRestoreDBClusterToPointInTimeInput(cr *svcapitypes.DBCluster) *svcsdk.RestoreDBClusterToPointInTimeInput {
+	p := cr.Spec.ForProvider
+	res := &svcsdk.RestoreDBClusterToPointInTimeInput{
+		DBSubnetGroupName:           p.DBSubnetGroupName,
+		DeletionProtection:          p.DeletionProtection,
+		EnableCloudwatchLogsExports: p.EnableCloudwatchLogsExports,
+		KmsKeyId:                    p.KMSKeyID,
+		Port:                        p.Port,
+		UseLatestRestorableTime:     p.RestoreFrom.PointInTime.UseLatestRestorableTime,
+		VpcSecurityGroupIds:         p.VPCSecurityGroupIDs,
+	}
+	if p.RestoreFrom != nil {
+		if p.RestoreFrom.PointInTime != nil {
+			if p.RestoreFrom.PointInTime.RestoreTime != nil {
+				res.SetRestoreToTime(p.RestoreFrom.PointInTime.RestoreTime.Time)
+			}
+			res.RestoreType = p.RestoreFrom.PointInTime.RestoreType
+			res.SourceDBClusterIdentifier = &p.RestoreFrom.PointInTime.SourceDBClusterIdentifier
+		}
+	}
+	if cr.Spec.ForProvider.Tags != nil {
+		var tags []*svcsdk.Tag
+		for _, tag := range cr.Spec.ForProvider.Tags {
+			tags = append(tags, &svcsdk.Tag{Key: tag.Key, Value: tag.Value})
+		}
+
+		res.SetTags(tags)
+	}
+
+	return res
+}
+
 func preDelete(_ context.Context, cr *svcapitypes.DBCluster, obj *svcsdk.DeleteDBClusterInput) (bool, error) {
-	obj.DBClusterIdentifier = awsclient.String(meta.GetExternalName(cr))
+	obj.DBClusterIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.FinalDBSnapshotIdentifier = cr.Spec.ForProvider.FinalDBSnapshotIdentifier
 	obj.SkipFinalSnapshot = cr.Spec.ForProvider.SkipFinalSnapshot
 	return false, nil
@@ -258,7 +427,7 @@ func preDelete(_ context.Context, cr *svcapitypes.DBCluster, obj *svcsdk.DeleteD
 func filterList(cr *svcapitypes.DBCluster, list *svcsdk.DescribeDBClustersOutput) *svcsdk.DescribeDBClustersOutput {
 	id := meta.GetExternalName(cr)
 	for _, instance := range list.DBClusters {
-		if awsclient.StringValue(instance.DBClusterIdentifier) == id {
+		if pointer.StringValue(instance.DBClusterIdentifier) == id {
 			return &svcsdk.DescribeDBClustersOutput{
 				Marker:     list.Marker,
 				DBClusters: []*svcsdk.DBCluster{instance},
@@ -278,12 +447,12 @@ func generateCloudWatchExportConfiguration(spec, current []*string) *svcsdk.Clou
 
 	currentMap := make(map[string]struct{}, len(current))
 	for _, currentID := range current {
-		currentMap[awsclient.StringValue(currentID)] = struct{}{}
+		currentMap[pointer.StringValue(currentID)] = struct{}{}
 	}
 
 	specMap := make(map[string]struct{}, len(spec))
 	for _, specID := range spec {
-		key := awsclient.StringValue(specID)
+		key := pointer.StringValue(specID)
 		specMap[key] = struct{}{}
 
 		if _, exists := currentMap[key]; !exists {
@@ -292,7 +461,7 @@ func generateCloudWatchExportConfiguration(spec, current []*string) *svcsdk.Clou
 	}
 
 	for _, currentID := range current {
-		if _, exists := specMap[awsclient.StringValue(currentID)]; !exists {
+		if _, exists := specMap[pointer.StringValue(currentID)]; !exists {
 			toDisable = append(toDisable, currentID)
 		}
 	}
@@ -310,16 +479,32 @@ func areSameElements(a1, a2 []*string) bool {
 
 	m2 := make(map[string]struct{}, len(a2))
 	for _, s2 := range a2 {
-		m2[awsclient.StringValue(s2)] = struct{}{}
+		m2[pointer.StringValue(s2)] = struct{}{}
 	}
 
 	for _, s1 := range a1 {
-		v1 := awsclient.StringValue(s1)
+		v1 := pointer.StringValue(s1)
 		if _, exists := m2[v1]; !exists {
 			return false
 		}
 	}
 
+	return true
+}
+
+func isEngineVersionUpToDate(cr *svcapitypes.DBCluster, out *svcsdk.DescribeDBClustersOutput) bool {
+	// If EngineVersion is not set, AWS sets a default value,
+	// so we do not try to update in this case
+	if cr.Spec.ForProvider.EngineVersion != nil {
+		if out.DBClusters[0].EngineVersion == nil {
+			return false
+		}
+
+		// Upgrade is only necessary if the spec version is higher.
+		// Downgrades are not possible in pointer.
+		c := utils.CompareEngineVersions(*cr.Spec.ForProvider.EngineVersion, *out.DBClusters[0].EngineVersion)
+		return c <= 0
+	}
 	return true
 }
 
@@ -357,25 +542,11 @@ func (e *hooks) getPasswordFromRef(ctx context.Context, in *xpv1.SecretKeySelect
 
 func getConnectionDetails(cr *svcapitypes.DBCluster) managed.ConnectionDetails {
 	return managed.ConnectionDetails{
-		xpv1.ResourceCredentialsSecretUserKey:     []byte(awsclient.StringValue(cr.Spec.ForProvider.MasterUsername)),
-		xpv1.ResourceCredentialsSecretEndpointKey: []byte(awsclient.StringValue(cr.Status.AtProvider.Endpoint)),
-		xpv1.ResourceCredentialsSecretPortKey:     []byte(strconv.Itoa(int(awsclient.Int64Value(cr.Spec.ForProvider.Port)))),
-		"readerEndpoint":                          []byte(awsclient.StringValue(cr.Status.AtProvider.ReaderEndpoint)),
+		xpv1.ResourceCredentialsSecretUserKey:     []byte(pointer.StringValue(cr.Spec.ForProvider.MasterUsername)),
+		xpv1.ResourceCredentialsSecretEndpointKey: []byte(pointer.StringValue(cr.Status.AtProvider.Endpoint)),
+		xpv1.ResourceCredentialsSecretPortKey:     []byte(strconv.Itoa(int(pointer.Int64Value(cr.Spec.ForProvider.Port)))),
+		"readerEndpoint":                          []byte(pointer.StringValue(cr.Status.AtProvider.ReaderEndpoint)),
 	}
-}
-
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*svcapitypes.DBCluster)
-	if !ok {
-		return errors.New(errNotDBCluster)
-	}
-
-	cr.Spec.ForProvider.Tags = svcutils.AddExternalTags(mg, cr.Spec.ForProvider.Tags)
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
 }
 
 func (e *hooks) savePasswordSecret(ctx context.Context, cr *svcapitypes.DBCluster, pw string) error {

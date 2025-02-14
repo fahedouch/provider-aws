@@ -28,6 +28,43 @@ var (
 )
 
 // +kubebuilder:skipversion
+type AccountPolicy struct {
+	AccountID *string `json:"accountID,omitempty"`
+
+	LastUpdatedTime *int64 `json:"lastUpdatedTime,omitempty"`
+
+	PolicyName *string `json:"policyName,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type Delivery struct {
+	ARN *string `json:"arn,omitempty"`
+
+	DeliveryDestinationARN *string `json:"deliveryDestinationARN,omitempty"`
+
+	Tags map[string]*string `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DeliveryDestination struct {
+	ARN *string `json:"arn,omitempty"`
+
+	Tags map[string]*string `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DeliveryDestinationConfiguration struct {
+	DestinationResourceARN *string `json:"destinationResourceARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DeliverySource struct {
+	ARN *string `json:"arn,omitempty"`
+
+	Tags map[string]*string `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type Destination struct {
 	ARN *string `json:"arn,omitempty"`
 
@@ -68,6 +105,10 @@ type LogGroup_SDK struct {
 
 	CreationTime *int64 `json:"creationTime,omitempty"`
 
+	DataProtectionStatus *string `json:"dataProtectionStatus,omitempty"`
+
+	InheritedProperties []*string `json:"inheritedProperties,omitempty"`
+
 	KMSKeyID *string `json:"kmsKeyID,omitempty"`
 
 	LogGroupName *string `json:"logGroupName,omitempty"`
@@ -75,9 +116,9 @@ type LogGroup_SDK struct {
 	MetricFilterCount *int64 `json:"metricFilterCount,omitempty"`
 	// The number of days to retain the log events in the specified log group. Possible
 	// values are: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731,
-	// 1827, and 3653.
+	// 1096, 1827, 2192, 2557, 2922, 3288, and 3653.
 	//
-	// To set a log group to never have log events expire, use DeleteRetentionPolicy
+	// To set a log group so that its log events do not expire, use DeleteRetentionPolicy
 	// (https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_DeleteRetentionPolicy.html).
 	RetentionInDays *int64 `json:"retentionInDays,omitempty"`
 
@@ -126,8 +167,12 @@ type QueryInfo struct {
 }
 
 // +kubebuilder:skipversion
-type ResourcePolicy struct {
+type ResourcePolicy_SDK struct {
 	LastUpdatedTime *int64 `json:"lastUpdatedTime,omitempty"`
+
+	PolicyDocument *string `json:"policyDocument,omitempty"`
+
+	PolicyName *string `json:"policyName,omitempty"`
 }
 
 // +kubebuilder:skipversion

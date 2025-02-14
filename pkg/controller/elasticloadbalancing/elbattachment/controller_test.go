@@ -22,20 +22,18 @@ import (
 
 	awselb "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing"
 	awselbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
-
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
 	"github.com/crossplane-contrib/provider-aws/apis/elasticloadbalancing/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/elasticloadbalancing/elb"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/elasticloadbalancing/elb/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -160,7 +158,7 @@ func TestObserve(t *testing.T) {
 					ELBName:    elbName,
 					InstanceID: instanceID,
 				})),
-				err: awsclient.Wrap(errBoom, errDescribe),
+				err: errorutils.Wrap(errBoom, errDescribe),
 			},
 		},
 	}
@@ -237,7 +235,7 @@ func TestCreate(t *testing.T) {
 						InstanceID: instanceID,
 					}),
 					withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -297,7 +295,7 @@ func TestDelete(t *testing.T) {
 			want: want{
 				cr: elbAttachmentResource(withExternalName(elbName),
 					withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 	}
@@ -305,7 +303,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.elb}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

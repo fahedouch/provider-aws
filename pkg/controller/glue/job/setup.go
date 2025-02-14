@@ -22,12 +22,6 @@ import (
 	svcsdk "github.com/aws/aws-sdk-go/service/glue"
 	"github.com/aws/aws-sdk-go/service/glue/glueiface"
 	svcsdksts "github.com/aws/aws-sdk-go/service/sts"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -35,12 +29,20 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/glue/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/glue"
+	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/glue/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -73,17 +75,29 @@ func SetupJob(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.JobGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Job{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.JobGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type hooks struct {
@@ -92,12 +106,12 @@ type hooks struct {
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Job, obj *svcsdk.DeleteJobInput) (bool, error) {
-	obj.JobName = awsclients.String(meta.GetExternalName(cr))
+	obj.JobName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Job, obj *svcsdk.GetJobInput) error {
-	obj.JobName = awsclients.String(meta.GetExternalName(cr))
+	obj.JobName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -118,17 +132,17 @@ func lateInitialize(spec *svcapitypes.JobParameters, resp *svcsdk.GetJobOutput) 
 
 	// Command is required, so spec should never be nil
 	if resp.Job.Command != nil {
-		spec.Command.PythonVersion = awsclients.LateInitializeStringPtr(spec.Command.PythonVersion, resp.Job.Command.PythonVersion)
+		spec.Command.PythonVersion = pointer.LateInitialize(spec.Command.PythonVersion, resp.Job.Command.PythonVersion)
 	}
 
 	if spec.ExecutionProperty == nil {
 		spec.ExecutionProperty = &svcapitypes.ExecutionProperty{}
 	}
-	spec.ExecutionProperty.MaxConcurrentRuns = awsclients.LateInitializeInt64Ptr(spec.ExecutionProperty.MaxConcurrentRuns, resp.Job.ExecutionProperty.MaxConcurrentRuns)
+	spec.ExecutionProperty.MaxConcurrentRuns = pointer.LateInitialize(spec.ExecutionProperty.MaxConcurrentRuns, resp.Job.ExecutionProperty.MaxConcurrentRuns)
 
-	spec.GlueVersion = awsclients.LateInitializeStringPtr(spec.GlueVersion, resp.Job.GlueVersion)
-	spec.MaxRetries = awsclients.LateInitializeInt64Ptr(spec.MaxRetries, resp.Job.MaxRetries)
-	spec.Timeout = awsclients.LateInitializeInt64Ptr(spec.Timeout, resp.Job.Timeout)
+	spec.GlueVersion = pointer.LateInitialize(spec.GlueVersion, resp.Job.GlueVersion)
+	spec.MaxRetries = pointer.LateInitialize(spec.MaxRetries, resp.Job.MaxRetries)
+	spec.Timeout = pointer.LateInitialize(spec.Timeout, resp.Job.Timeout)
 
 	// if WorkerType & NumberOfWorkers are used, AWS is in charge of setting MaxCapacity (not the user, not we)
 	if spec.MaxCapacity == nil || (spec.WorkerType != nil && spec.NumberOfWorkers != nil) {
@@ -139,31 +153,26 @@ func lateInitialize(spec *svcapitypes.JobParameters, resp *svcsdk.GetJobOutput) 
 	return nil
 }
 
-func (h *hooks) isUpToDate(cr *svcapitypes.Job, resp *svcsdk.GetJobOutput) (bool, error) {
-	// no checks needed if user deletes the resource
-	// ensures that an error (e.g. missing ARN) here does not prevent deletion
-	if meta.WasDeleted(cr) {
-		return true, nil
-	}
-
+func (h *hooks) isUpToDate(_ context.Context, cr *svcapitypes.Job, resp *svcsdk.GetJobOutput) (bool, string, error) {
 	currentParams := customGenerateJob(resp).Spec.ForProvider
 
-	if !cmp.Equal(cr.Spec.ForProvider, currentParams, cmpopts.EquateEmpty(),
+	if diff := cmp.Diff(cr.Spec.ForProvider, currentParams, cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(&xpv1.Reference{}, &xpv1.Selector{}, []xpv1.Reference{}),
-		cmpopts.IgnoreFields(svcapitypes.JobParameters{}, "Region", "AllocatedCapacity", "Tags")) {
-		return false, nil
+		cmpopts.IgnoreFields(svcapitypes.JobParameters{}, "Region", "AllocatedCapacity", "Tags")); diff != "" {
+		return false, diff, nil
 	}
 
 	// retrieve ARN and check if Tags need update
 	arn, err := h.getARN(cr)
 	if err != nil {
-		return true, err
+		return true, "", err
 	}
-	return svcutils.AreTagsUpToDate(h.client, cr.Spec.ForProvider.Tags, arn)
+	areTagsUpToDate, err := svcutils.AreTagsUpToDate(h.client, cr.Spec.ForProvider.Tags, arn)
+	return areTagsUpToDate, "", err
 }
 
 func preUpdate(_ context.Context, cr *svcapitypes.Job, obj *svcsdk.UpdateJobInput) error {
-	obj.JobName = awsclients.String(meta.GetExternalName(cr))
+	obj.JobName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 
 	obj.JobUpdate = &svcsdk.JobUpdate{
 		DefaultArguments:        cr.Spec.ForProvider.DefaultArguments,
@@ -229,9 +238,9 @@ func (h *hooks) postUpdate(ctx context.Context, cr *svcapitypes.Job, obj *svcsdk
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.Job, obj *svcsdk.CreateJobInput) error {
-	obj.Name = awsclients.String(meta.GetExternalName(cr))
+	obj.Name = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 
-	obj.Role = awsclients.String(cr.Spec.ForProvider.Role)
+	obj.Role = pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.Role)
 	obj.SecurityConfiguration = cr.Spec.ForProvider.SecurityConfiguration
 
 	if cr.Spec.ForProvider.Connections != nil {
@@ -261,7 +270,7 @@ func (h *hooks) postCreate(ctx context.Context, cr *svcapitypes.Job, obj *svcsdk
 		return managed.ExternalCreation{}, err
 	}
 	annotation := map[string]string{
-		annotationARN: awsclients.StringValue(jobARN),
+		annotationARN: pointer.StringValue(jobARN),
 	}
 	meta.AddAnnotations(cr, annotation)
 
@@ -273,7 +282,7 @@ func customGenerateJob(resp *svcsdk.GetJobOutput) *svcapitypes.Job {
 
 	cr := GenerateJob(resp)
 
-	cr.Spec.ForProvider.Role = awsclients.StringValue(resp.Job.Role)
+	cr.Spec.ForProvider.Role = pointer.StringValue(resp.Job.Role)
 	cr.Spec.ForProvider.SecurityConfiguration = resp.Job.SecurityConfiguration
 
 	if resp.Job.Connections != nil {
@@ -324,9 +333,9 @@ func (h *hooks) buildARN(ctx context.Context, cr *svcapitypes.Job) (*string, err
 
 	var accountID string
 
-	sess, err := awsclients.GetConfigV1(ctx, h.kube, cr, cr.Spec.ForProvider.Region)
+	sess, err := connectaws.GetConfigV1(ctx, h.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
-		return nil, awsclients.Wrap(err, errBuildARN)
+		return nil, errorutils.Wrap(err, errBuildARN)
 	}
 
 	stsclient := svcsdksts.New(sess)
@@ -335,7 +344,7 @@ func (h *hooks) buildARN(ctx context.Context, cr *svcapitypes.Job) (*string, err
 	if err != nil {
 		return nil, err
 	}
-	accountID = awsclients.StringValue(callerID.Account)
+	accountID = pointer.StringValue(callerID.Account)
 
 	jobARN := ("arn:aws:glue:" +
 		cr.Spec.ForProvider.Region + ":" +

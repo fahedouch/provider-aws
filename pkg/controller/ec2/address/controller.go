@@ -18,17 +18,11 @@ package address
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -36,12 +30,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -65,21 +65,33 @@ func SetupAddress(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient()}),
+		managed.WithCreationGracePeriod(3 * time.Minute),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.AddressGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.Address{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.AddressGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient()}),
-			managed.WithCreationGracePeriod(3*time.Minute),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -91,7 +103,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +115,7 @@ type external struct {
 	client ec2.AddressClient
 }
 
-func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) { // nolint:gocyclo
+func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mgd.(*v1beta1.Address)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
@@ -122,14 +134,14 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 			PublicIps: []string{meta.GetExternalName(cr)},
 		})
 		if err != nil {
-			return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(ec2.IsAddressNotFoundErr, err), errDescribe)
+			return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(ec2.IsAddressNotFoundErr, err), errDescribe)
 		}
 	} else {
 		output, err = e.client.DescribeAddresses(ctx, &awsec2.DescribeAddressesInput{
 			AllocationIds: []string{meta.GetExternalName(cr)},
 		})
 		if err != nil {
-			return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(ec2.IsAddressNotFoundErr, err), errDescribe)
+			return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(ec2.IsAddressNotFoundErr, err), errDescribe)
 		}
 
 	}
@@ -175,7 +187,7 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 		PublicIpv4Pool:        cr.Spec.ForProvider.PublicIPv4Pool,
 	})
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if ec2.IsStandardDomain(cr.Spec.ForProvider) {
@@ -198,15 +210,15 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		Resources: []string{meta.GetExternalName(cr)},
 		Tags:      ec2.GenerateEC2Tags(cr.Spec.ForProvider.Tags),
 	}); err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(err, errCreateTags)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errCreateTags)
 	}
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.Address)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
@@ -222,33 +234,10 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 		})
 	}
 
-	return awsclient.Wrap(resource.Ignore(ec2.IsAddressNotFoundErr, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(ec2.IsAddressNotFoundErr, err), errDelete)
 }
 
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mgd resource.Managed) error {
-	cr, ok := mgd.(*v1beta1.Address)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-	tagMap := map[string]string{}
-	for _, t := range cr.Spec.ForProvider.Tags {
-		tagMap[t.Key] = t.Value
-	}
-	for k, v := range resource.GetExternalTags(mgd) {
-		tagMap[k] = v
-	}
-	cr.Spec.ForProvider.Tags = make([]v1beta1.Tag, len(tagMap))
-	i := 0
-	for k, v := range tagMap {
-		cr.Spec.ForProvider.Tags[i] = v1beta1.Tag{Key: k, Value: v}
-		i++
-	}
-	sort.Slice(cr.Spec.ForProvider.Tags, func(i, j int) bool {
-		return cr.Spec.ForProvider.Tags[i].Key < cr.Spec.ForProvider.Tags[j].Key
-	})
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

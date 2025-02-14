@@ -22,12 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -36,12 +30,19 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -70,18 +71,30 @@ func SetupOpenIDConnectProvider(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: iam.NewOpenIDConnectProviderClient}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithInitializers(),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.OpenIDConnectProviderGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.OpenIDConnectProvider{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.OpenIDConnectProviderGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: iam.NewOpenIDConnectProviderClient}),
-			managed.WithInitializers(&tagger{kube: mgr.GetClient()}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -90,7 +103,7 @@ type connector struct {
 }
 
 func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, awsclient.GlobalRegion)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, connectaws.GlobalRegion)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +139,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	})
 
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errGet)
 	}
 	if observedProvider == nil {
 		return managed.ExternalObservation{}, errors.New(errSDK)
@@ -161,14 +174,14 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 	})
 
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	meta.SetExternalName(cr, aws.ToString(observed.OpenIDConnectProviderArn))
 	return managed.ExternalCreation{}, nil
 }
 
-func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { // nolint:gocyclo
+func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { //nolint:gocyclo
 	// NOTE(cebernardi) gocyclo is disabled because the method needs to check the different components (Thumbprint,
 	// ClientID and Tags and it's updating them with dedicated calls, hence increasing the complexity
 
@@ -182,7 +195,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 	})
 
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(err, errGet)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errGet)
 	}
 	if observedProvider == nil {
 		return managed.ExternalUpdate{}, errors.New(errSDK)
@@ -196,7 +209,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			OpenIDConnectProviderArn: arn,
 			ThumbprintList:           cr.Spec.ForProvider.ThumbprintList,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdateThumbprint)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdateThumbprint)
 		}
 	}
 
@@ -206,7 +219,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			OpenIDConnectProviderArn: arn,
 			ClientID:                 aws.String(clientID),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errAddClientID)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errAddClientID)
 		}
 	}
 
@@ -215,7 +228,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			OpenIDConnectProviderArn: arn,
 			ClientID:                 aws.String(clientID),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errRemoveClientID)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errRemoveClientID)
 		}
 	}
 
@@ -226,7 +239,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			OpenIDConnectProviderArn: arn,
 			Tags:                     addTags,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errAddTags)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errAddTags)
 		}
 	}
 
@@ -235,23 +248,28 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			OpenIDConnectProviderArn: arn,
 			TagKeys:                  removeTags,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errRemoveTags)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errRemoveTags)
 		}
 	}
 
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.OpenIDConnectProvider)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 	_, err := e.client.DeleteOpenIDConnectProvider(ctx, &awsiam.DeleteOpenIDConnectProviderInput{
 		OpenIDConnectProviderArn: aws.String(meta.GetExternalName(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errDelete)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 func (e *external) getOpenIDConnectProviderByTags(ctx context.Context, tags map[string]string) (*string, error) {
@@ -262,7 +280,7 @@ func (e *external) getOpenIDConnectProviderByTags(ctx context.Context, tags map[
 
 	oidcs, err := e.client.ListOpenIDConnectProviders(ctx, &awsiam.ListOpenIDConnectProvidersInput{})
 	if err != nil || len(oidcs.OpenIDConnectProviderList) == 0 {
-		return nil, awsclient.Wrap(err, errList)
+		return nil, errorutils.Wrap(err, errList)
 	}
 
 	for _, o := range oidcs.OpenIDConnectProviderList {
@@ -270,7 +288,7 @@ func (e *external) getOpenIDConnectProviderByTags(ctx context.Context, tags map[
 			OpenIDConnectProviderArn: o.Arn,
 		})
 		if err != nil {
-			return nil, awsclient.Wrap(err, errListTags)
+			return nil, errorutils.Wrap(err, errListTags)
 		}
 
 		for _, t := range tags.Tags {
@@ -280,30 +298,4 @@ func (e *external) getOpenIDConnectProviderByTags(ctx context.Context, tags map[
 		}
 	}
 	return nil, nil
-}
-
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mgd resource.Managed) error {
-	cr, ok := mgd.(*v1beta1.OpenIDConnectProvider)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-	added := false
-	tagMap := map[string]string{}
-	for _, t := range cr.Spec.ForProvider.Tags {
-		tagMap[t.Key] = t.Value
-	}
-	for k, v := range resource.GetExternalTags(mgd) {
-		if p, ok := tagMap[k]; !ok || v != p {
-			cr.Spec.ForProvider.Tags = append(cr.Spec.ForProvider.Tags, v1beta1.Tag{Key: k, Value: v})
-			added = true
-		}
-	}
-	if !added {
-		return nil
-	}
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
 }

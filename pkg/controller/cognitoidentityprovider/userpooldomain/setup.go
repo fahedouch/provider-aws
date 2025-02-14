@@ -16,21 +16,21 @@ package userpooldomain
 import (
 	"context"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	svcsdk "github.com/aws/aws-sdk-go/service/cognitoidentityprovider"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cognitoidentityprovider/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupUserPoolDomain adds a controller that reconciles User.
@@ -51,25 +51,37 @@ func SetupUserPoolDomain(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.UserPoolDomainGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.UserPoolDomain{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.UserPoolDomainGroupVersionKind),
-			managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.UserPoolDomain, obj *svcsdk.DescribeUserPoolDomainInput) error {
-	obj.Domain = awsclients.String(meta.GetExternalName(cr))
+	obj.Domain = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.UserPoolDomain, obj *svcsdk.DeleteUserPoolDomainInput) (bool, error) {
-	obj.Domain = awsclients.String(meta.GetExternalName(cr))
+	obj.Domain = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.UserPoolId = cr.Spec.ForProvider.UserPoolID
 	return false, nil
 }
@@ -88,7 +100,7 @@ func postObserve(_ context.Context, cr *svcapitypes.UserPoolDomain, obj *svcsdk.
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.UserPoolDomain, obj *svcsdk.CreateUserPoolDomainInput) error {
-	obj.Domain = awsclients.String(meta.GetExternalName(cr))
+	obj.Domain = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.UserPoolId = cr.Spec.ForProvider.UserPoolID
 	return nil
 }

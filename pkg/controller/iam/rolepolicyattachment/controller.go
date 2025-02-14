@@ -22,22 +22,24 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	awsiamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -57,19 +59,31 @@ func SetupRolePolicyAttachment(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: iam.NewRolePolicyAttachmentClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.RolePolicyAttachmentGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.RolePolicyAttachment{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.RolePolicyAttachmentGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: iam.NewRolePolicyAttachmentClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -78,7 +92,7 @@ type connector struct {
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, awsclient.GlobalRegion)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, connectaws.GlobalRegion)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +114,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		RoleName: aws.String(cr.Spec.ForProvider.RoleName),
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errGet)
 	}
 
 	var attachedPolicyObject *awsiamtypes.AttachedPolicy
@@ -114,7 +128,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	cr.SetConditions(xpv1.Available())
-	cr.Status.AtProvider.AttachedPolicyARN = awsclient.StringValue(attachedPolicyObject.PolicyArn)
+	cr.Status.AtProvider.AttachedPolicyARN = pointer.StringValue(attachedPolicyObject.PolicyArn)
 	return managed.ExternalObservation{
 		ResourceExists:   true,
 		ResourceUpToDate: true,
@@ -130,7 +144,7 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 		PolicyArn: aws.String(cr.Spec.ForProvider.PolicyARN),
 		RoleName:  aws.String(cr.Spec.ForProvider.RoleName),
 	})
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errAttach)
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errAttach)
 }
 
 func (e *external) Update(_ context.Context, _ resource.Managed) (managed.ExternalUpdate, error) {
@@ -138,14 +152,19 @@ func (e *external) Update(_ context.Context, _ resource.Managed) (managed.Extern
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.RolePolicyAttachment)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 	_, err := e.client.DetachRolePolicy(ctx, &awsiam.DetachRolePolicyInput{
 		PolicyArn: aws.String(cr.Spec.ForProvider.PolicyARN),
 		RoleName:  aws.String(cr.Spec.ForProvider.RoleName),
 	})
-	return awsclient.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errDetach)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errDetach)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

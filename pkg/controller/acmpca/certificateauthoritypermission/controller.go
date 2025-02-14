@@ -23,10 +23,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsacmpca "github.com/aws/aws-sdk-go-v2/service/acmpca"
 	awsacmpcatypes "github.com/aws/aws-sdk-go-v2/service/acmpca/types"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -34,12 +30,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/acmpca/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/acmpca"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -58,20 +60,32 @@ func SetupCertificateAuthorityPermission(mgr ctrl.Manager, o controller.Options)
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{client: mgr.GetClient(), newClientFn: acmpca.NewCAPermissionClient}),
+		managed.WithConnectionPublishers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithInitializers(),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.CertificateAuthorityPermissionGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.CertificateAuthorityPermission{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.CertificateAuthorityPermissionGroupVersionKind),
-			managed.WithExternalConnecter(&connector{client: mgr.GetClient(), newClientFn: acmpca.NewCAPermissionClient}),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithInitializers(),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -84,7 +98,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.client, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.client, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -117,12 +131,12 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		CertificateAuthorityArn: &caARN,
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errGet)
 	}
 
 	var attachedPermission *awsacmpcatypes.Permission
 	for i := range response.Permissions {
-		if awsclient.StringValue(response.Permissions[i].Principal) == principal {
+		if pointer.StringValue(response.Permissions[i].Principal) == principal {
 			attachedPermission = &response.Permissions[i]
 			break
 		}
@@ -158,13 +172,13 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 
 	_, err := e.client.CreatePermission(ctx, in)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	// This resource is interesting in that it's a binding without its own
 	// external identity. We therefore derive an external name from the
 	// identity of the CA it applies to, and the principal it applies.
-	meta.SetExternalName(cr, cr.Spec.ForProvider.Principal+"/"+awsclient.StringValue(cr.Spec.ForProvider.CertificateAuthorityARN))
+	meta.SetExternalName(cr, cr.Spec.ForProvider.Principal+"/"+pointer.StringValue(cr.Spec.ForProvider.CertificateAuthorityARN))
 
 	return managed.ExternalCreation{}, nil
 
@@ -174,15 +188,20 @@ func (e *external) Update(_ context.Context, _ resource.Managed) (managed.Extern
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.CertificateAuthorityPermission)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 	_, err := e.client.DeletePermission(ctx, &awsacmpca.DeletePermissionInput{
 		CertificateAuthorityArn: cr.Spec.ForProvider.CertificateAuthorityARN,
 		Principal:               aws.String(cr.Spec.ForProvider.Principal),
 	})
 
-	return awsclient.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errDelete)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

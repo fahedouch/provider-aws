@@ -17,9 +17,8 @@ limitations under the License.
 package v1beta1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // UserParameters define the desired state of an AWS IAM User.
@@ -38,7 +37,7 @@ type UserParameters struct {
 	Tags []Tag `json:"tags,omitempty"`
 }
 
-// An UserSpec defines the desired state of an IAM User.
+// UserSpec defines the desired state of an IAM User.
 type UserSpec struct {
 	xpv1.ResourceSpec `json:",inline"`
 	ForProvider       UserParameters `json:"forProvider"`
@@ -53,7 +52,7 @@ type UserObservation struct {
 	UserID string `json:"userId,omitempty"`
 }
 
-// An UserStatus represents the observed state of an IAM User.
+// A UserStatus represents the observed state of an IAM User.
 type UserStatus struct {
 	xpv1.ResourceStatus `json:",inline"`
 	AtProvider          UserObservation `json:"atProvider,omitempty"`
@@ -61,7 +60,7 @@ type UserStatus struct {
 
 // +kubebuilder:object:root=true
 
-// An User is a managed resource that represents an AWS IAM User.
+// A User is a managed resource that represents an AWS IAM User.
 // +kubebuilder:printcolumn:name="ARN",type="string",JSONPath=".status.atProvider.arn"
 // +kubebuilder:printcolumn:name="ID",type="string",JSONPath=".status.atProvider.userId"
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"

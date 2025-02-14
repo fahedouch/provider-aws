@@ -22,10 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awselasticloadbalancingv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -33,11 +29,17 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/elbv2/manualv1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -56,19 +58,31 @@ func SetupTarget(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: awselasticloadbalancingv2.NewFromConfig}),
+		managed.WithInitializers(),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(manualv1alpha1.TargetGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&manualv1alpha1.Target{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(manualv1alpha1.TargetGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: awselasticloadbalancingv2.NewFromConfig}),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient())),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -81,7 +95,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errNotElasticloadbalancingv2Target)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -101,20 +115,20 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// Set the external-name to the LambdARN if not set.
 	if meta.GetExternalName(cr) == "" {
-		meta.SetExternalName(cr, awsclient.StringValue(cr.Spec.ForProvider.LambdaARN))
+		meta.SetExternalName(cr, pointer.StringValue(cr.Spec.ForProvider.LambdaARN))
 	}
 	res, err := e.client.DescribeTargetHealth(ctx, &awselasticloadbalancingv2.DescribeTargetHealthInput{
 		TargetGroupArn: cr.Spec.ForProvider.TargetGroupARN,
 		Targets: []types.TargetDescription{
 			{
-				Id:               awsclient.String(meta.GetExternalName(cr)),
+				Id:               pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 				AvailabilityZone: cr.Spec.ForProvider.AvailabilityZone,
 				Port:             cr.Spec.ForProvider.Port,
 			},
 		},
 	})
 	if err != nil || len(res.TargetHealthDescriptions) == 0 {
-		return managed.ExternalObservation{}, awsclient.Wrap(err, errDescribeTargetHealthFailed)
+		return managed.ExternalObservation{}, errorutils.Wrap(err, errDescribeTargetHealthFailed)
 	}
 
 	cr.Status.AtProvider = generateTargetObservation(res)
@@ -145,13 +159,13 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		TargetGroupArn: cr.Spec.ForProvider.TargetGroupARN,
 		Targets: []types.TargetDescription{
 			{
-				Id:               awsclient.String(meta.GetExternalName(cr)),
+				Id:               pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 				AvailabilityZone: cr.Spec.ForProvider.AvailabilityZone,
 				Port:             cr.Spec.ForProvider.Port,
 			},
 		},
 	})
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errRegisterTargetFailed)
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errRegisterTargetFailed)
 }
 
 func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
@@ -159,27 +173,32 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*manualv1alpha1.Target)
 	if !ok {
-		return errors.New(errNotElasticloadbalancingv2Target)
+		return managed.ExternalDelete{}, errors.New(errNotElasticloadbalancingv2Target)
 	}
 	cr.SetConditions(xpv1.Deleting())
 	// Check if the target is already unregistered.
-	if cr.Status.AtProvider.TargetHealth != nil && awsclient.StringValue(cr.Status.AtProvider.TargetHealth.State) == manualv1alpha1.TargetStatusDraining {
-		return nil
+	if cr.Status.AtProvider.TargetHealth != nil && pointer.StringValue(cr.Status.AtProvider.TargetHealth.State) == manualv1alpha1.TargetStatusDraining {
+		return managed.ExternalDelete{}, nil
 	}
 	_, err := e.client.DeregisterTargets(ctx, &awselasticloadbalancingv2.DeregisterTargetsInput{
 		TargetGroupArn: cr.Spec.ForProvider.TargetGroupARN,
 		Targets: []types.TargetDescription{
 			{
-				Id:               awsclient.String(meta.GetExternalName(cr)),
+				Id:               pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 				AvailabilityZone: cr.Spec.ForProvider.AvailabilityZone,
 				Port:             cr.Spec.ForProvider.Port,
 			},
 		},
 	})
-	return awsclient.Wrap(err, errDeregisterTargetFailed)
+	return managed.ExternalDelete{}, errorutils.Wrap(err, errDeregisterTargetFailed)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 func generateTargetObservation(i *awselasticloadbalancingv2.DescribeTargetHealthOutput) manualv1alpha1.TargetObservation {

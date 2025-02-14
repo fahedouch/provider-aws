@@ -20,24 +20,20 @@ import (
 	"context"
 	"testing"
 
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/pkg/test"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/pkg/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -55,16 +51,6 @@ type args struct {
 }
 
 type addressModifier func(*v1beta1.Address)
-
-func withTags(tagMaps ...map[string]string) addressModifier {
-	var tagList []v1beta1.Tag
-	for _, tagMap := range tagMaps {
-		for k, v := range tagMap {
-			tagList = append(tagList, v1beta1.Tag{Key: k, Value: v})
-		}
-	}
-	return func(r *v1beta1.Address) { r.Spec.ForProvider.Tags = tagList }
-}
 
 func withExternalName(name string) addressModifier {
 	return func(r *v1beta1.Address) { meta.SetExternalName(r, name) }
@@ -177,7 +163,7 @@ func TestObserve(t *testing.T) {
 				cr: address(withSpec(v1beta1.AddressParameters{
 					Domain: &domainVpc,
 				}), withExternalName(allocationID)),
-				err: awsclient.Wrap(errBoom, errDescribe),
+				err: errorutils.Wrap(errBoom, errDescribe),
 			},
 		},
 	}
@@ -273,7 +259,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  address(withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -339,7 +325,7 @@ func TestUpdate(t *testing.T) {
 				cr: address(withSpec(v1beta1.AddressParameters{
 					Domain: &domainVpc,
 				})),
-				err: awsclient.Wrap(errBoom, errCreateTags),
+				err: errorutils.Wrap(errBoom, errCreateTags),
 			},
 		},
 	}
@@ -415,7 +401,7 @@ func TestRelease(t *testing.T) {
 			},
 			want: want{
 				cr:  address(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 	}
@@ -423,61 +409,12 @@ func TestRelease(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{kube: tc.kube, client: tc.address}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestInitialize(t *testing.T) {
-	type args struct {
-		cr   *v1beta1.Address
-		kube client.Client
-	}
-	type want struct {
-		cr  *v1beta1.Address
-		err error
-	}
-
-	cases := map[string]struct {
-		args
-		want
-	}{
-		"Successful": {
-			args: args{
-				cr:   address(withTags(map[string]string{"foo": "bar"})),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: address(withTags(resource.GetExternalTags(address()), map[string]string{"foo": "bar"})),
-			},
-		},
-		"UpdateFailed": {
-			args: args{
-				cr:   address(),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errBoom)},
-			},
-			want: want{
-				err: errors.Wrap(errBoom, errKubeUpdateFailed),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			e := &tagger{kube: tc.kube}
-			err := e.Initialize(context.Background(), tc.args.cr)
-
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.cr, tc.args.cr, cmpopts.SortSlices(func(a, b v1beta1.Tag) bool { return a.Key > b.Key })); err == nil && diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

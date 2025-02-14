@@ -17,9 +17,8 @@ limitations under the License.
 package v1beta1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Tag represents user-provided metadata that can be associated
@@ -43,6 +42,29 @@ type Tag struct {
 	// must interpret the value in your code.
 	// +optional
 	Value string `json:"value,omitempty"`
+}
+
+// Contains information about the last time that an IAM role was used. This
+// includes the date and time and the Region in which the role was last used.
+// Activity is only reported for the trailing 400 days. This period can be shorter
+// if your Region began supporting these features within the last year. The role
+// might have been used more than 400 days ago. For more information, see Regions
+// where data is tracked
+// (https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_access-advisor.html#access-advisor_tracking-period)
+// in the IAM User Guide. This data type is returned as a response element in the
+// GetRole and GetAccountAuthorizationDetails operations.
+type RoleLastUsed struct {
+
+	// The date and time, in ISO 8601 date-time format (http://www.iso.org/iso/iso8601)
+	// that the role was last used. This field is null if the role has not been used
+	// within the IAM tracking period. For more information about the tracking period,
+	// see Regions where data is tracked
+	// (https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_access-advisor.html#access-advisor_tracking-period)
+	// in the IAM User Guide.
+	LastUsedDate *metav1.Time `json:"lastUsedDate,omitempty"`
+
+	// The name of the Amazon Web Services Region in which the role was last used.
+	Region *string `json:"region,omitempty"`
 }
 
 // RoleParameters define the desired state of an AWS IAM Role.
@@ -82,7 +104,7 @@ type RoleParameters struct {
 	Tags []Tag `json:"tags,omitempty"`
 }
 
-// An RoleSpec defines the desired state of an Role.
+// A RoleSpec defines the desired state of a Role.
 type RoleSpec struct {
 	xpv1.ResourceSpec `json:",inline"`
 	ForProvider       RoleParameters `json:"forProvider"`
@@ -99,9 +121,23 @@ type RoleExternalStatus struct {
 	// IDs, see IAM Identifiers (http://docs.aws.amazon.com/IAM/latest/UserGuide/Using_Identifiers.html)
 	// in the Using IAM guide.
 	RoleID string `json:"roleID"`
+
+	// The date and time, in ISO 8601 date-time format
+	// (http://www.iso.org/iso/iso8601), when the role was created.
+	CreateDate *metav1.Time `json:"createDate,omitempty"`
+
+	// Contains information about the last time that an IAM role was used. This
+	// includes the date and time and the Region in which the role was last used.
+	// Activity is only reported for the trailing 400 days. This period can be shorter
+	// if your Region began supporting these features within the last year. The role
+	// might have been used more than 400 days ago. For more information, see Regions
+	// where data is tracked
+	// (https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_access-advisor.html#access-advisor_tracking-period)
+	// in the IAM User Guide.
+	RoleLastUsed *RoleLastUsed `json:"roleLastUsed,omitempty"`
 }
 
-// An RoleStatus represents the observed state of an Role.
+// A RoleStatus represents the observed state of a Role.
 type RoleStatus struct {
 	xpv1.ResourceStatus `json:",inline"`
 	AtProvider          RoleExternalStatus `json:"atProvider,omitempty"`
@@ -109,7 +145,7 @@ type RoleStatus struct {
 
 // +kubebuilder:object:root=true
 
-// An Role is a managed resource that represents an AWS IAM Role.
+// A Role is a managed resource that represents an AWS IAM Role.
 // +kubebuilder:printcolumn:name="ARN",type="string",JSONPath=".status.atProvider.arn"
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"

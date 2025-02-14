@@ -13,6 +13,11 @@ resources:
         from:
           operation: ModifyDBInstance
           path: AllowMajorVersionUpgrade
+      DBClusterIdentifier:
+        is_read_only: true
+        from:
+          operation: DescribeDBInstances
+          path: DBInstances.DBClusterIdentifier
   DBCluster:
     fields:
       AllowMajorVersionUpgrade:
@@ -34,6 +39,8 @@ ignore:
     - ModifyDBClusterInput.MasterUserPassword
     - CreateDBClusterInput.VpcSecurityGroupIds
     - ModifyDBClusterInput.VpcSecurityGroupIds
+    - CreateDBClusterInput.EngineVersion
+    - ModifyDBClusterInput.EngineVersion
     - DBCluster.PendingModifiedValues
     - DescribeDBInstancesInput.DBInstanceIndentifier
     - CreateDBInstanceInput.DBInstanceIdentifier
@@ -46,6 +53,8 @@ ignore:
     - CreateDBInstanceInput.DBSecurityGroups
     - ModifyDBInstanceInput.DBSecurityGroups
     - ModifyDBInstanceInput.DBSubnetGroupName # this is immutable
+    - CreateDBInstanceInput.EngineVersion
+    - ModifyDBInstanceInput.EngineVersion
     - CreateDBParameterGroupInput.DBParameterGroupName
     - CreateDBParameterGroupInput.DBParameterGroupFamily
     - DeleteDBParameterGroupInput.DBParameterGroupName
@@ -66,6 +75,7 @@ ignore:
     - AddRoleToDBInstanceInput.RoleArn
     - RemoveRoleFromDBInstanceInput.DBInstanceIdentifier
     - RemoveRoleFromDBInstanceInput.RoleArn
+    - CreateOptionGroupInput.OptionGroupName
   resource_names:
     - CustomAvailabilityZone
     - CustomDBEngineVersion
@@ -78,4 +88,6 @@ ignore:
     - DBSnapshot
     - DBSubnetGroup
     - EventSubscription
-    - OptionGroup
+    - BlueGreenDeployment
+    - Integration
+    - TenantDatabase

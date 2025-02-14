@@ -26,13 +26,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	elb "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing"
 	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancing/types"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/elasticloadbalancing/v1alpha1"
-	clients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // A Client handles CRUD operations for Elastic Load Balancing resources.
@@ -77,12 +78,12 @@ func GenerateCreateELBInput(name string, p v1alpha1.ELBParameters) *elb.CreateLo
 
 // LateInitializeELB fills the empty fields in *v1alpha1.ELBParameters with
 // the values seen in elasticLoadBalancing.ELB.
-func LateInitializeELB(in *v1alpha1.ELBParameters, v *elbtypes.LoadBalancerDescription, elbTags []elbtypes.Tag) { // nolint:gocyclo
+func LateInitializeELB(in *v1alpha1.ELBParameters, v *elbtypes.LoadBalancerDescription, elbTags []elbtypes.Tag) { //nolint:gocyclo
 	if v == nil {
 		return
 	}
 
-	in.Scheme = clients.LateInitializeStringPtr(in.Scheme, v.Scheme)
+	in.Scheme = pointer.LateInitialize(in.Scheme, v.Scheme)
 
 	if len(in.AvailabilityZones) == 0 && len(v.AvailabilityZones) != 0 {
 		in.AvailabilityZones = v.AvailabilityZones
@@ -100,7 +101,7 @@ func LateInitializeELB(in *v1alpha1.ELBParameters, v *elbtypes.LoadBalancerDescr
 		in.Listeners = make([]v1alpha1.Listener, len(v.ListenerDescriptions))
 		for k, l := range v.ListenerDescriptions {
 			in.Listeners[k] = v1alpha1.Listener{
-				InstancePort:     l.Listener.InstancePort,
+				InstancePort:     ptr.Deref(l.Listener.InstancePort, 0),
 				InstanceProtocol: l.Listener.InstanceProtocol,
 				LoadBalancerPort: l.Listener.LoadBalancerPort,
 				Protocol:         aws.ToString(l.Listener.Protocol),
@@ -140,7 +141,7 @@ func GenerateELBObservation(e elbtypes.LoadBalancerDescription) v1alpha1.ELBObse
 		descriptions := []v1alpha1.BackendServerDescription{}
 		for _, v := range e.BackendServerDescriptions {
 			descriptions = append(descriptions, v1alpha1.BackendServerDescription{
-				InstancePort: v.InstancePort,
+				InstancePort: ptr.Deref(v.InstancePort, 0),
 				PolicyNames:  v.PolicyNames,
 			})
 		}
@@ -180,7 +181,7 @@ func CreatePatch(in elbtypes.LoadBalancerDescription, target v1alpha1.ELBParamet
 		return targetCopy.Listeners[i].LoadBalancerPort < targetCopy.Listeners[j].LoadBalancerPort
 	})
 
-	jsonPatch, err := clients.CreateJSONPatch(currentParams, targetCopy)
+	jsonPatch, err := jsonpatch.CreateJSONPatch(currentParams, targetCopy)
 	if err != nil {
 		return nil, err
 	}
@@ -207,9 +208,9 @@ func BuildELBListeners(l []v1alpha1.Listener) []elbtypes.Listener {
 	out := make([]elbtypes.Listener, len(l))
 	for i := range l {
 		out[i] = elbtypes.Listener{
-			InstancePort:     aws.ToInt32(&l[i].InstancePort),
+			InstancePort:     &l[i].InstancePort,
 			InstanceProtocol: l[i].InstanceProtocol,
-			LoadBalancerPort: aws.ToInt32(&l[i].LoadBalancerPort),
+			LoadBalancerPort: l[i].LoadBalancerPort,
 			Protocol:         &l[i].Protocol,
 			SSLCertificateId: l[i].SSLCertificateID,
 		}

@@ -13,14 +13,14 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
-	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/pkg/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/emrcontainers/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/tags"
 )
 
 const (
@@ -50,17 +50,30 @@ func SetupVirtualCluster(mgr ctrl.Manager, o controller.Options) error {
 	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.VirtualClusterGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.VirtualCluster{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.VirtualClusterGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(ctx context.Context, cr *svcapitypes.VirtualCluster, input *svcsdk.DescribeVirtualClusterInput) error {
@@ -106,28 +119,24 @@ func postCreate(ctx context.Context, cr *svcapitypes.VirtualCluster, resp *svcsd
 	return cre, nil
 }
 
-func postDelete(ctx context.Context, cr *svcapitypes.VirtualCluster, resp *svcsdk.DeleteVirtualClusterOutput, err error) error {
+func postDelete(ctx context.Context, cr *svcapitypes.VirtualCluster, resp *svcsdk.DeleteVirtualClusterOutput, err error) (managed.ExternalDelete, error) {
 	if err == nil {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	// error context is stripped. cannot type assert.
 	cause := errors.Cause(err)
 	if cause.Error() == fmt.Sprintf("%s: %s", svcsdk.ErrCodeValidationException, terminatedMessage) {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
-	return err
+	return managed.ExternalDelete{}, err
 }
 
-func isUpToDate(cr *svcapitypes.VirtualCluster, output *svcsdk.DescribeVirtualClusterOutput) (bool, error) {
-	add, remove := awsclients.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, output.VirtualCluster.Tags)
-	return len(add) == 0 && len(remove) == 0, nil
+func isUpToDate(_ context.Context, cr *svcapitypes.VirtualCluster, output *svcsdk.DescribeVirtualClusterOutput) (bool, string, error) {
+	add, remove := tags.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, output.VirtualCluster.Tags)
+	return len(add) == 0 && len(remove) == 0, "", nil
 }
 
-func (e *external) updater(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.VirtualCluster)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) updater(ctx context.Context, cr *svcapitypes.VirtualCluster) (managed.ExternalUpdate, error) {
 	return managed.ExternalUpdate{}, e.updateTags(ctx, cr)
 }
 
@@ -139,7 +148,7 @@ func (e *external) updateTags(ctx context.Context, cr *svcapitypes.VirtualCluste
 		return errors.Wrap(err, errListTag)
 	}
 
-	add, remove := awsclients.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, resp.Tags)
+	add, remove := tags.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, resp.Tags)
 	if len(remove) > 0 {
 		_, err = e.client.UntagResourceWithContext(ctx, &svcsdk.UntagResourceInput{
 			ResourceArn: cr.Status.AtProvider.ARN,

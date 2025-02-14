@@ -23,11 +23,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -35,12 +30,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -70,21 +71,33 @@ func SetupRouteTable(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewRouteTableClient}),
+		managed.WithCreationGracePeriod(3 * time.Minute),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithInitializers(),
+		managed.WithConnectionPublishers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.RouteTableGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.RouteTable{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.RouteTableGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewRouteTableClient}),
-			managed.WithCreationGracePeriod(3*time.Minute),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithInitializers(),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -97,7 +110,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +121,7 @@ type external struct {
 	client ec2.RouteTableClient
 }
 
-func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) { // nolint:gocyclo
+func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mgd.(*v1beta1.RouteTable)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
@@ -130,7 +143,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	})
 
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(ec2.IsRouteTableNotFoundErr, err), errDescribe)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(ec2.IsRouteTableNotFoundErr, err), errDescribe)
 	}
 
 	// in a successful response, there should be one and only one object
@@ -157,7 +170,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 
 	upToDate, err := ec2.IsRtUpToDate(cr.Spec.ForProvider, observed)
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(err, errDescribe)
+		return managed.ExternalObservation{}, errorutils.Wrap(err, errDescribe)
 	}
 
 	return managed.ExternalObservation{
@@ -167,7 +180,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	}, nil
 }
 
-func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.ExternalCreation, error) { // nolint:gocyclo
+func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.ExternalCreation, error) {
 	cr, ok := mgd.(*v1beta1.RouteTable)
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
@@ -179,13 +192,13 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 		VpcId: cr.Spec.ForProvider.VPCID,
 	})
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 	meta.SetExternalName(cr, aws.ToString(result.RouteTable.RouteTableId))
 	return managed.ExternalCreation{}, nil
 }
 
-func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { // nolint:gocyclo
+func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { //nolint:gocyclo
 	cr, ok := mgd.(*v1beta1.RouteTable)
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
@@ -198,29 +211,29 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 	})
 
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(ec2.IsRouteTableNotFoundErr, err), errDescribe)
+		return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(ec2.IsRouteTableNotFoundErr, err), errDescribe)
 	}
 
 	if response.RouteTables == nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdateNotFound)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdateNotFound)
 	}
 
 	table := response.RouteTables[0]
 
 	patch, err := ec2.CreateRTPatch(table, cr.Spec.ForProvider)
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
 	if len(patch.Tags) != 0 {
 		// tagging the RouteTable
-		addTags, removeTags := awsclient.DiffEC2Tags(v1beta1.GenerateEC2Tags(cr.Spec.ForProvider.Tags), table.Tags)
+		addTags, removeTags := ec2.DiffEC2Tags(ec2.GenerateEC2TagsV1Beta1(cr.Spec.ForProvider.Tags), table.Tags)
 		if len(addTags) > 0 {
 			if _, err := e.client.CreateTags(ctx, &awsec2.CreateTagsInput{
 				Resources: []string{meta.GetExternalName(cr)},
 				Tags:      addTags,
 			}); err != nil {
-				return managed.ExternalUpdate{}, awsclient.Wrap(err, errCreateTags)
+				return managed.ExternalUpdate{}, errorutils.Wrap(err, errCreateTags)
 			}
 		}
 		if len(removeTags) > 0 {
@@ -228,7 +241,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 				Resources: []string{meta.GetExternalName(cr)},
 				Tags:      removeTags,
 			}); err != nil {
-				return managed.ExternalUpdate{}, awsclient.Wrap(err, errDeleteTags)
+				return managed.ExternalUpdate{}, errorutils.Wrap(err, errDeleteTags)
 			}
 		}
 	}
@@ -250,31 +263,36 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.RouteTable)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	if err := ec2.ValidateRoutes(cr.Spec.ForProvider.Routes); err != nil {
-		return errors.Wrap(err, errInvalidRoutes)
+		return managed.ExternalDelete{}, errors.Wrap(err, errInvalidRoutes)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
 
 	// the subnet associations have to be deleted before deleting the route table.
 	if err := e.deleteAssociations(ctx, cr.Status.AtProvider.Associations); err != nil {
-		return err
+		return managed.ExternalDelete{}, err
 	}
 
 	_, err := e.client.DeleteRouteTable(ctx, &awsec2.DeleteRouteTableInput{
 		RouteTableId: aws.String(meta.GetExternalName(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(ec2.IsRouteTableNotFoundErr, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(ec2.IsRouteTableNotFoundErr, err), errDelete)
 }
 
-func (e *external) deleteRoutes(ctx context.Context, tableID string, desired []v1beta1.RouteBeta, observed []v1beta1.RouteState) error { // nolint:gocyclo
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
+}
+
+func (e *external) deleteRoutes(ctx context.Context, tableID string, desired []v1beta1.RouteBeta, observed []v1beta1.RouteState) error { //nolint:gocyclo
 	for _, rt := range observed {
 		found := false
 		for _, ds := range desired {
@@ -315,7 +333,7 @@ func (e *external) deleteRoutes(ctx context.Context, tableID string, desired []v
 	return nil
 }
 
-func (e *external) createRoutes(ctx context.Context, tableID string, desired []v1beta1.RouteBeta, observed []v1beta1.RouteState) error { // nolint:gocyclo
+func (e *external) createRoutes(ctx context.Context, tableID string, desired []v1beta1.RouteBeta, observed []v1beta1.RouteState) error { //nolint:gocyclo
 	for _, rt := range desired {
 		isObserved := false
 		for _, ob := range observed {
@@ -356,10 +374,10 @@ func (e *external) createRoutes(ctx context.Context, tableID string, desired []v
 func (e *external) reconcileRoutes(ctx context.Context, tableID string, desired []v1beta1.RouteBeta, observed []v1beta1.RouteState) error {
 
 	if err := e.deleteRoutes(ctx, tableID, desired, observed); err != nil {
-		return awsclient.Wrap(err, errDeleteRoute)
+		return errorutils.Wrap(err, errDeleteRoute)
 	}
 	if err := e.createRoutes(ctx, tableID, desired, observed); err != nil {
-		return awsclient.Wrap(err, errCreateRoute)
+		return errorutils.Wrap(err, errCreateRoute)
 	}
 
 	return nil
@@ -414,7 +432,7 @@ func (e *external) reconcileAssociations(ctx context.Context, tableID string, de
 	}
 
 	if err := e.createAssociations(ctx, tableID, desired, observed); err != nil {
-		return awsclient.Wrap(err, errAssociateSubnet)
+		return errorutils.Wrap(err, errAssociateSubnet)
 	}
 	return nil
 }
@@ -429,7 +447,7 @@ func (e *external) deleteAssociations(ctx context.Context, observed []v1beta1.As
 			if ec2.IsAssociationIDNotFoundErr(err) {
 				continue
 			}
-			return awsclient.Wrap(err, errDisassociateSubnet)
+			return errorutils.Wrap(err, errDisassociateSubnet)
 		}
 	}
 

@@ -389,6 +389,14 @@ const (
 	IndexStatus_REBUILDING IndexStatus = "REBUILDING"
 )
 
+type JobEndBehavior string
+
+const (
+	JobEndBehavior_STOP_ROLLOUT JobEndBehavior = "STOP_ROLLOUT"
+	JobEndBehavior_CANCEL       JobEndBehavior = "CANCEL"
+	JobEndBehavior_FORCE_CANCEL JobEndBehavior = "FORCE_CANCEL"
+)
+
 type JobExecutionFailureType string
 
 const (
@@ -418,6 +426,7 @@ const (
 	JobStatus_CANCELED             JobStatus = "CANCELED"
 	JobStatus_COMPLETED            JobStatus = "COMPLETED"
 	JobStatus_DELETION_IN_PROGRESS JobStatus = "DELETION_IN_PROGRESS"
+	JobStatus_SCHEDULED            JobStatus = "SCHEDULED"
 )
 
 type LogLevel string
@@ -433,11 +442,13 @@ const (
 type LogTargetType string
 
 const (
-	LogTargetType_DEFAULT      LogTargetType = "DEFAULT"
-	LogTargetType_THING_GROUP  LogTargetType = "THING_GROUP"
-	LogTargetType_CLIENT_ID    LogTargetType = "CLIENT_ID"
-	LogTargetType_SOURCE_IP    LogTargetType = "SOURCE_IP"
-	LogTargetType_PRINCIPAL_ID LogTargetType = "PRINCIPAL_ID"
+	LogTargetType_DEFAULT         LogTargetType = "DEFAULT"
+	LogTargetType_THING_GROUP     LogTargetType = "THING_GROUP"
+	LogTargetType_CLIENT_ID       LogTargetType = "CLIENT_ID"
+	LogTargetType_SOURCE_IP       LogTargetType = "SOURCE_IP"
+	LogTargetType_PRINCIPAL_ID    LogTargetType = "PRINCIPAL_ID"
+	LogTargetType_EVENT_TYPE      LogTargetType = "EVENT_TYPE"
+	LogTargetType_DEVICE_DEFENDER LogTargetType = "DEVICE_DEFENDER"
 )
 
 type MessageFormat string
@@ -480,6 +491,23 @@ const (
 	OTAUpdateStatus_CREATE_IN_PROGRESS OTAUpdateStatus = "CREATE_IN_PROGRESS"
 	OTAUpdateStatus_CREATE_COMPLETE    OTAUpdateStatus = "CREATE_COMPLETE"
 	OTAUpdateStatus_CREATE_FAILED      OTAUpdateStatus = "CREATE_FAILED"
+	OTAUpdateStatus_DELETE_IN_PROGRESS OTAUpdateStatus = "DELETE_IN_PROGRESS"
+	OTAUpdateStatus_DELETE_FAILED      OTAUpdateStatus = "DELETE_FAILED"
+)
+
+type PackageVersionAction string
+
+const (
+	PackageVersionAction_PUBLISH   PackageVersionAction = "PUBLISH"
+	PackageVersionAction_DEPRECATE PackageVersionAction = "DEPRECATE"
+)
+
+type PackageVersionStatus string
+
+const (
+	PackageVersionStatus_DRAFT      PackageVersionStatus = "DRAFT"
+	PackageVersionStatus_PUBLISHED  PackageVersionStatus = "PUBLISHED"
+	PackageVersionStatus_DEPRECATED PackageVersionStatus = "DEPRECATED"
 )
 
 type PolicyTemplateName string
@@ -513,6 +541,7 @@ const (
 	ResourceType_ACCOUNT_SETTINGS      ResourceType = "ACCOUNT_SETTINGS"
 	ResourceType_ROLE_ALIAS            ResourceType = "ROLE_ALIAS"
 	ResourceType_IAM_ROLE              ResourceType = "IAM_ROLE"
+	ResourceType_ISSUER_CERTIFICATE    ResourceType = "ISSUER_CERTIFICATE"
 )
 
 type RetryableFailureType string
@@ -553,6 +582,13 @@ type TargetSelection string
 const (
 	TargetSelection_CONTINUOUS TargetSelection = "CONTINUOUS"
 	TargetSelection_SNAPSHOT   TargetSelection = "SNAPSHOT"
+)
+
+type TemplateType string
+
+const (
+	TemplateType_FLEET_PROVISIONING TemplateType = "FLEET_PROVISIONING"
+	TemplateType_JITP               TemplateType = "JITP"
 )
 
 type ThingConnectivityIndexingMode string

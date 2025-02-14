@@ -17,9 +17,8 @@ limitations under the License.
 package manualv1alpha1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // FargatePlatformConfiguration defines the platform configuration for jobs that are running on Fargate resources.
@@ -166,11 +165,11 @@ type LinuxParameters struct {
 // Secret defines the secret to expose to your container. Secrets can
 // be exposed to a container in the following ways:
 //
-//    * To inject sensitive data into your containers as environment variables,
-//    use the secrets container definition parameter.
+//   - To inject sensitive data into your containers as environment variables,
+//     use the secrets container definition parameter.
 //
-//    * To reference sensitive information in the log configuration of a container,
-//    use the secretOptions container definition parameter.
+//   - To reference sensitive information in the log configuration of a container,
+//     use the secretOptions container definition parameter.
 //
 // For more information, see Specifying sensitive data (https://docs.aws.amazon.com/batch/latest/userguide/specifying-sensitive-data.html)
 // in the Batch User Guide.

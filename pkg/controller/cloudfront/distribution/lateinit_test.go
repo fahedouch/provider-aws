@@ -21,9 +21,10 @@ import (
 
 	svcsdk "github.com/aws/aws-sdk-go/service/cloudfront"
 	"github.com/google/go-cmp/cmp"
+	"k8s.io/utils/ptr"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cloudfront/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 func TestLateInitialize(t *testing.T) {
@@ -142,188 +143,188 @@ func TestLateInitialize(t *testing.T) {
 					Distribution: &svcsdk.Distribution{
 						DistributionConfig: &svcsdk.DistributionConfig{
 							Aliases: &svcsdk.Aliases{
-								Items: []*string{awsclients.String("example.org")},
+								Items: []*string{pointer.ToOrNilIfZeroValue("example.org")},
 							},
 							CacheBehaviors: &svcsdk.CacheBehaviors{
 								Items: []*svcsdk.CacheBehavior{{
 									AllowedMethods: &svcsdk.AllowedMethods{
-										Items: []*string{awsclients.String("GET")},
+										Items: []*string{pointer.ToOrNilIfZeroValue("GET")},
 										CachedMethods: &svcsdk.CachedMethods{
-											Items: []*string{awsclients.String("GET")},
+											Items: []*string{pointer.ToOrNilIfZeroValue("GET")},
 										},
 									},
-									CachePolicyId:          awsclients.String("example"),
-									Compress:               awsclients.Bool(true),
-									DefaultTTL:             awsclients.Int64(42),
-									FieldLevelEncryptionId: awsclients.String("example"),
+									CachePolicyId:          pointer.ToOrNilIfZeroValue("example"),
+									Compress:               pointer.ToOrNilIfZeroValue(true),
+									DefaultTTL:             ptr.To[int64](42),
+									FieldLevelEncryptionId: pointer.ToOrNilIfZeroValue("example"),
 									ForwardedValues: &svcsdk.ForwardedValues{
 										Cookies: &svcsdk.CookiePreference{
-											Forward: awsclients.String("example"),
+											Forward: pointer.ToOrNilIfZeroValue("example"),
 											WhitelistedNames: &svcsdk.CookieNames{
-												Items: []*string{awsclients.String("example")},
+												Items: []*string{pointer.ToOrNilIfZeroValue("example")},
 											},
 										},
 										Headers: &svcsdk.Headers{
-											Items: []*string{awsclients.String("X-Hello")},
+											Items: []*string{pointer.ToOrNilIfZeroValue("X-Hello")},
 										},
-										QueryString: awsclients.Bool(true),
+										QueryString: pointer.ToOrNilIfZeroValue(true),
 										QueryStringCacheKeys: &svcsdk.QueryStringCacheKeys{
-											Items: []*string{awsclients.String("search")},
+											Items: []*string{pointer.ToOrNilIfZeroValue("search")},
 										},
 									},
 									LambdaFunctionAssociations: &svcsdk.LambdaFunctionAssociations{
 										Items: []*svcsdk.LambdaFunctionAssociation{{
-											EventType:         awsclients.String("good"),
-											IncludeBody:       awsclients.Bool(true),
-											LambdaFunctionARN: awsclients.String("arn"),
+											EventType:         pointer.ToOrNilIfZeroValue("good"),
+											IncludeBody:       pointer.ToOrNilIfZeroValue(true),
+											LambdaFunctionARN: pointer.ToOrNilIfZeroValue("arn"),
 										}},
 									},
-									MaxTTL:                awsclients.Int64(42),
-									MinTTL:                awsclients.Int64(42),
-									OriginRequestPolicyId: awsclients.String("example"),
-									PathPattern:           awsclients.String("example"),
-									RealtimeLogConfigArn:  awsclients.String("example"),
-									SmoothStreaming:       awsclients.Bool(true),
-									TargetOriginId:        awsclients.String("example"),
+									MaxTTL:                ptr.To[int64](42),
+									MinTTL:                ptr.To[int64](42),
+									OriginRequestPolicyId: pointer.ToOrNilIfZeroValue("example"),
+									PathPattern:           pointer.ToOrNilIfZeroValue("example"),
+									RealtimeLogConfigArn:  pointer.ToOrNilIfZeroValue("example"),
+									SmoothStreaming:       pointer.ToOrNilIfZeroValue(true),
+									TargetOriginId:        pointer.ToOrNilIfZeroValue("example"),
 									TrustedKeyGroups: &svcsdk.TrustedKeyGroups{
-										Enabled: awsclients.Bool(true),
-										Items:   []*string{awsclients.String("the-good-key")},
+										Enabled: pointer.ToOrNilIfZeroValue(true),
+										Items:   []*string{pointer.ToOrNilIfZeroValue("the-good-key")},
 									},
 									TrustedSigners: &svcsdk.TrustedSigners{
-										Enabled: awsclients.Bool(true),
-										Items:   []*string{awsclients.String("the-good-signer")},
+										Enabled: pointer.ToOrNilIfZeroValue(true),
+										Items:   []*string{pointer.ToOrNilIfZeroValue("the-good-signer")},
 									},
 								}},
 							},
 							CustomErrorResponses: &svcsdk.CustomErrorResponses{
 								Items: []*svcsdk.CustomErrorResponse{{
-									ErrorCachingMinTTL: awsclients.Int64(42),
-									ErrorCode:          awsclients.Int64(418),
-									ResponseCode:       awsclients.String("I'm a teapot"),
-									ResponsePagePath:   awsclients.String("/teapot"),
+									ErrorCachingMinTTL: ptr.To[int64](42),
+									ErrorCode:          ptr.To[int64](418),
+									ResponseCode:       pointer.ToOrNilIfZeroValue("I'm a teapot"),
+									ResponsePagePath:   pointer.ToOrNilIfZeroValue("/teapot"),
 								}},
 							},
 							DefaultCacheBehavior: &svcsdk.DefaultCacheBehavior{
 								AllowedMethods: &svcsdk.AllowedMethods{
-									Items: []*string{awsclients.String("GET")},
+									Items: []*string{pointer.ToOrNilIfZeroValue("GET")},
 									CachedMethods: &svcsdk.CachedMethods{
-										Items: []*string{awsclients.String("GET")},
+										Items: []*string{pointer.ToOrNilIfZeroValue("GET")},
 									},
 								},
-								CachePolicyId:          awsclients.String("example"),
-								Compress:               awsclients.Bool(true),
-								DefaultTTL:             awsclients.Int64(42),
-								FieldLevelEncryptionId: awsclients.String("example"),
+								CachePolicyId:          pointer.ToOrNilIfZeroValue("example"),
+								Compress:               pointer.ToOrNilIfZeroValue(true),
+								DefaultTTL:             ptr.To[int64](42),
+								FieldLevelEncryptionId: pointer.ToOrNilIfZeroValue("example"),
 								ForwardedValues: &svcsdk.ForwardedValues{
 									Cookies: &svcsdk.CookiePreference{
-										Forward: awsclients.String("example"),
+										Forward: pointer.ToOrNilIfZeroValue("example"),
 										WhitelistedNames: &svcsdk.CookieNames{
-											Items: []*string{awsclients.String("example")},
+											Items: []*string{pointer.ToOrNilIfZeroValue("example")},
 										},
 									},
 									Headers: &svcsdk.Headers{
-										Items: []*string{awsclients.String("X-Hello")},
+										Items: []*string{pointer.ToOrNilIfZeroValue("X-Hello")},
 									},
-									QueryString: awsclients.Bool(true),
+									QueryString: pointer.ToOrNilIfZeroValue(true),
 									QueryStringCacheKeys: &svcsdk.QueryStringCacheKeys{
-										Items: []*string{awsclients.String("search")},
+										Items: []*string{pointer.ToOrNilIfZeroValue("search")},
 									},
 								},
 								LambdaFunctionAssociations: &svcsdk.LambdaFunctionAssociations{
 									Items: []*svcsdk.LambdaFunctionAssociation{{
-										EventType:         awsclients.String("good"),
-										IncludeBody:       awsclients.Bool(true),
-										LambdaFunctionARN: awsclients.String("arn"),
+										EventType:         pointer.ToOrNilIfZeroValue("good"),
+										IncludeBody:       pointer.ToOrNilIfZeroValue(true),
+										LambdaFunctionARN: pointer.ToOrNilIfZeroValue("arn"),
 									}},
 								},
-								MaxTTL:                awsclients.Int64(42),
-								MinTTL:                awsclients.Int64(42),
-								OriginRequestPolicyId: awsclients.String("example"),
-								RealtimeLogConfigArn:  awsclients.String("example"),
-								SmoothStreaming:       awsclients.Bool(true),
-								TargetOriginId:        awsclients.String("example"),
+								MaxTTL:                ptr.To[int64](42),
+								MinTTL:                ptr.To[int64](42),
+								OriginRequestPolicyId: pointer.ToOrNilIfZeroValue("example"),
+								RealtimeLogConfigArn:  pointer.ToOrNilIfZeroValue("example"),
+								SmoothStreaming:       pointer.ToOrNilIfZeroValue(true),
+								TargetOriginId:        pointer.ToOrNilIfZeroValue("example"),
 								TrustedKeyGroups: &svcsdk.TrustedKeyGroups{
-									Enabled: awsclients.Bool(true),
-									Items:   []*string{awsclients.String("the-good-key")},
+									Enabled: pointer.ToOrNilIfZeroValue(true),
+									Items:   []*string{pointer.ToOrNilIfZeroValue("the-good-key")},
 								},
 								TrustedSigners: &svcsdk.TrustedSigners{
-									Enabled: awsclients.Bool(true),
-									Items:   []*string{awsclients.String("the-good-signer")},
+									Enabled: pointer.ToOrNilIfZeroValue(true),
+									Items:   []*string{pointer.ToOrNilIfZeroValue("the-good-signer")},
 								},
 							},
-							DefaultRootObject: awsclients.String("the-good-one"),
-							Enabled:           awsclients.Bool(true),
-							HttpVersion:       awsclients.String("1.1"),
-							IsIPV6Enabled:     awsclients.Bool(true),
+							DefaultRootObject: pointer.ToOrNilIfZeroValue("the-good-one"),
+							Enabled:           pointer.ToOrNilIfZeroValue(true),
+							HttpVersion:       pointer.ToOrNilIfZeroValue("1.1"),
+							IsIPV6Enabled:     pointer.ToOrNilIfZeroValue(true),
 							Logging: &svcsdk.LoggingConfig{
-								Bucket:         awsclients.String("big-logs"),
-								Enabled:        awsclients.Bool(true),
-								IncludeCookies: awsclients.Bool(true),
-								Prefix:         awsclients.String("one-large-log-"),
+								Bucket:         pointer.ToOrNilIfZeroValue("big-logs"),
+								Enabled:        pointer.ToOrNilIfZeroValue(true),
+								IncludeCookies: pointer.ToOrNilIfZeroValue(true),
+								Prefix:         pointer.ToOrNilIfZeroValue("one-large-log-"),
 							},
 							OriginGroups: &svcsdk.OriginGroups{
 								Items: []*svcsdk.OriginGroup{{
 									FailoverCriteria: &svcsdk.OriginGroupFailoverCriteria{
 										StatusCodes: &svcsdk.StatusCodes{
-											Items: []*int64{awsclients.Int64(418)},
+											Items: []*int64{ptr.To[int64](418)},
 										},
 									},
 									Members: &svcsdk.OriginGroupMembers{
 										Items: []*svcsdk.OriginGroupMember{{
-											OriginId: awsclients.String("example"),
+											OriginId: pointer.ToOrNilIfZeroValue("example"),
 										}},
 									},
 								}},
 							},
 							Origins: &svcsdk.Origins{
 								Items: []*svcsdk.Origin{{
-									ConnectionAttempts: awsclients.Int64(42),
-									ConnectionTimeout:  awsclients.Int64(42),
+									ConnectionAttempts: ptr.To[int64](42),
+									ConnectionTimeout:  ptr.To[int64](42),
 									CustomHeaders: &svcsdk.CustomHeaders{
 										Items: []*svcsdk.OriginCustomHeader{{
-											HeaderName:  awsclients.String("X-Cool"),
-											HeaderValue: awsclients.String("very"),
+											HeaderName:  pointer.ToOrNilIfZeroValue("X-Cool"),
+											HeaderValue: pointer.ToOrNilIfZeroValue("very"),
 										}},
 									},
 									CustomOriginConfig: &svcsdk.CustomOriginConfig{
-										HTTPPort:               awsclients.Int64(8080),
-										HTTPSPort:              awsclients.Int64(443),
-										OriginKeepaliveTimeout: awsclients.Int64(42),
-										OriginProtocolPolicy:   awsclients.String("all-of-them"),
-										OriginReadTimeout:      awsclients.Int64(42),
+										HTTPPort:               ptr.To[int64](8080),
+										HTTPSPort:              ptr.To[int64](443),
+										OriginKeepaliveTimeout: ptr.To[int64](42),
+										OriginProtocolPolicy:   pointer.ToOrNilIfZeroValue("all-of-them"),
+										OriginReadTimeout:      ptr.To[int64](42),
 										OriginSslProtocols: &svcsdk.OriginSslProtocols{
-											Items: []*string{awsclients.String("TLS_1.2")},
+											Items: []*string{pointer.ToOrNilIfZeroValue("TLS_1.2")},
 										},
 									},
-									DomainName: awsclients.String("example.org"),
-									Id:         awsclients.String("custom"),
-									OriginPath: awsclients.String("/"),
+									DomainName: pointer.ToOrNilIfZeroValue("example.org"),
+									Id:         pointer.ToOrNilIfZeroValue("custom"),
+									OriginPath: pointer.ToOrNilIfZeroValue("/"),
 									OriginShield: &svcsdk.OriginShield{
-										Enabled:            awsclients.Bool(true),
-										OriginShieldRegion: awsclients.String("us-east-1"),
+										Enabled:            pointer.ToOrNilIfZeroValue(true),
+										OriginShieldRegion: pointer.ToOrNilIfZeroValue("us-east-1"),
 									},
 									S3OriginConfig: &svcsdk.S3OriginConfig{
-										OriginAccessIdentity: awsclients.String("cool-guy"),
+										OriginAccessIdentity: pointer.ToOrNilIfZeroValue("cool-guy"),
 									},
 								}},
 							},
-							PriceClass: awsclients.String("really-cheap"),
+							PriceClass: pointer.ToOrNilIfZeroValue("really-cheap"),
 							Restrictions: &svcsdk.Restrictions{
 								GeoRestriction: &svcsdk.GeoRestriction{
-									RestrictionType: awsclients.String("no-australians"),
-									Items:           []*string{awsclients.String("negz"), awsclients.String("kylie")},
+									RestrictionType: pointer.ToOrNilIfZeroValue("no-australians"),
+									Items:           []*string{pointer.ToOrNilIfZeroValue("negz"), pointer.ToOrNilIfZeroValue("kylie")},
 								},
 							},
 							ViewerCertificate: &svcsdk.ViewerCertificate{
-								ACMCertificateArn:            awsclients.String("example"),
-								Certificate:                  awsclients.String("example"),
-								CertificateSource:            awsclients.String("trusty-source"),
-								CloudFrontDefaultCertificate: awsclients.Bool(false),
-								IAMCertificateId:             awsclients.String("example"),
-								MinimumProtocolVersion:       awsclients.String("TLS_1.2"),
-								SSLSupportMethod:             awsclients.String("fax"),
+								ACMCertificateArn:            pointer.ToOrNilIfZeroValue("example"),
+								Certificate:                  pointer.ToOrNilIfZeroValue("example"),
+								CertificateSource:            pointer.ToOrNilIfZeroValue("trusty-source"),
+								CloudFrontDefaultCertificate: pointer.ToOrNilIfZeroValue(false),
+								IAMCertificateId:             pointer.ToOrNilIfZeroValue("example"),
+								MinimumProtocolVersion:       pointer.ToOrNilIfZeroValue("TLS_1.2"),
+								SSLSupportMethod:             pointer.ToOrNilIfZeroValue("fax"),
 							},
-							WebACLId: awsclients.String("example"),
+							WebACLId: pointer.ToOrNilIfZeroValue("example"),
 						},
 					},
 				},
@@ -331,188 +332,188 @@ func TestLateInitialize(t *testing.T) {
 			want: &svcapitypes.DistributionParameters{
 				DistributionConfig: &svcapitypes.DistributionConfig{
 					Aliases: &svcapitypes.Aliases{
-						Items: []*string{awsclients.String("example.org")},
+						Items: []*string{pointer.ToOrNilIfZeroValue("example.org")},
 					},
 					CacheBehaviors: &svcapitypes.CacheBehaviors{
 						Items: []*svcapitypes.CacheBehavior{{
 							AllowedMethods: &svcapitypes.AllowedMethods{
-								Items: []*string{awsclients.String("GET")},
+								Items: []*string{pointer.ToOrNilIfZeroValue("GET")},
 								CachedMethods: &svcapitypes.CachedMethods{
-									Items: []*string{awsclients.String("GET")},
+									Items: []*string{pointer.ToOrNilIfZeroValue("GET")},
 								},
 							},
-							CachePolicyID:          awsclients.String("example"),
-							Compress:               awsclients.Bool(true),
-							DefaultTTL:             awsclients.Int64(42),
-							FieldLevelEncryptionID: awsclients.String("example"),
+							CachePolicyID:          pointer.ToOrNilIfZeroValue("example"),
+							Compress:               pointer.ToOrNilIfZeroValue(true),
+							DefaultTTL:             ptr.To[int64](42),
+							FieldLevelEncryptionID: pointer.ToOrNilIfZeroValue("example"),
 							ForwardedValues: &svcapitypes.ForwardedValues{
 								Cookies: &svcapitypes.CookiePreference{
-									Forward: awsclients.String("example"),
+									Forward: pointer.ToOrNilIfZeroValue("example"),
 									WhitelistedNames: &svcapitypes.CookieNames{
-										Items: []*string{awsclients.String("example")},
+										Items: []*string{pointer.ToOrNilIfZeroValue("example")},
 									},
 								},
 								Headers: &svcapitypes.Headers{
-									Items: []*string{awsclients.String("X-Hello")},
+									Items: []*string{pointer.ToOrNilIfZeroValue("X-Hello")},
 								},
-								QueryString: awsclients.Bool(true),
+								QueryString: pointer.ToOrNilIfZeroValue(true),
 								QueryStringCacheKeys: &svcapitypes.QueryStringCacheKeys{
-									Items: []*string{awsclients.String("search")},
+									Items: []*string{pointer.ToOrNilIfZeroValue("search")},
 								},
 							},
 							LambdaFunctionAssociations: &svcapitypes.LambdaFunctionAssociations{
 								Items: []*svcapitypes.LambdaFunctionAssociation{{
-									EventType:         awsclients.String("good"),
-									IncludeBody:       awsclients.Bool(true),
-									LambdaFunctionARN: awsclients.String("arn"),
+									EventType:         pointer.ToOrNilIfZeroValue("good"),
+									IncludeBody:       pointer.ToOrNilIfZeroValue(true),
+									LambdaFunctionARN: pointer.ToOrNilIfZeroValue("arn"),
 								}},
 							},
-							MaxTTL:                awsclients.Int64(42),
-							MinTTL:                awsclients.Int64(42),
-							OriginRequestPolicyID: awsclients.String("example"),
-							PathPattern:           awsclients.String("example"),
-							RealtimeLogConfigARN:  awsclients.String("example"),
-							SmoothStreaming:       awsclients.Bool(true),
-							TargetOriginID:        awsclients.String("example"),
+							MaxTTL:                ptr.To[int64](42),
+							MinTTL:                ptr.To[int64](42),
+							OriginRequestPolicyID: pointer.ToOrNilIfZeroValue("example"),
+							PathPattern:           pointer.ToOrNilIfZeroValue("example"),
+							RealtimeLogConfigARN:  pointer.ToOrNilIfZeroValue("example"),
+							SmoothStreaming:       pointer.ToOrNilIfZeroValue(true),
+							TargetOriginID:        pointer.ToOrNilIfZeroValue("example"),
 							TrustedKeyGroups: &svcapitypes.TrustedKeyGroups{
-								Enabled: awsclients.Bool(true),
-								Items:   []*string{awsclients.String("the-good-key")},
+								Enabled: pointer.ToOrNilIfZeroValue(true),
+								Items:   []*string{pointer.ToOrNilIfZeroValue("the-good-key")},
 							},
 							TrustedSigners: &svcapitypes.TrustedSigners{
-								Enabled: awsclients.Bool(true),
-								Items:   []*string{awsclients.String("the-good-signer")},
+								Enabled: pointer.ToOrNilIfZeroValue(true),
+								Items:   []*string{pointer.ToOrNilIfZeroValue("the-good-signer")},
 							},
 						}},
 					},
 					CustomErrorResponses: &svcapitypes.CustomErrorResponses{
 						Items: []*svcapitypes.CustomErrorResponse{{
-							ErrorCachingMinTTL: awsclients.Int64(42),
-							ErrorCode:          awsclients.Int64(418),
-							ResponseCode:       awsclients.String("I'm a teapot"),
-							ResponsePagePath:   awsclients.String("/teapot"),
+							ErrorCachingMinTTL: ptr.To[int64](42),
+							ErrorCode:          ptr.To[int64](418),
+							ResponseCode:       pointer.ToOrNilIfZeroValue("I'm a teapot"),
+							ResponsePagePath:   pointer.ToOrNilIfZeroValue("/teapot"),
 						}},
 					},
 					DefaultCacheBehavior: &svcapitypes.DefaultCacheBehavior{
 						AllowedMethods: &svcapitypes.AllowedMethods{
-							Items: []*string{awsclients.String("GET")},
+							Items: []*string{pointer.ToOrNilIfZeroValue("GET")},
 							CachedMethods: &svcapitypes.CachedMethods{
-								Items: []*string{awsclients.String("GET")},
+								Items: []*string{pointer.ToOrNilIfZeroValue("GET")},
 							},
 						},
-						CachePolicyID:          awsclients.String("example"),
-						Compress:               awsclients.Bool(true),
-						DefaultTTL:             awsclients.Int64(42),
-						FieldLevelEncryptionID: awsclients.String("example"),
+						CachePolicyID:          pointer.ToOrNilIfZeroValue("example"),
+						Compress:               pointer.ToOrNilIfZeroValue(true),
+						DefaultTTL:             ptr.To[int64](42),
+						FieldLevelEncryptionID: pointer.ToOrNilIfZeroValue("example"),
 						ForwardedValues: &svcapitypes.ForwardedValues{
 							Cookies: &svcapitypes.CookiePreference{
-								Forward: awsclients.String("example"),
+								Forward: pointer.ToOrNilIfZeroValue("example"),
 								WhitelistedNames: &svcapitypes.CookieNames{
-									Items: []*string{awsclients.String("example")},
+									Items: []*string{pointer.ToOrNilIfZeroValue("example")},
 								},
 							},
 							Headers: &svcapitypes.Headers{
-								Items: []*string{awsclients.String("X-Hello")},
+								Items: []*string{pointer.ToOrNilIfZeroValue("X-Hello")},
 							},
-							QueryString: awsclients.Bool(true),
+							QueryString: pointer.ToOrNilIfZeroValue(true),
 							QueryStringCacheKeys: &svcapitypes.QueryStringCacheKeys{
-								Items: []*string{awsclients.String("search")},
+								Items: []*string{pointer.ToOrNilIfZeroValue("search")},
 							},
 						},
 						LambdaFunctionAssociations: &svcapitypes.LambdaFunctionAssociations{
 							Items: []*svcapitypes.LambdaFunctionAssociation{{
-								EventType:         awsclients.String("good"),
-								IncludeBody:       awsclients.Bool(true),
-								LambdaFunctionARN: awsclients.String("arn"),
+								EventType:         pointer.ToOrNilIfZeroValue("good"),
+								IncludeBody:       pointer.ToOrNilIfZeroValue(true),
+								LambdaFunctionARN: pointer.ToOrNilIfZeroValue("arn"),
 							}},
 						},
-						MaxTTL:                awsclients.Int64(42),
-						MinTTL:                awsclients.Int64(42),
-						OriginRequestPolicyID: awsclients.String("example"),
-						RealtimeLogConfigARN:  awsclients.String("example"),
-						SmoothStreaming:       awsclients.Bool(true),
-						TargetOriginID:        awsclients.String("example"),
+						MaxTTL:                ptr.To[int64](42),
+						MinTTL:                ptr.To[int64](42),
+						OriginRequestPolicyID: pointer.ToOrNilIfZeroValue("example"),
+						RealtimeLogConfigARN:  pointer.ToOrNilIfZeroValue("example"),
+						SmoothStreaming:       pointer.ToOrNilIfZeroValue(true),
+						TargetOriginID:        pointer.ToOrNilIfZeroValue("example"),
 						TrustedKeyGroups: &svcapitypes.TrustedKeyGroups{
-							Enabled: awsclients.Bool(true),
-							Items:   []*string{awsclients.String("the-good-key")},
+							Enabled: pointer.ToOrNilIfZeroValue(true),
+							Items:   []*string{pointer.ToOrNilIfZeroValue("the-good-key")},
 						},
 						TrustedSigners: &svcapitypes.TrustedSigners{
-							Enabled: awsclients.Bool(true),
-							Items:   []*string{awsclients.String("the-good-signer")},
+							Enabled: pointer.ToOrNilIfZeroValue(true),
+							Items:   []*string{pointer.ToOrNilIfZeroValue("the-good-signer")},
 						},
 					},
-					DefaultRootObject: awsclients.String("the-good-one"),
-					Enabled:           awsclients.Bool(true),
-					HTTPVersion:       awsclients.String("1.1"),
-					IsIPV6Enabled:     awsclients.Bool(true),
+					DefaultRootObject: pointer.ToOrNilIfZeroValue("the-good-one"),
+					Enabled:           pointer.ToOrNilIfZeroValue(true),
+					HTTPVersion:       pointer.ToOrNilIfZeroValue("1.1"),
+					IsIPV6Enabled:     pointer.ToOrNilIfZeroValue(true),
 					Logging: &svcapitypes.LoggingConfig{
-						Bucket:         awsclients.String("big-logs"),
-						Enabled:        awsclients.Bool(true),
-						IncludeCookies: awsclients.Bool(true),
-						Prefix:         awsclients.String("one-large-log-"),
+						Bucket:         pointer.ToOrNilIfZeroValue("big-logs"),
+						Enabled:        pointer.ToOrNilIfZeroValue(true),
+						IncludeCookies: pointer.ToOrNilIfZeroValue(true),
+						Prefix:         pointer.ToOrNilIfZeroValue("one-large-log-"),
 					},
 					OriginGroups: &svcapitypes.OriginGroups{
 						Items: []*svcapitypes.OriginGroup{{
 							FailoverCriteria: &svcapitypes.OriginGroupFailoverCriteria{
 								StatusCodes: &svcapitypes.StatusCodes{
-									Items: []*int64{awsclients.Int64(418)},
+									Items: []*int64{ptr.To[int64](418)},
 								},
 							},
 							Members: &svcapitypes.OriginGroupMembers{
 								Items: []*svcapitypes.OriginGroupMember{{
-									OriginID: awsclients.String("example"),
+									OriginID: pointer.ToOrNilIfZeroValue("example"),
 								}},
 							},
 						}},
 					},
 					Origins: &svcapitypes.Origins{
 						Items: []*svcapitypes.Origin{{
-							ConnectionAttempts: awsclients.Int64(42),
-							ConnectionTimeout:  awsclients.Int64(42),
+							ConnectionAttempts: ptr.To[int64](42),
+							ConnectionTimeout:  ptr.To[int64](42),
 							CustomHeaders: &svcapitypes.CustomHeaders{
 								Items: []*svcapitypes.OriginCustomHeader{{
-									HeaderName:  awsclients.String("X-Cool"),
-									HeaderValue: awsclients.String("very"),
+									HeaderName:  pointer.ToOrNilIfZeroValue("X-Cool"),
+									HeaderValue: pointer.ToOrNilIfZeroValue("very"),
 								}},
 							},
 							CustomOriginConfig: &svcapitypes.CustomOriginConfig{
-								HTTPPort:               awsclients.Int64(8080),
-								HTTPSPort:              awsclients.Int64(443),
-								OriginKeepaliveTimeout: awsclients.Int64(42),
-								OriginProtocolPolicy:   awsclients.String("all-of-them"),
-								OriginReadTimeout:      awsclients.Int64(42),
+								HTTPPort:               ptr.To[int64](8080),
+								HTTPSPort:              ptr.To[int64](443),
+								OriginKeepaliveTimeout: ptr.To[int64](42),
+								OriginProtocolPolicy:   pointer.ToOrNilIfZeroValue("all-of-them"),
+								OriginReadTimeout:      ptr.To[int64](42),
 								OriginSSLProtocols: &svcapitypes.OriginSSLProtocols{
-									Items: []*string{awsclients.String("TLS_1.2")},
+									Items: []*string{pointer.ToOrNilIfZeroValue("TLS_1.2")},
 								},
 							},
-							DomainName: awsclients.String("example.org"),
-							ID:         awsclients.String("custom"),
-							OriginPath: awsclients.String("/"),
+							DomainName: pointer.ToOrNilIfZeroValue("example.org"),
+							ID:         pointer.ToOrNilIfZeroValue("custom"),
+							OriginPath: pointer.ToOrNilIfZeroValue("/"),
 							OriginShield: &svcapitypes.OriginShield{
-								Enabled:            awsclients.Bool(true),
-								OriginShieldRegion: awsclients.String("us-east-1"),
+								Enabled:            pointer.ToOrNilIfZeroValue(true),
+								OriginShieldRegion: pointer.ToOrNilIfZeroValue("us-east-1"),
 							},
 							S3OriginConfig: &svcapitypes.S3OriginConfig{
-								OriginAccessIdentity: awsclients.String("cool-guy"),
+								OriginAccessIdentity: pointer.ToOrNilIfZeroValue("cool-guy"),
 							},
 						}},
 					},
-					PriceClass: awsclients.String("really-cheap"),
+					PriceClass: pointer.ToOrNilIfZeroValue("really-cheap"),
 					Restrictions: &svcapitypes.Restrictions{
 						GeoRestriction: &svcapitypes.GeoRestriction{
-							RestrictionType: awsclients.String("no-australians"),
-							Items:           []*string{awsclients.String("negz"), awsclients.String("kylie")},
+							RestrictionType: pointer.ToOrNilIfZeroValue("no-australians"),
+							Items:           []*string{pointer.ToOrNilIfZeroValue("negz"), pointer.ToOrNilIfZeroValue("kylie")},
 						},
 					},
 					ViewerCertificate: &svcapitypes.ViewerCertificate{
-						ACMCertificateARN:            awsclients.String("example"),
-						Certificate:                  awsclients.String("example"),
-						CertificateSource:            awsclients.String("trusty-source"),
-						CloudFrontDefaultCertificate: awsclients.Bool(false),
-						IAMCertificateID:             awsclients.String("example"),
-						MinimumProtocolVersion:       awsclients.String("TLS_1.2"),
-						SSLSupportMethod:             awsclients.String("fax"),
+						ACMCertificateARN:            pointer.ToOrNilIfZeroValue("example"),
+						Certificate:                  pointer.ToOrNilIfZeroValue("example"),
+						CertificateSource:            pointer.ToOrNilIfZeroValue("trusty-source"),
+						CloudFrontDefaultCertificate: pointer.ToOrNilIfZeroValue(false),
+						IAMCertificateID:             pointer.ToOrNilIfZeroValue("example"),
+						MinimumProtocolVersion:       pointer.ToOrNilIfZeroValue("TLS_1.2"),
+						SSLSupportMethod:             pointer.ToOrNilIfZeroValue("fax"),
 					},
-					WebACLID: awsclients.String("example"),
+					WebACLID: pointer.ToOrNilIfZeroValue("example"),
 				},
 			},
 		},
@@ -525,11 +526,11 @@ func TestLateInitialize(t *testing.T) {
 								{}, // This one has a nil ID.
 								{
 									// This one only exists in desired state.
-									ID: awsclients.String("desired-only"),
+									ID: pointer.ToOrNilIfZeroValue("desired-only"),
 								},
 								{
 									// We want to late-init domain-name here.
-									ID: awsclients.String("custom"),
+									ID: pointer.ToOrNilIfZeroValue("custom"),
 								},
 							},
 						},
@@ -543,11 +544,11 @@ func TestLateInitialize(t *testing.T) {
 									{}, // This one has a nil Id.
 									{
 										// This one only exists in actual state.
-										Id: awsclients.String("actual-only"),
+										Id: pointer.ToOrNilIfZeroValue("actual-only"),
 									},
 									{
-										DomainName: awsclients.String("example.org"),
-										Id:         awsclients.String("custom"),
+										DomainName: pointer.ToOrNilIfZeroValue("example.org"),
+										Id:         pointer.ToOrNilIfZeroValue("custom"),
 									},
 								},
 							},
@@ -562,11 +563,11 @@ func TestLateInitialize(t *testing.T) {
 							{}, // This one has a nil ID.
 							{
 								// This one only exists in desired state.
-								ID: awsclients.String("desired-only"),
+								ID: pointer.ToOrNilIfZeroValue("desired-only"),
 							},
 							{
-								DomainName: awsclients.String("example.org"),
-								ID:         awsclients.String("custom"),
+								DomainName: pointer.ToOrNilIfZeroValue("example.org"),
+								ID:         pointer.ToOrNilIfZeroValue("custom"),
 							},
 						},
 					},

@@ -18,10 +18,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 
 	svcsdk "github.com/aws/aws-sdk-go/service/secretsmanager"
 	"github.com/aws/aws-sdk-go/service/secretsmanager/secretsmanageriface"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/connection"
+	"github.com/crossplane/crossplane-runtime/pkg/controller"
+	"github.com/crossplane/crossplane-runtime/pkg/event"
+	"github.com/crossplane/crossplane-runtime/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -30,18 +36,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/connection"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	"github.com/crossplane/crossplane-runtime/pkg/event"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/secretsmanager/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	policyutils "github.com/crossplane-contrib/provider-aws/pkg/utils/policy"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -54,54 +55,66 @@ const (
 	errGetResourcePolicy    = "cannot get resource policy"
 	errPutResourcePolicy    = "cannot put resource policy"
 	errDeleteResourcePolicy = "cannot delete resource policy"
-	errInvalidSpecPolicy    = "spec policy is invalid"
-	errInvalidCurrentPolicy = "current policy is invalid"
 	errParseSecretValue     = "cannot parse AWS secret value"
 	errGetAWSSecretValue    = "cannot get AWS secret value"
 	errCreateK8sSecret      = "canoot create secret in K8s"
 	errNoAWSValue           = "neither SecretString nor SecretBinary field is filled in the returned object"
 	errNoSecretRef          = "neither binarySecretRef nor stringSecretRef is given"
 	errOnlyOneSecretRef     = "only one of binarySecretRef or stringSecretRef must be set"
+	errParseSpecPolicy      = "cannot parse spec policy"
+	errParseExternalPolicy  = "cannot parse external policy"
 )
 
 // SetupSecret adds a controller that reconciles a Secret.
 func SetupSecret(mgr ctrl.Manager, o controller.Options) error {
 	name := managed.ControllerName(svcapitypes.SecretGroupKind)
-	opts := []option{
-		func(e *external) {
-			e.preObserve = preObserve
-			e.postObserve = postObserve
-			h := &hooks{client: e.client, kube: e.kube}
-			e.lateInitialize = h.lateInitialize
-			e.isUpToDate = h.isUpToDate
-			e.preUpdate = h.preUpdate
-			e.preCreate = h.preCreate
-			e.preDelete = preDelete
-		},
-	}
+	opts := []option{setupExternal}
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
 	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.SecretGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Secret{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.SecretGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient()), managed.NewNameAsExternalName(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
+}
+
+func setupExternal(e *external) {
+	e.preObserve = preObserve
+	e.postObserve = postObserve
+	h := &hooks{client: e.client, kube: e.kube}
+	e.lateInitialize = h.lateInitialize
+	e.isUpToDate = h.isUpToDate
+	e.preUpdate = h.preUpdate
+	e.preCreate = h.preCreate
+	e.preDelete = preDelete
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Secret, obj *svcsdk.DescribeSecretInput) error {
-	obj.SecretId = awsclients.String(meta.GetExternalName(cr))
+	obj.SecretId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -147,7 +160,7 @@ func (e *hooks) lateInitialize(spec *svcapitypes.SecretParameters, resp *svcsdk.
 			if err := e.kube.Get(context.TODO(), nn, sc); err != nil {
 				return err
 			}
-			ref.Type = awsclients.String(string(sc.Type))
+			ref.Type = pointer.ToOrNilIfZeroValue(string(sc.Type))
 		}
 
 		return nil
@@ -178,17 +191,17 @@ func (e *hooks) lateInitialize(spec *svcapitypes.SecretParameters, resp *svcsdk.
 		Data: data,
 	}
 	if ref.Type != nil {
-		sc.Type = corev1.SecretType(awsclients.StringValue(ref.Type))
+		sc.Type = corev1.SecretType(pointer.StringValue(ref.Type))
 	}
 	return errors.Wrap(e.kube.Create(context.TODO(), sc), errCreateK8sSecret)
 }
 
-func getAWSSecretData(ref *svcapitypes.SecretReference, s *svcsdk.GetSecretValueOutput) (map[string][]byte, error) { // nolint:gocyclo
+func getAWSSecretData(ref *svcapitypes.SecretReference, s *svcsdk.GetSecretValueOutput) (map[string][]byte, error) {
 	if ref.Key != nil {
 		switch {
-		case awsclients.StringValue(s.SecretString) != "":
+		case pointer.StringValue(s.SecretString) != "":
 			return map[string][]byte{
-				*ref.Key: []byte(awsclients.StringValue(s.SecretString)),
+				*ref.Key: []byte(pointer.StringValue(s.SecretString)),
 			}, nil
 		case len(s.SecretBinary) != 0:
 			return map[string][]byte{
@@ -202,8 +215,8 @@ func getAWSSecretData(ref *svcapitypes.SecretReference, s *svcsdk.GetSecretValue
 	var raw []byte
 
 	switch {
-	case awsclients.StringValue(s.SecretString) != "":
-		raw = []byte(awsclients.StringValue(s.SecretString))
+	case pointer.StringValue(s.SecretString) != "":
+		raw = []byte(pointer.StringValue(s.SecretString))
 	case len(s.SecretBinary) != 0:
 		raw = s.SecretBinary
 	default:
@@ -223,66 +236,72 @@ func getAWSSecretData(ref *svcapitypes.SecretReference, s *svcsdk.GetSecretValue
 	return payload, nil
 }
 
-func (e *hooks) isUpToDate(cr *svcapitypes.Secret, resp *svcsdk.DescribeSecretOutput) (bool, error) { // nolint:gocyclo
-	if meta.WasDeleted(cr) {
-		return false, nil
-	}
-
+func (e *hooks) isUpToDate(ctx context.Context, cr *svcapitypes.Secret, resp *svcsdk.DescribeSecretOutput) (bool, string, error) {
 	// NOTE(muvaf): No operation can be done on secrets that are marked for deletion.
 	if resp.DeletedDate != nil {
-		return true, nil
+		return true, "", nil
 	}
-	if awsclients.StringValue(cr.Spec.ForProvider.Description) != awsclients.StringValue(resp.Description) {
-		return false, nil
+	if pointer.StringValue(cr.Spec.ForProvider.Description) != pointer.StringValue(resp.Description) {
+		return false, "", nil
 	}
-	if awsclients.StringValue(cr.Spec.ForProvider.KMSKeyID) != awsclients.StringValue(resp.KmsKeyId) {
-		return false, nil
+	if pointer.StringValue(cr.Spec.ForProvider.KMSKeyID) != pointer.StringValue(resp.KmsKeyId) {
+		return false, "", nil
 	}
 	add, remove := DiffTags(cr.Spec.ForProvider.Tags, resp.Tags)
 	if len(add) != 0 && len(remove) != 0 {
-		return false, nil
+		return false, "", nil
 	}
 
-	// TODO(muvaf): We need isUpToDate to have context.
-	ctx := context.TODO()
+	isPolicyUpToDate, err := e.isPolicyUpToDate(ctx, cr)
+	if err != nil {
+		return false, "", err
+	}
+	if !isPolicyUpToDate {
+		return false, "", nil
+	}
 
-	// Compare secret resource policies
-	pol, err := e.client.GetResourcePolicyWithContext(ctx, &svcsdk.GetResourcePolicyInput{
-		SecretId: awsclients.String(meta.GetExternalName(cr)),
+	isPayloadUpToDate, err := e.isPayloadUpToDate(ctx, cr)
+	return isPayloadUpToDate, "", err
+}
+
+func (e *hooks) isPolicyUpToDate(ctx context.Context, cr *svcapitypes.Secret) (bool, error) {
+	res, err := e.client.GetResourcePolicyWithContext(ctx, &svcsdk.GetResourcePolicyInput{
+		SecretId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
 		return false, errors.Wrap(err, errGetResourcePolicy)
 	}
-	if pol.ResourcePolicy != nil && cr.Spec.ForProvider.ResourcePolicy != nil {
-		compactCurrentPolicy, err := awsclients.CompactAndEscapeJSON(awsclients.StringValue(pol.ResourcePolicy))
-		if err != nil {
-			return false, errors.Wrap(err, errInvalidCurrentPolicy)
-		}
-		compactSpecPolicy, err := awsclients.CompactAndEscapeJSON(awsclients.StringValue(cr.Spec.ForProvider.ResourcePolicy))
-		if err != nil {
-			return false, errors.Wrap(err, errInvalidSpecPolicy)
-		}
-		if compactCurrentPolicy != compactSpecPolicy {
-			return false, nil
-		}
-	} else if !(pol.ResourcePolicy == nil && cr.Spec.ForProvider.ResourcePolicy == nil) {
-		return false, nil
+
+	if res.ResourcePolicy == nil || cr.Spec.ForProvider.ResourcePolicy == nil {
+		return res.ResourcePolicy == cr.Spec.ForProvider.ResourcePolicy, nil
 	}
 
-	// Compare secret values
+	specPol, err := policyutils.ParsePolicyString(*cr.Spec.ForProvider.ResourcePolicy)
+	if err != nil {
+		return false, errors.Wrap(err, errParseSpecPolicy)
+	}
+	curPol, err := policyutils.ParsePolicyString(*res.ResourcePolicy)
+	if err != nil {
+		return false, errors.Wrap(err, errParseExternalPolicy)
+	}
+	areEqal, _ := policyutils.ArePoliciesEqal(&specPol, &curPol)
+	return areEqal, nil
+}
+
+func (e *hooks) isPayloadUpToDate(ctx context.Context, cr *svcapitypes.Secret) (bool, error) {
 	s, err := e.client.GetSecretValueWithContext(ctx, &svcsdk.GetSecretValueInput{
-		SecretId: awsclients.String(meta.GetExternalName(cr)),
+		SecretId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return false, awsclients.Wrap(err, errGetSecretValue)
+		return false, errorutils.Wrap(err, errGetSecretValue)
 	}
 	payload, err := e.getPayload(ctx, &cr.Spec.ForProvider)
 	if err != nil {
 		return false, err
 	}
 	switch {
-	case awsclients.StringValue(s.SecretString) != "":
-		return string(payload) == awsclients.StringValue(s.SecretString), nil
+	case pointer.StringValue(s.SecretString) != "":
+		return string(payload) == pointer.StringValue(s.SecretString), nil
 	case len(s.SecretBinary) != 0:
 		return bytes.Equal(payload, s.SecretBinary), nil
 	}
@@ -304,9 +323,9 @@ func (e *hooks) getPayload(ctx context.Context, params *svcapitypes.SecretParame
 	}
 
 	if ref.Key != nil {
-		val, ok := sc.Data[awsclients.StringValue(ref.Key)]
+		val, ok := sc.Data[pointer.StringValue(ref.Key)]
 		if !ok {
-			return nil, errors.New(fmt.Sprintf(errFmtKeyNotFound, awsclients.StringValue(ref.Key)))
+			return nil, errors.New(fmt.Sprintf(errFmtKeyNotFound, pointer.StringValue(ref.Key)))
 		}
 		return val, nil
 	}
@@ -334,35 +353,35 @@ func getSecretRef(params *svcapitypes.SecretParameters) (*svcapitypes.SecretRefe
 	return nil, errors.New(errNoSecretRef)
 }
 
-func (e *hooks) preUpdate(ctx context.Context, cr *svcapitypes.Secret, obj *svcsdk.UpdateSecretInput) error { // nolint:gocyclo
+func (e *hooks) preUpdate(ctx context.Context, cr *svcapitypes.Secret, obj *svcsdk.UpdateSecretInput) error { //nolint:gocyclo
 	resp, err := e.client.DescribeSecretWithContext(ctx, &svcsdk.DescribeSecretInput{
-		SecretId: awsclients.String(meta.GetExternalName(cr)),
+		SecretId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return awsclients.Wrap(err, errDescribe)
+		return errorutils.Wrap(err, errDescribe)
 	}
 	add, remove := DiffTags(cr.Spec.ForProvider.Tags, resp.Tags)
 	if len(remove) != 0 {
 		if _, err := e.client.UntagResourceWithContext(ctx, &svcsdk.UntagResourceInput{
-			SecretId: awsclients.String(meta.GetExternalName(cr)),
+			SecretId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			TagKeys:  remove,
 		}); err != nil {
-			return awsclients.Wrap(err, errRemoveTags)
+			return errorutils.Wrap(err, errRemoveTags)
 		}
 	}
 	if len(add) != 0 {
 		if _, err := e.client.TagResourceWithContext(ctx, &svcsdk.TagResourceInput{
-			SecretId: awsclients.String(meta.GetExternalName(cr)),
+			SecretId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			Tags:     add,
 		}); err != nil {
-			return awsclients.Wrap(err, errCreateTags)
+			return errorutils.Wrap(err, errCreateTags)
 		}
 	}
 
 	// Update resource policy
 	if cr.Spec.ForProvider.ResourcePolicy != nil {
 		_, err := e.client.PutResourcePolicyWithContext(ctx, &svcsdk.PutResourcePolicyInput{
-			SecretId:       awsclients.String(meta.GetExternalName(cr)),
+			SecretId:       pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			ResourcePolicy: cr.Spec.ForProvider.ResourcePolicy,
 		})
 		if err != nil {
@@ -370,7 +389,7 @@ func (e *hooks) preUpdate(ctx context.Context, cr *svcapitypes.Secret, obj *svcs
 		}
 	} else {
 		_, err := e.client.DeleteResourcePolicyWithContext(ctx, &svcsdk.DeleteResourcePolicyInput{
-			SecretId: awsclients.String(meta.GetExternalName(cr)),
+			SecretId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		})
 		if err != nil {
 			return errors.Wrap(err, errDeleteResourcePolicy)
@@ -383,11 +402,11 @@ func (e *hooks) preUpdate(ctx context.Context, cr *svcapitypes.Secret, obj *svcs
 	}
 	switch {
 	case cr.Spec.ForProvider.StringSecretRef != nil:
-		obj.SecretString = awsclients.String(string(payload))
+		obj.SecretString = pointer.ToOrNilIfZeroValue(string(payload))
 	case cr.Spec.ForProvider.BinarySecretRef != nil:
 		obj.SecretBinary = payload
 	}
-	obj.SecretId = awsclients.String(meta.GetExternalName(cr))
+	obj.SecretId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.Description = cr.Spec.ForProvider.Description
 	obj.KmsKeyId = cr.Spec.ForProvider.KMSKeyID
 	return nil
@@ -400,69 +419,40 @@ func (e *hooks) preCreate(ctx context.Context, cr *svcapitypes.Secret, obj *svcs
 	}
 	switch {
 	case cr.Spec.ForProvider.StringSecretRef != nil:
-		obj.SecretString = awsclients.String(string(payload))
+		obj.SecretString = pointer.ToOrNilIfZeroValue(string(payload))
 	case cr.Spec.ForProvider.BinarySecretRef != nil:
 		obj.SecretBinary = payload
 	}
-	obj.Name = awsclients.String(meta.GetExternalName(cr))
+	obj.Name = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Secret, obj *svcsdk.DeleteSecretInput) (bool, error) {
 	obj.ForceDeleteWithoutRecovery = cr.Spec.ForProvider.ForceDeleteWithoutRecovery
 	obj.RecoveryWindowInDays = cr.Spec.ForProvider.RecoveryWindowInDays
-	obj.SecretId = awsclients.String(meta.GetExternalName(cr))
+	obj.SecretId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
-}
-
-type tagger struct {
-	kube client.Client
-}
-
-// TODO(knappek): split this out as it is used in several controllers
-func (t *tagger) Initialize(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Secret)
-	if !ok {
-		return errors.New(errNotSecret)
-	}
-	tagMap := map[string]string{}
-	for _, tags := range cr.Spec.ForProvider.Tags {
-		tagMap[awsclients.StringValue(tags.Key)] = awsclients.StringValue(tags.Value)
-	}
-	for k, v := range resource.GetExternalTags(mg) {
-		tagMap[k] = v
-	}
-	cr.Spec.ForProvider.Tags = make([]*svcapitypes.Tag, len(tagMap))
-	i := 0
-	for k, v := range tagMap {
-		cr.Spec.ForProvider.Tags[i] = &svcapitypes.Tag{Key: awsclients.String(k), Value: awsclients.String(v)}
-		i++
-	}
-	sort.Slice(cr.Spec.ForProvider.Tags, func(i, j int) bool {
-		return awsclients.StringValue(cr.Spec.ForProvider.Tags[i].Key) < awsclients.StringValue(cr.Spec.ForProvider.Tags[j].Key)
-	})
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
 }
 
 // DiffTags returns tags that should be added or removed.
 func DiffTags(spec []*svcapitypes.Tag, current []*svcsdk.Tag) (addTags []*svcsdk.Tag, remove []*string) {
 	addMap := make(map[string]string, len(spec))
 	for _, t := range spec {
-		addMap[awsclients.StringValue(t.Key)] = awsclients.StringValue(t.Value)
+		addMap[pointer.StringValue(t.Key)] = pointer.StringValue(t.Value)
 	}
 	removeMap := map[string]struct{}{}
 	for _, t := range current {
-		if addMap[awsclients.StringValue(t.Key)] == awsclients.StringValue(t.Value) {
-			delete(addMap, awsclients.StringValue(t.Key))
+		if addMap[pointer.StringValue(t.Key)] == pointer.StringValue(t.Value) {
+			delete(addMap, pointer.StringValue(t.Key))
 			continue
 		}
-		removeMap[awsclients.StringValue(t.Key)] = struct{}{}
+		removeMap[pointer.StringValue(t.Key)] = struct{}{}
 	}
 	for k, v := range addMap {
-		addTags = append(addTags, &svcsdk.Tag{Key: awsclients.String(k), Value: awsclients.String(v)})
+		addTags = append(addTags, &svcsdk.Tag{Key: pointer.ToOrNilIfZeroValue(k), Value: pointer.ToOrNilIfZeroValue(v)})
 	}
 	for k := range removeMap {
-		remove = append(remove, awsclients.String(k))
+		remove = append(remove, pointer.ToOrNilIfZeroValue(k))
 	}
 	return
 }

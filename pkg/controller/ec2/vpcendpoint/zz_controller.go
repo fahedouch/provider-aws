@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ec2/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.VPCEndpoint)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.VPCEndpoint) (managed.TypedExternalClient[*svcapitypes.VPCEndpoint], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.VPCEndpoint)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.VPCEndpoint) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,7 +74,7 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeVpcEndpointsWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	resp = e.filterList(cr, resp)
 	if len(resp.VpcEndpoints) == 0 {
@@ -92,23 +85,23 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateVPCEndpoint(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.VPCEndpoint)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.VPCEndpoint) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateVpcEndpointInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -116,7 +109,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateVpcEndpointWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.VpcEndpoint.CreationTimestamp != nil {
@@ -140,42 +133,59 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Status.AtProvider.DNSEntries = nil
 	}
-	if resp.VpcEndpoint.Groups != nil {
-		f2 := []*svcapitypes.SecurityGroupIdentifier{}
-		for _, f2iter := range resp.VpcEndpoint.Groups {
-			f2elem := &svcapitypes.SecurityGroupIdentifier{}
-			if f2iter.GroupId != nil {
-				f2elem.GroupID = f2iter.GroupId
-			}
-			if f2iter.GroupName != nil {
-				f2elem.GroupName = f2iter.GroupName
-			}
-			f2 = append(f2, f2elem)
+	if resp.VpcEndpoint.DnsOptions != nil {
+		f2 := &svcapitypes.DNSOptionsSpecification{}
+		if resp.VpcEndpoint.DnsOptions.DnsRecordIpType != nil {
+			f2.DNSRecordIPType = resp.VpcEndpoint.DnsOptions.DnsRecordIpType
 		}
-		cr.Status.AtProvider.Groups = f2
+		if resp.VpcEndpoint.DnsOptions.PrivateDnsOnlyForInboundResolverEndpoint != nil {
+			f2.PrivateDNSOnlyForInboundResolverEndpoint = resp.VpcEndpoint.DnsOptions.PrivateDnsOnlyForInboundResolverEndpoint
+		}
+		cr.Spec.ForProvider.DNSOptions = f2
+	} else {
+		cr.Spec.ForProvider.DNSOptions = nil
+	}
+	if resp.VpcEndpoint.Groups != nil {
+		f3 := []*svcapitypes.SecurityGroupIdentifier{}
+		for _, f3iter := range resp.VpcEndpoint.Groups {
+			f3elem := &svcapitypes.SecurityGroupIdentifier{}
+			if f3iter.GroupId != nil {
+				f3elem.GroupID = f3iter.GroupId
+			}
+			if f3iter.GroupName != nil {
+				f3elem.GroupName = f3iter.GroupName
+			}
+			f3 = append(f3, f3elem)
+		}
+		cr.Status.AtProvider.Groups = f3
 	} else {
 		cr.Status.AtProvider.Groups = nil
 	}
+	if resp.VpcEndpoint.IpAddressType != nil {
+		cr.Spec.ForProvider.IPAddressType = resp.VpcEndpoint.IpAddressType
+	} else {
+		cr.Spec.ForProvider.IPAddressType = nil
+	}
 	if resp.VpcEndpoint.LastError != nil {
-		f3 := &svcapitypes.LastError{}
+		f5 := &svcapitypes.LastError{}
 		if resp.VpcEndpoint.LastError.Code != nil {
-			f3.Code = resp.VpcEndpoint.LastError.Code
+			f5.Code = resp.VpcEndpoint.LastError.Code
 		}
 		if resp.VpcEndpoint.LastError.Message != nil {
-			f3.Message = resp.VpcEndpoint.LastError.Message
+			f5.Message = resp.VpcEndpoint.LastError.Message
 		}
-		cr.Status.AtProvider.LastError = f3
+		cr.Status.AtProvider.LastError = f5
 	} else {
 		cr.Status.AtProvider.LastError = nil
 	}
 	if resp.VpcEndpoint.NetworkInterfaceIds != nil {
-		f4 := []*string{}
-		for _, f4iter := range resp.VpcEndpoint.NetworkInterfaceIds {
-			var f4elem string
-			f4elem = *f4iter
-			f4 = append(f4, &f4elem)
+		f6 := []*string{}
+		for _, f6iter := range resp.VpcEndpoint.NetworkInterfaceIds {
+			var f6elem string
+			f6elem = *f6iter
+			f6 = append(f6, &f6elem)
 		}
-		cr.Status.AtProvider.NetworkInterfaceIDs = f4
+		cr.Status.AtProvider.NetworkInterfaceIDs = f6
 	} else {
 		cr.Status.AtProvider.NetworkInterfaceIDs = nil
 	}
@@ -200,13 +210,13 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.RequesterManaged = nil
 	}
 	if resp.VpcEndpoint.RouteTableIds != nil {
-		f9 := []*string{}
-		for _, f9iter := range resp.VpcEndpoint.RouteTableIds {
-			var f9elem string
-			f9elem = *f9iter
-			f9 = append(f9, &f9elem)
+		f11 := []*string{}
+		for _, f11iter := range resp.VpcEndpoint.RouteTableIds {
+			var f11elem string
+			f11elem = *f11iter
+			f11 = append(f11, &f11elem)
 		}
-		cr.Status.AtProvider.RouteTableIDs = f9
+		cr.Status.AtProvider.RouteTableIDs = f11
 	} else {
 		cr.Status.AtProvider.RouteTableIDs = nil
 	}
@@ -221,29 +231,29 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.State = nil
 	}
 	if resp.VpcEndpoint.SubnetIds != nil {
-		f12 := []*string{}
-		for _, f12iter := range resp.VpcEndpoint.SubnetIds {
-			var f12elem string
-			f12elem = *f12iter
-			f12 = append(f12, &f12elem)
+		f14 := []*string{}
+		for _, f14iter := range resp.VpcEndpoint.SubnetIds {
+			var f14elem string
+			f14elem = *f14iter
+			f14 = append(f14, &f14elem)
 		}
-		cr.Status.AtProvider.SubnetIDs = f12
+		cr.Status.AtProvider.SubnetIDs = f14
 	} else {
 		cr.Status.AtProvider.SubnetIDs = nil
 	}
 	if resp.VpcEndpoint.Tags != nil {
-		f13 := []*svcapitypes.Tag{}
-		for _, f13iter := range resp.VpcEndpoint.Tags {
-			f13elem := &svcapitypes.Tag{}
-			if f13iter.Key != nil {
-				f13elem.Key = f13iter.Key
+		f15 := []*svcapitypes.Tag{}
+		for _, f15iter := range resp.VpcEndpoint.Tags {
+			f15elem := &svcapitypes.Tag{}
+			if f15iter.Key != nil {
+				f15elem.Key = f15iter.Key
 			}
-			if f13iter.Value != nil {
-				f13elem.Value = f13iter.Value
+			if f15iter.Value != nil {
+				f15elem.Value = f15iter.Value
 			}
-			f13 = append(f13, f13elem)
+			f15 = append(f15, f15elem)
 		}
-		cr.Status.AtProvider.Tags = f13
+		cr.Status.AtProvider.Tags = f15
 	} else {
 		cr.Status.AtProvider.Tags = nil
 	}
@@ -266,27 +276,24 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.VPCEndpoint)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Update(ctx context.Context, cr *svcapitypes.VPCEndpoint) (managed.ExternalUpdate, error) {
 	input := GenerateModifyVpcEndpointInput(cr)
 	if err := e.preUpdate(ctx, cr, input); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.ModifyVpcEndpointWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.VPCEndpoint)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.VPCEndpoint) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
-	return e.delete(ctx, mg)
+	return e.delete(ctx, cr)
 
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -319,10 +326,10 @@ type external struct {
 	postObserve    func(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.DescribeVpcEndpointsOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	filterList     func(*svcapitypes.VPCEndpoint, *svcsdk.DescribeVpcEndpointsOutput) *svcsdk.DescribeVpcEndpointsOutput
 	lateInitialize func(*svcapitypes.VPCEndpointParameters, *svcsdk.DescribeVpcEndpointsOutput) error
-	isUpToDate     func(*svcapitypes.VPCEndpoint, *svcsdk.DescribeVpcEndpointsOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.DescribeVpcEndpointsOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.CreateVpcEndpointInput) error
 	postCreate     func(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.CreateVpcEndpointOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
-	delete         func(context.Context, cpresource.Managed) error
+	delete         func(context.Context, *svcapitypes.VPCEndpoint) (managed.ExternalDelete, error)
 	preUpdate      func(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.ModifyVpcEndpointInput) error
 	postUpdate     func(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.ModifyVpcEndpointOutput, managed.ExternalUpdate, error) (managed.ExternalUpdate, error)
 }
@@ -340,8 +347,8 @@ func nopFilterList(_ *svcapitypes.VPCEndpoint, list *svcsdk.DescribeVpcEndpoints
 func nopLateInitialize(*svcapitypes.VPCEndpointParameters, *svcsdk.DescribeVpcEndpointsOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.VPCEndpoint, *svcsdk.DescribeVpcEndpointsOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.DescribeVpcEndpointsOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.CreateVpcEndpointInput) error {
@@ -350,8 +357,8 @@ func nopPreCreate(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.CreateVpcEn
 func nopPostCreate(_ context.Context, _ *svcapitypes.VPCEndpoint, _ *svcsdk.CreateVpcEndpointOutput, cre managed.ExternalCreation, err error) (managed.ExternalCreation, error) {
 	return cre, err
 }
-func nopDelete(context.Context, cpresource.Managed) error {
-	return nil
+func nopDelete(context.Context, *svcapitypes.VPCEndpoint) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, nil
 }
 func nopPreUpdate(context.Context, *svcapitypes.VPCEndpoint, *svcsdk.ModifyVpcEndpointInput) error {
 	return nil

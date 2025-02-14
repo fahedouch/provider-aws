@@ -34,6 +34,8 @@ type ComputeEnvironmentParameters struct {
 	// see Compute Environments (https://docs.aws.amazon.com/batch/latest/userguide/compute_environments.html)
 	// in the Batch User Guide.
 	ComputeResources *ComputeResource `json:"computeResources,omitempty"`
+	// The details for the Amazon EKS cluster that supports the compute environment.
+	EKSConfiguration *EKSConfiguration `json:"eksConfiguration,omitempty"`
 	// The tags that you apply to the compute environment to help you categorize
 	// and organize your resources. Each tag consists of a key and an optional value.
 	// For more information, see Tagging Amazon Web Services Resources (https://docs.aws.amazon.com/general/latest/gr/aws_tagging.html)
@@ -68,28 +70,39 @@ type ComputeEnvironmentSpec struct {
 type ComputeEnvironmentObservation struct {
 	// The Amazon Resource Name (ARN) of the compute environment.
 	ComputeEnvironmentARN *string `json:"computeEnvironmentARN,omitempty"`
-	// The name of the compute environment. It can be up to 128 letters long. It
-	// can contain uppercase and lowercase letters, numbers, hyphens (-), and underscores
-	// (_).
+	// The name of the compute environment. It can be up to 128 characters long.
+	// It can contain uppercase and lowercase letters, numbers, hyphens (-), and
+	// underscores (_).
 	ComputeEnvironmentName *string `json:"computeEnvironmentName,omitempty"`
-	// The Amazon Resource Name (ARN) of the underlying Amazon ECS cluster used
-	// by the compute environment.
-	EcsClusterARN *string `json:"ecsClusterARN,omitempty"`
+	// The Amazon Resource Name (ARN) of the underlying Amazon ECS cluster that
+	// the compute environment uses.
+	ECSClusterARN *string `json:"ecsClusterARN,omitempty"`
 	// The state of the compute environment. The valid values are ENABLED or DISABLED.
 	//
 	// If the state is ENABLED, then the Batch scheduler can attempt to place jobs
 	// from an associated job queue on the compute resources within the environment.
 	// If the compute environment is managed, then it can scale its instances out
-	// or in automatically, based on the job queue demand.
+	// or in automatically based on the job queue demand.
 	//
 	// If the state is DISABLED, then the Batch scheduler doesn't attempt to place
 	// jobs within the environment. Jobs in a STARTING or RUNNING state continue
 	// to progress normally. Managed compute environments in the DISABLED state
-	// don't scale out. However, they scale in to minvCpus value after instances
-	// become idle.
+	// don't scale out.
+	//
+	// Compute environments in a DISABLED state may continue to incur billing charges.
+	// To prevent additional charges, turn off and then delete the compute environment.
+	// For more information, see State (https://docs.aws.amazon.com/batch/latest/userguide/compute_environment_parameters.html#compute_environment_state)
+	// in the Batch User Guide.
+	//
+	// When an instance is idle, the instance scales down to the minvCpus value.
+	// However, the instance size doesn't change. For example, consider a c5.8xlarge
+	// instance with a minvCpus value of 4 and a desiredvCpus value of 36. This
+	// instance doesn't scale down to a c5.large instance.
 	State *string `json:"state,omitempty"`
 	// The current status of the compute environment (for example, CREATING or VALID).
 	Status *string `json:"status,omitempty"`
+
+	CustomComputeEnvironmentObservation `json:",inline"`
 }
 
 // ComputeEnvironmentStatus defines the observed state of ComputeEnvironment.
@@ -104,6 +117,7 @@ type ComputeEnvironmentStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

@@ -17,9 +17,8 @@ limitations under the License.
 package v1beta1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ReplicationGroup states.
@@ -93,6 +92,9 @@ type NodeGroup struct {
 	// PrimaryEndpoint is the endpoint of the primary node in this
 	// node group (shard).
 	PrimaryEndpoint Endpoint `json:"primaryEndpoint,omitempty"`
+
+	// ReaderEndpoint is the endpoint of the replica nodes in this node group (shard).
+	ReaderEndpoint Endpoint `json:"readerEndpoint,omitempty"`
 
 	// Slots is the keyspace for this node group (shard).
 	Slots string `json:"slots,omitempty"`

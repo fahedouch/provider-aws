@@ -16,8 +16,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/apigateway/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	apigwclient "github.com/crossplane-contrib/provider-aws/pkg/clients/apigateway"
+	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupMethod adds a controller that reconciles Method.
@@ -36,17 +38,30 @@ func SetupMethod(mgr ctrl.Manager, o controller.Options) error {
 			e.lateInitialize = c.lateInitialize
 		},
 	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.MethodGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Method{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.MethodGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithInitializers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name)))))
+		Complete(r)
 }
 
 type custom struct {
@@ -56,7 +71,7 @@ type custom struct {
 func getResourceIDFromExternalName(cr *svcapitypes.Method) *string {
 	ext := meta.GetExternalName(cr)
 	spl := strings.Split(ext, "-")
-	val := aws.StringValue(&spl[1])
+	val := pointer.StringValue(&spl[1])
 
 	return &val
 }
@@ -84,9 +99,9 @@ func postCreate(_ context.Context, cr *svcapitypes.Method, resp *svcsdk.Method, 
 
 	meta.SetExternalName(cr, fmt.Sprintf(
 		"%s-%s-%s",
-		aws.StringValue(cr.Spec.ForProvider.RestAPIID),
-		aws.StringValue(cr.Spec.ForProvider.ResourceID),
-		aws.StringValue(cr.Spec.ForProvider.HTTPMethod),
+		pointer.StringValue(cr.Spec.ForProvider.RestAPIID),
+		pointer.StringValue(cr.Spec.ForProvider.ResourceID),
+		pointer.StringValue(cr.Spec.ForProvider.HTTPMethod),
 	))
 	return cre, nil
 }
@@ -126,10 +141,10 @@ func (c *custom) lateInitialize(cr *svcapitypes.MethodParameters, cur *svcsdk.Me
 		}
 		cr.ResourceID = resourceID
 	}
-	cr.APIKeyRequired = aws.LateInitializeBoolPtr(cr.APIKeyRequired, cur.ApiKeyRequired)
-	cr.AuthorizationScopes = aws.LateInitializeStringPtrSlice(cr.AuthorizationScopes, cur.AuthorizationScopes)
-	cr.AuthorizationType = aws.LateInitializeStringPtr(cr.AuthorizationType, cur.AuthorizationType)
-	cr.OperationName = aws.LateInitializeStringPtr(cr.OperationName, cur.OperationName)
+	cr.APIKeyRequired = pointer.LateInitialize(cr.APIKeyRequired, cur.ApiKeyRequired)
+	cr.AuthorizationScopes = pointer.LateInitializeSlice(cr.AuthorizationScopes, cur.AuthorizationScopes)
+	cr.AuthorizationType = pointer.LateInitialize(cr.AuthorizationType, cur.AuthorizationType)
+	cr.OperationName = pointer.LateInitialize(cr.OperationName, cur.OperationName)
 
 	if cr.RequestModels == nil && cur.RequestModels != nil {
 		cr.RequestModels = cur.RequestModels

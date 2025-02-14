@@ -58,6 +58,13 @@ const (
 	CertificateSource_acm        CertificateSource = "acm"
 )
 
+type ContinuousDeploymentPolicyType string
+
+const (
+	ContinuousDeploymentPolicyType_SingleWeight ContinuousDeploymentPolicyType = "SingleWeight"
+	ContinuousDeploymentPolicyType_SingleHeader ContinuousDeploymentPolicyType = "SingleHeader"
+)
+
 type EventType string
 
 const (
@@ -84,6 +91,7 @@ type FunctionRuntime string
 
 const (
 	FunctionRuntime_cloudfront_js_1_0 FunctionRuntime = "cloudfront-js-1.0"
+	FunctionRuntime_cloudfront_js_2_0 FunctionRuntime = "cloudfront-js-2.0"
 )
 
 type FunctionStage string
@@ -104,8 +112,10 @@ const (
 type HTTPVersion string
 
 const (
-	HTTPVersion_http1_1 HTTPVersion = "http1.1"
-	HTTPVersion_http2   HTTPVersion = "http2"
+	HTTPVersion_http1_1   HTTPVersion = "http1.1"
+	HTTPVersion_http2     HTTPVersion = "http2"
+	HTTPVersion_http3     HTTPVersion = "http3"
+	HTTPVersion_http2and3 HTTPVersion = "http2and3"
 )
 
 type ICPRecordalStatus string
@@ -148,6 +158,27 @@ const (
 	MinimumProtocolVersion_TLSv1_2_2021 MinimumProtocolVersion = "TLSv1.2_2021"
 )
 
+type OriginAccessControlOriginTypes string
+
+const (
+	OriginAccessControlOriginTypes_s3         OriginAccessControlOriginTypes = "s3"
+	OriginAccessControlOriginTypes_mediastore OriginAccessControlOriginTypes = "mediastore"
+)
+
+type OriginAccessControlSigningBehaviors string
+
+const (
+	OriginAccessControlSigningBehaviors_never       OriginAccessControlSigningBehaviors = "never"
+	OriginAccessControlSigningBehaviors_always      OriginAccessControlSigningBehaviors = "always"
+	OriginAccessControlSigningBehaviors_no_override OriginAccessControlSigningBehaviors = "no-override"
+)
+
+type OriginAccessControlSigningProtocols string
+
+const (
+	OriginAccessControlSigningProtocols_sigv4 OriginAccessControlSigningProtocols = "sigv4"
+)
+
 type OriginProtocolPolicy string
 
 const (
@@ -162,6 +193,7 @@ const (
 	OriginRequestPolicyCookieBehavior_none      OriginRequestPolicyCookieBehavior = "none"
 	OriginRequestPolicyCookieBehavior_whitelist OriginRequestPolicyCookieBehavior = "whitelist"
 	OriginRequestPolicyCookieBehavior_all       OriginRequestPolicyCookieBehavior = "all"
+	OriginRequestPolicyCookieBehavior_allExcept OriginRequestPolicyCookieBehavior = "allExcept"
 )
 
 type OriginRequestPolicyHeaderBehavior string
@@ -171,6 +203,7 @@ const (
 	OriginRequestPolicyHeaderBehavior_whitelist                       OriginRequestPolicyHeaderBehavior = "whitelist"
 	OriginRequestPolicyHeaderBehavior_allViewer                       OriginRequestPolicyHeaderBehavior = "allViewer"
 	OriginRequestPolicyHeaderBehavior_allViewerAndWhitelistCloudFront OriginRequestPolicyHeaderBehavior = "allViewerAndWhitelistCloudFront"
+	OriginRequestPolicyHeaderBehavior_allExcept                       OriginRequestPolicyHeaderBehavior = "allExcept"
 )
 
 type OriginRequestPolicyQueryStringBehavior string
@@ -179,6 +212,7 @@ const (
 	OriginRequestPolicyQueryStringBehavior_none      OriginRequestPolicyQueryStringBehavior = "none"
 	OriginRequestPolicyQueryStringBehavior_whitelist OriginRequestPolicyQueryStringBehavior = "whitelist"
 	OriginRequestPolicyQueryStringBehavior_all       OriginRequestPolicyQueryStringBehavior = "all"
+	OriginRequestPolicyQueryStringBehavior_allExcept OriginRequestPolicyQueryStringBehavior = "allExcept"
 )
 
 type OriginRequestPolicyType string

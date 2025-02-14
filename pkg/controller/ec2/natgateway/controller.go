@@ -7,10 +7,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -18,12 +14,17 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -45,21 +46,33 @@ func SetupNatGateway(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewNatGatewayClient}),
+		managed.WithCreationGracePeriod(3 * time.Minute),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithInitializers(),
+		managed.WithConnectionPublishers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.NATGatewayGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.NATGateway{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.NATGatewayGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewNatGatewayClient}),
-			managed.WithCreationGracePeriod(3*time.Minute),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithInitializers(),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -72,7 +85,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +113,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		NatGatewayIds: []string{meta.GetExternalName(cr)},
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(ec2.IsNatGatewayNotFoundErr, err), errDescribe)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(ec2.IsNatGatewayNotFoundErr, err), errDescribe)
 	}
 
 	// in a successful response, there should be one and only one object
@@ -129,7 +142,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 
 	return managed.ExternalObservation{
 		ResourceExists:   true,
-		ResourceUpToDate: v1beta1.CompareTags(cr.Spec.ForProvider.Tags, observed.Tags),
+		ResourceUpToDate: ec2.CompareTags(cr.Spec.ForProvider.Tags, observed.Tags),
 	}, nil
 }
 
@@ -150,13 +163,13 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 	if cr.Spec.ForProvider.Tags != nil {
 		input.TagSpecifications = []awsec2types.TagSpecification{{
 			ResourceType: "natgateway",
-			Tags:         v1beta1.GenerateEC2Tags(cr.Spec.ForProvider.Tags),
+			Tags:         ec2.GenerateEC2TagsV1Beta1(cr.Spec.ForProvider.Tags),
 		}}
 	}
 
 	nat, err := e.client.CreateNatGateway(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 	meta.SetExternalName(cr, aws.ToString(nat.NatGateway.NatGatewayId))
 	return managed.ExternalCreation{}, nil
@@ -172,7 +185,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		NatGatewayIds: []string{meta.GetExternalName(cr)},
 	})
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(ec2.IsNatGatewayNotFoundErr, err), errDescribe)
+		return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(ec2.IsNatGatewayNotFoundErr, err), errDescribe)
 	}
 
 	// in a successful response, there should be one and only one object
@@ -182,13 +195,13 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 
 	observed := response.NatGateways[0]
 
-	addTags, RemoveTags := awsclient.DiffEC2Tags(v1beta1.GenerateEC2Tags(cr.Spec.ForProvider.Tags), observed.Tags)
+	addTags, RemoveTags := ec2.DiffEC2Tags(ec2.GenerateEC2TagsV1Beta1(cr.Spec.ForProvider.Tags), observed.Tags)
 	if len(RemoveTags) > 0 {
 		if _, err := e.client.DeleteTags(ctx, &awsec2.DeleteTagsInput{
 			Resources: []string{meta.GetExternalName(cr)},
 			Tags:      RemoveTags,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errDeleteTags)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errDeleteTags)
 		}
 	}
 	if len(addTags) > 0 {
@@ -196,27 +209,32 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			Resources: []string{meta.GetExternalName(cr)},
 			Tags:      addTags,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdateTags)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdateTags)
 		}
 	}
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.NATGateway)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
 	if cr.Status.AtProvider.State == v1beta1.NatGatewayStatusDeleted ||
 		cr.Status.AtProvider.State == v1beta1.NatGatewayStatusDeleting {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 
 	_, err := e.client.DeleteNatGateway(ctx, &awsec2.DeleteNatGatewayInput{
 		NatGatewayId: aws.String(meta.GetExternalName(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(ec2.IsNatGatewayNotFoundErr, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(ec2.IsNatGatewayNotFoundErr, err), errDelete)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

@@ -88,28 +88,6 @@ type BrokerSummary struct {
 }
 
 // +kubebuilder:skipversion
-type Configuration struct {
-	ARN *string `json:"arn,omitempty"`
-	// Optional. The authentication strategy used to secure the broker. The default
-	// is SIMPLE.
-	AuthenticationStrategy *string `json:"authenticationStrategy,omitempty"`
-
-	Created *metav1.Time `json:"created,omitempty"`
-
-	Description *string `json:"description,omitempty"`
-	// The type of broker engine. Amazon MQ supports ActiveMQ and RabbitMQ.
-	EngineType *string `json:"engineType,omitempty"`
-
-	EngineVersion *string `json:"engineVersion,omitempty"`
-
-	ID *string `json:"id,omitempty"`
-
-	Name *string `json:"name,omitempty"`
-
-	Tags map[string]*string `json:"tags,omitempty"`
-}
-
-// +kubebuilder:skipversion
 type ConfigurationID struct {
 	ID *string `json:"id,omitempty"`
 
@@ -126,17 +104,52 @@ type ConfigurationRevision struct {
 }
 
 // +kubebuilder:skipversion
+type Configuration_SDK struct {
+	ARN *string `json:"arn,omitempty"`
+	// Optional. The authentication strategy used to secure the broker. The default
+	// is SIMPLE.
+	AuthenticationStrategy *string `json:"authenticationStrategy,omitempty"`
+
+	Created *metav1.Time `json:"created,omitempty"`
+
+	Description *string `json:"description,omitempty"`
+	// The type of broker engine. Amazon MQ supports ActiveMQ and RabbitMQ.
+	EngineType *string `json:"engineType,omitempty"`
+
+	EngineVersion *string `json:"engineVersion,omitempty"`
+
+	ID *string `json:"id,omitempty"`
+	// Returns information about the specified configuration revision.
+	LatestRevision *ConfigurationRevision `json:"latestRevision,omitempty"`
+
+	Name *string `json:"name,omitempty"`
+
+	Tags map[string]*string `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type Configurations struct {
 	// A list of information about the configuration.
-	//
-	// Does not apply to RabbitMQ brokers.
 	Current *ConfigurationID `json:"current,omitempty"`
 
 	History []*ConfigurationID `json:"history,omitempty"`
 	// A list of information about the configuration.
-	//
-	// Does not apply to RabbitMQ brokers.
 	Pending *ConfigurationID `json:"pending,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DataReplicationCounterpart struct {
+	BrokerID *string `json:"brokerID,omitempty"`
+
+	Region *string `json:"region,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DataReplicationMetadataOutput struct {
+	// Specifies a broker in a data replication pair.
+	DataReplicationCounterpart *DataReplicationCounterpart `json:"dataReplicationCounterpart,omitempty"`
+
+	DataReplicationRole *string `json:"dataReplicationRole,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -257,6 +270,8 @@ type User_SDK struct {
 	Groups []*string `json:"groups,omitempty"`
 
 	Password *string `json:"password,omitempty"`
+
+	ReplicationUser *bool `json:"replicationUser,omitempty"`
 
 	Username *string `json:"username,omitempty"`
 }

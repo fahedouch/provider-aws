@@ -16,21 +16,21 @@ package workgroup
 import (
 	"context"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	svcsdk "github.com/aws/aws-sdk-go/service/athena"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
+	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/athena/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupWorkGroup adds a controller that reconciles WorkGroup.
@@ -51,25 +51,37 @@ func SetupWorkGroup(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.WorkGroupGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.WorkGroup{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.WorkGroupGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.WorkGroup, obj *svcsdk.DeleteWorkGroupInput) (bool, error) {
-	obj.WorkGroup = awsclients.String(meta.GetExternalName(cr))
+	obj.WorkGroup = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.WorkGroup, obj *svcsdk.GetWorkGroupInput) error {
-	obj.WorkGroup = awsclients.String(meta.GetExternalName(cr))
+	obj.WorkGroup = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -78,7 +90,7 @@ func postObserve(_ context.Context, cr *svcapitypes.WorkGroup, obj *svcsdk.GetWo
 		return managed.ExternalObservation{}, err
 	}
 
-	switch awsclients.StringValue(obj.WorkGroup.State) {
+	switch pointer.StringValue(obj.WorkGroup.State) {
 	case string(svcapitypes.WorkGroupState_ENABLED):
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.WorkGroupState_DISABLED):
@@ -89,13 +101,12 @@ func postObserve(_ context.Context, cr *svcapitypes.WorkGroup, obj *svcsdk.GetWo
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.WorkGroup, obj *svcsdk.CreateWorkGroupInput) error {
-	obj.Name = awsclients.String(meta.GetExternalName(cr))
+	obj.Name = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
 // LateInitialize fills the empty fields in *svcapitypes.WorkGroupParameters with
 // the values seen in svcsdk.GetWorkGroupOutput.
-// nolint:gocyclo
 func LateInitialize(cr *svcapitypes.WorkGroupParameters, obj *svcsdk.GetWorkGroupOutput) error {
 
 	if cr.Configuration == nil && obj.WorkGroup.Configuration != nil {

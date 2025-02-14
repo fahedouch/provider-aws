@@ -18,6 +18,32 @@ limitations under the License.
 
 package v1alpha1
 
+type AdditionalOptionKeys string
+
+const (
+	AdditionalOptionKeys_performanceTuning_caching AdditionalOptionKeys = "performanceTuning.caching"
+)
+
+type AggFunction string
+
+const (
+	AggFunction_avg           AggFunction = "avg"
+	AggFunction_countDistinct AggFunction = "countDistinct"
+	AggFunction_count         AggFunction = "count"
+	AggFunction_first         AggFunction = "first"
+	AggFunction_last          AggFunction = "last"
+	AggFunction_kurtosis      AggFunction = "kurtosis"
+	AggFunction_max           AggFunction = "max"
+	AggFunction_min           AggFunction = "min"
+	AggFunction_skewness      AggFunction = "skewness"
+	AggFunction_stddev_samp   AggFunction = "stddev_samp"
+	AggFunction_stddev_pop    AggFunction = "stddev_pop"
+	AggFunction_sum           AggFunction = "sum"
+	AggFunction_sumDistinct   AggFunction = "sumDistinct"
+	AggFunction_var_samp      AggFunction = "var_samp"
+	AggFunction_var_pop       AggFunction = "var_pop"
+)
+
 type BackfillErrorCode string
 
 const (
@@ -95,6 +121,13 @@ const (
 	Compatibility_FULL_ALL     Compatibility = "FULL_ALL"
 )
 
+type CompressionType string
+
+const (
+	CompressionType_gzip  CompressionType = "gzip"
+	CompressionType_bzip2 CompressionType = "bzip2"
+)
+
 type ConnectionPropertyKey string
 
 const (
@@ -128,6 +161,15 @@ const (
 	ConnectionPropertyKey_CONNECTOR_URL                            ConnectionPropertyKey = "CONNECTOR_URL"
 	ConnectionPropertyKey_CONNECTOR_TYPE                           ConnectionPropertyKey = "CONNECTOR_TYPE"
 	ConnectionPropertyKey_CONNECTOR_CLASS_NAME                     ConnectionPropertyKey = "CONNECTOR_CLASS_NAME"
+	ConnectionPropertyKey_KAFKA_SASL_MECHANISM                     ConnectionPropertyKey = "KAFKA_SASL_MECHANISM"
+	ConnectionPropertyKey_KAFKA_SASL_SCRAM_USERNAME                ConnectionPropertyKey = "KAFKA_SASL_SCRAM_USERNAME"
+	ConnectionPropertyKey_KAFKA_SASL_SCRAM_PASSWORD                ConnectionPropertyKey = "KAFKA_SASL_SCRAM_PASSWORD"
+	ConnectionPropertyKey_KAFKA_SASL_SCRAM_SECRETS_ARN             ConnectionPropertyKey = "KAFKA_SASL_SCRAM_SECRETS_ARN"
+	ConnectionPropertyKey_ENCRYPTED_KAFKA_SASL_SCRAM_PASSWORD      ConnectionPropertyKey = "ENCRYPTED_KAFKA_SASL_SCRAM_PASSWORD"
+	ConnectionPropertyKey_KAFKA_SASL_GSSAPI_KEYTAB                 ConnectionPropertyKey = "KAFKA_SASL_GSSAPI_KEYTAB"
+	ConnectionPropertyKey_KAFKA_SASL_GSSAPI_KRB5_CONF              ConnectionPropertyKey = "KAFKA_SASL_GSSAPI_KRB5_CONF"
+	ConnectionPropertyKey_KAFKA_SASL_GSSAPI_SERVICE                ConnectionPropertyKey = "KAFKA_SASL_GSSAPI_SERVICE"
+	ConnectionPropertyKey_KAFKA_SASL_GSSAPI_PRINCIPAL              ConnectionPropertyKey = "KAFKA_SASL_GSSAPI_PRINCIPAL"
 )
 
 type ConnectionType string
@@ -150,6 +192,16 @@ const (
 	CrawlState_CANCELLED  CrawlState = "CANCELLED"
 	CrawlState_SUCCEEDED  CrawlState = "SUCCEEDED"
 	CrawlState_FAILED     CrawlState = "FAILED"
+	CrawlState_ERROR      CrawlState = "ERROR"
+)
+
+type CrawlerHistoryState string
+
+const (
+	CrawlerHistoryState_RUNNING   CrawlerHistoryState = "RUNNING"
+	CrawlerHistoryState_COMPLETED CrawlerHistoryState = "COMPLETED"
+	CrawlerHistoryState_FAILED    CrawlerHistoryState = "FAILED"
+	CrawlerHistoryState_STOPPED   CrawlerHistoryState = "STOPPED"
 )
 
 type CrawlerLineageSettings string
@@ -175,12 +227,42 @@ const (
 	CsvHeaderOption_ABSENT  CsvHeaderOption = "ABSENT"
 )
 
+type CsvSerdeOption string
+
+const (
+	CsvSerdeOption_OpenCSVSerDe    CsvSerdeOption = "OpenCSVSerDe"
+	CsvSerdeOption_LazySimpleSerDe CsvSerdeOption = "LazySimpleSerDe"
+	CsvSerdeOption_None            CsvSerdeOption = "None"
+)
+
+type DQStopJobOnFailureTiming string
+
+const (
+	DQStopJobOnFailureTiming_Immediate     DQStopJobOnFailureTiming = "Immediate"
+	DQStopJobOnFailureTiming_AfterDataLoad DQStopJobOnFailureTiming = "AfterDataLoad"
+)
+
+type DQTransformOutput string
+
+const (
+	DQTransformOutput_PrimaryInput      DQTransformOutput = "PrimaryInput"
+	DQTransformOutput_EvaluationResults DQTransformOutput = "EvaluationResults"
+)
+
 type DataFormat string
 
 const (
 	DataFormat_AVRO     DataFormat = "AVRO"
 	DataFormat_JSON     DataFormat = "JSON"
 	DataFormat_PROTOBUF DataFormat = "PROTOBUF"
+)
+
+type DataQualityRuleResultStatus string
+
+const (
+	DataQualityRuleResultStatus_PASS  DataQualityRuleResultStatus = "PASS"
+	DataQualityRuleResultStatus_FAIL  DataQualityRuleResultStatus = "FAIL"
+	DataQualityRuleResultStatus_ERROR DataQualityRuleResultStatus = "ERROR"
 )
 
 type DeleteBehavior string
@@ -191,11 +273,25 @@ const (
 	DeleteBehavior_DEPRECATE_IN_DATABASE DeleteBehavior = "DEPRECATE_IN_DATABASE"
 )
 
+type DeltaTargetCompressionType string
+
+const (
+	DeltaTargetCompressionType_uncompressed DeltaTargetCompressionType = "uncompressed"
+	DeltaTargetCompressionType_snappy       DeltaTargetCompressionType = "snappy"
+)
+
 type EnableHybridValues string
 
 const (
 	EnableHybridValues_TRUE  EnableHybridValues = "TRUE"
 	EnableHybridValues_FALSE EnableHybridValues = "FALSE"
+)
+
+type ExecutionClass string
+
+const (
+	ExecutionClass_FLEX     ExecutionClass = "FLEX"
+	ExecutionClass_STANDARD ExecutionClass = "STANDARD"
 )
 
 type ExistCondition string
@@ -204,6 +300,148 @@ const (
 	ExistCondition_MUST_EXIST ExistCondition = "MUST_EXIST"
 	ExistCondition_NOT_EXIST  ExistCondition = "NOT_EXIST"
 	ExistCondition_NONE       ExistCondition = "NONE"
+)
+
+type FederationSourceErrorCode string
+
+const (
+	FederationSourceErrorCode_InvalidResponseException       FederationSourceErrorCode = "InvalidResponseException"
+	FederationSourceErrorCode_OperationTimeoutException      FederationSourceErrorCode = "OperationTimeoutException"
+	FederationSourceErrorCode_OperationNotSupportedException FederationSourceErrorCode = "OperationNotSupportedException"
+	FederationSourceErrorCode_InternalServiceException       FederationSourceErrorCode = "InternalServiceException"
+	FederationSourceErrorCode_ThrottlingException            FederationSourceErrorCode = "ThrottlingException"
+)
+
+type FieldName string
+
+const (
+	FieldName_CRAWL_ID   FieldName = "CRAWL_ID"
+	FieldName_STATE      FieldName = "STATE"
+	FieldName_START_TIME FieldName = "START_TIME"
+	FieldName_END_TIME   FieldName = "END_TIME"
+	FieldName_DPU_HOUR   FieldName = "DPU_HOUR"
+)
+
+type FilterLogicalOperator string
+
+const (
+	FilterLogicalOperator_AND FilterLogicalOperator = "AND"
+	FilterLogicalOperator_OR  FilterLogicalOperator = "OR"
+)
+
+type FilterOperation string
+
+const (
+	FilterOperation_EQ     FilterOperation = "EQ"
+	FilterOperation_LT     FilterOperation = "LT"
+	FilterOperation_GT     FilterOperation = "GT"
+	FilterOperation_LTE    FilterOperation = "LTE"
+	FilterOperation_GTE    FilterOperation = "GTE"
+	FilterOperation_REGEX  FilterOperation = "REGEX"
+	FilterOperation_ISNULL FilterOperation = "ISNULL"
+)
+
+type FilterOperator string
+
+const (
+	FilterOperator_GT FilterOperator = "GT"
+	FilterOperator_GE FilterOperator = "GE"
+	FilterOperator_LT FilterOperator = "LT"
+	FilterOperator_LE FilterOperator = "LE"
+	FilterOperator_EQ FilterOperator = "EQ"
+	FilterOperator_NE FilterOperator = "NE"
+)
+
+type FilterValueType string
+
+const (
+	FilterValueType_COLUMNEXTRACTED FilterValueType = "COLUMNEXTRACTED"
+	FilterValueType_CONSTANT        FilterValueType = "CONSTANT"
+)
+
+type GlueRecordType string
+
+const (
+	GlueRecordType_DATE       GlueRecordType = "DATE"
+	GlueRecordType_STRING     GlueRecordType = "STRING"
+	GlueRecordType_TIMESTAMP  GlueRecordType = "TIMESTAMP"
+	GlueRecordType_INT        GlueRecordType = "INT"
+	GlueRecordType_FLOAT      GlueRecordType = "FLOAT"
+	GlueRecordType_LONG       GlueRecordType = "LONG"
+	GlueRecordType_BIGDECIMAL GlueRecordType = "BIGDECIMAL"
+	GlueRecordType_BYTE       GlueRecordType = "BYTE"
+	GlueRecordType_SHORT      GlueRecordType = "SHORT"
+	GlueRecordType_DOUBLE     GlueRecordType = "DOUBLE"
+)
+
+type HudiTargetCompressionType string
+
+const (
+	HudiTargetCompressionType_gzip         HudiTargetCompressionType = "gzip"
+	HudiTargetCompressionType_lzo          HudiTargetCompressionType = "lzo"
+	HudiTargetCompressionType_uncompressed HudiTargetCompressionType = "uncompressed"
+	HudiTargetCompressionType_snappy       HudiTargetCompressionType = "snappy"
+)
+
+type JDBCConnectionType string
+
+const (
+	JDBCConnectionType_sqlserver  JDBCConnectionType = "sqlserver"
+	JDBCConnectionType_mysql      JDBCConnectionType = "mysql"
+	JDBCConnectionType_oracle     JDBCConnectionType = "oracle"
+	JDBCConnectionType_postgresql JDBCConnectionType = "postgresql"
+	JDBCConnectionType_redshift   JDBCConnectionType = "redshift"
+)
+
+type JDBCDataType string
+
+const (
+	JDBCDataType_ARRAY                   JDBCDataType = "ARRAY"
+	JDBCDataType_BIGINT                  JDBCDataType = "BIGINT"
+	JDBCDataType_BINARY                  JDBCDataType = "BINARY"
+	JDBCDataType_BIT                     JDBCDataType = "BIT"
+	JDBCDataType_BLOB                    JDBCDataType = "BLOB"
+	JDBCDataType_BOOLEAN                 JDBCDataType = "BOOLEAN"
+	JDBCDataType_CHAR                    JDBCDataType = "CHAR"
+	JDBCDataType_CLOB                    JDBCDataType = "CLOB"
+	JDBCDataType_DATALINK                JDBCDataType = "DATALINK"
+	JDBCDataType_DATE                    JDBCDataType = "DATE"
+	JDBCDataType_DECIMAL                 JDBCDataType = "DECIMAL"
+	JDBCDataType_DISTINCT                JDBCDataType = "DISTINCT"
+	JDBCDataType_DOUBLE                  JDBCDataType = "DOUBLE"
+	JDBCDataType_FLOAT                   JDBCDataType = "FLOAT"
+	JDBCDataType_INTEGER                 JDBCDataType = "INTEGER"
+	JDBCDataType_JAVA_OBJECT             JDBCDataType = "JAVA_OBJECT"
+	JDBCDataType_LONGNVARCHAR            JDBCDataType = "LONGNVARCHAR"
+	JDBCDataType_LONGVARBINARY           JDBCDataType = "LONGVARBINARY"
+	JDBCDataType_LONGVARCHAR             JDBCDataType = "LONGVARCHAR"
+	JDBCDataType_NCHAR                   JDBCDataType = "NCHAR"
+	JDBCDataType_NCLOB                   JDBCDataType = "NCLOB"
+	JDBCDataType_NULL                    JDBCDataType = "NULL"
+	JDBCDataType_NUMERIC                 JDBCDataType = "NUMERIC"
+	JDBCDataType_NVARCHAR                JDBCDataType = "NVARCHAR"
+	JDBCDataType_OTHER                   JDBCDataType = "OTHER"
+	JDBCDataType_REAL                    JDBCDataType = "REAL"
+	JDBCDataType_REF                     JDBCDataType = "REF"
+	JDBCDataType_REF_CURSOR              JDBCDataType = "REF_CURSOR"
+	JDBCDataType_ROWID                   JDBCDataType = "ROWID"
+	JDBCDataType_SMALLINT                JDBCDataType = "SMALLINT"
+	JDBCDataType_SQLXML                  JDBCDataType = "SQLXML"
+	JDBCDataType_STRUCT                  JDBCDataType = "STRUCT"
+	JDBCDataType_TIME                    JDBCDataType = "TIME"
+	JDBCDataType_TIME_WITH_TIMEZONE      JDBCDataType = "TIME_WITH_TIMEZONE"
+	JDBCDataType_TIMESTAMP               JDBCDataType = "TIMESTAMP"
+	JDBCDataType_TIMESTAMP_WITH_TIMEZONE JDBCDataType = "TIMESTAMP_WITH_TIMEZONE"
+	JDBCDataType_TINYINT                 JDBCDataType = "TINYINT"
+	JDBCDataType_VARBINARY               JDBCDataType = "VARBINARY"
+	JDBCDataType_VARCHAR                 JDBCDataType = "VARCHAR"
+)
+
+type JdbcMetadataEntry string
+
+const (
+	JdbcMetadataEntry_COMMENTS JdbcMetadataEntry = "COMMENTS"
+	JdbcMetadataEntry_RAWTYPES JdbcMetadataEntry = "RAWTYPES"
 )
 
 type JobBookmarksEncryptionMode string
@@ -223,6 +461,19 @@ const (
 	JobRunState_SUCCEEDED JobRunState = "SUCCEEDED"
 	JobRunState_FAILED    JobRunState = "FAILED"
 	JobRunState_TIMEOUT   JobRunState = "TIMEOUT"
+	JobRunState_ERROR     JobRunState = "ERROR"
+	JobRunState_WAITING   JobRunState = "WAITING"
+)
+
+type JoinType string
+
+const (
+	JoinType_equijoin JoinType = "equijoin"
+	JoinType_left     JoinType = "left"
+	JoinType_right    JoinType = "right"
+	JoinType_outer    JoinType = "outer"
+	JoinType_leftsemi JoinType = "leftsemi"
+	JoinType_leftanti JoinType = "leftanti"
 )
 
 type Language string
@@ -260,12 +511,40 @@ const (
 	MLUserDataEncryptionModeString_SSE_KMS  MLUserDataEncryptionModeString = "SSE-KMS"
 )
 
+type MetadataOperation string
+
+const (
+	MetadataOperation_CREATE MetadataOperation = "CREATE"
+)
+
 type NodeType string
 
 const (
 	NodeType_CRAWLER NodeType = "CRAWLER"
 	NodeType_JOB     NodeType = "JOB"
 	NodeType_TRIGGER NodeType = "TRIGGER"
+)
+
+type ParamType string
+
+const (
+	ParamType_str     ParamType = "str"
+	ParamType_int     ParamType = "int"
+	ParamType_float   ParamType = "float"
+	ParamType_complex ParamType = "complex"
+	ParamType_bool    ParamType = "bool"
+	ParamType_list    ParamType = "list"
+	ParamType_null    ParamType = "null"
+)
+
+type ParquetCompressionType string
+
+const (
+	ParquetCompressionType_snappy       ParquetCompressionType = "snappy"
+	ParquetCompressionType_lzo          ParquetCompressionType = "lzo"
+	ParquetCompressionType_gzip         ParquetCompressionType = "gzip"
+	ParquetCompressionType_uncompressed ParquetCompressionType = "uncompressed"
+	ParquetCompressionType_none         ParquetCompressionType = "none"
 )
 
 type PartitionIndexStatus string
@@ -296,6 +575,17 @@ type PermissionType string
 const (
 	PermissionType_COLUMN_PERMISSION      PermissionType = "COLUMN_PERMISSION"
 	PermissionType_CELL_FILTER_PERMISSION PermissionType = "CELL_FILTER_PERMISSION"
+	PermissionType_NESTED_PERMISSION      PermissionType = "NESTED_PERMISSION"
+	PermissionType_NESTED_CELL_PERMISSION PermissionType = "NESTED_CELL_PERMISSION"
+)
+
+type PiiType string
+
+const (
+	PiiType_RowAudit      PiiType = "RowAudit"
+	PiiType_RowMasking    PiiType = "RowMasking"
+	PiiType_ColumnAudit   PiiType = "ColumnAudit"
+	PiiType_ColumnMasking PiiType = "ColumnMasking"
 )
 
 type PrincipalType string
@@ -304,6 +594,15 @@ const (
 	PrincipalType_USER  PrincipalType = "USER"
 	PrincipalType_ROLE  PrincipalType = "ROLE"
 	PrincipalType_GROUP PrincipalType = "GROUP"
+)
+
+type QuoteChar string
+
+const (
+	QuoteChar_quote        QuoteChar = "quote"
+	QuoteChar_quillemet    QuoteChar = "quillemet"
+	QuoteChar_single_quote QuoteChar = "single_quote"
+	QuoteChar_disabled     QuoteChar = "disabled"
 )
 
 type RecrawlBehavior string
@@ -324,8 +623,9 @@ const (
 type ResourceShareType string
 
 const (
-	ResourceShareType_FOREIGN ResourceShareType = "FOREIGN"
-	ResourceShareType_ALL     ResourceShareType = "ALL"
+	ResourceShareType_FOREIGN   ResourceShareType = "FOREIGN"
+	ResourceShareType_ALL       ResourceShareType = "ALL"
+	ResourceShareType_FEDERATED ResourceShareType = "FEDERATED"
 )
 
 type ResourceType string
@@ -375,6 +675,16 @@ const (
 	SchemaVersionStatus_DELETING  SchemaVersionStatus = "DELETING"
 )
 
+type Separator string
+
+const (
+	Separator_comma     Separator = "comma"
+	Separator_ctrla     Separator = "ctrla"
+	Separator_pipe      Separator = "pipe"
+	Separator_semicolon Separator = "semicolon"
+	Separator_tab       Separator = "tab"
+)
+
 type SessionStatus string
 
 const (
@@ -400,6 +710,31 @@ const (
 	SortDirectionType_ASCENDING  SortDirectionType = "ASCENDING"
 )
 
+type SourceControlAuthStrategy string
+
+const (
+	SourceControlAuthStrategy_PERSONAL_ACCESS_TOKEN SourceControlAuthStrategy = "PERSONAL_ACCESS_TOKEN"
+	SourceControlAuthStrategy_AWS_SECRETS_MANAGER   SourceControlAuthStrategy = "AWS_SECRETS_MANAGER"
+)
+
+type SourceControlProvider string
+
+const (
+	SourceControlProvider_GITHUB          SourceControlProvider = "GITHUB"
+	SourceControlProvider_GITLAB          SourceControlProvider = "GITLAB"
+	SourceControlProvider_BITBUCKET       SourceControlProvider = "BITBUCKET"
+	SourceControlProvider_AWS_CODE_COMMIT SourceControlProvider = "AWS_CODE_COMMIT"
+)
+
+type StartingPosition string
+
+const (
+	StartingPosition_latest       StartingPosition = "latest"
+	StartingPosition_trim_horizon StartingPosition = "trim_horizon"
+	StartingPosition_earliest     StartingPosition = "earliest"
+	StartingPosition_timestamp    StartingPosition = "timestamp"
+)
+
 type StatementState string
 
 const (
@@ -409,6 +744,33 @@ const (
 	StatementState_CANCELLING StatementState = "CANCELLING"
 	StatementState_CANCELLED  StatementState = "CANCELLED"
 	StatementState_ERROR      StatementState = "ERROR"
+)
+
+type TableOptimizerEventType string
+
+const (
+	TableOptimizerEventType_starting    TableOptimizerEventType = "starting"
+	TableOptimizerEventType_completed   TableOptimizerEventType = "completed"
+	TableOptimizerEventType_failed      TableOptimizerEventType = "failed"
+	TableOptimizerEventType_in_progress TableOptimizerEventType = "in_progress"
+)
+
+type TableOptimizerType string
+
+const (
+	TableOptimizerType_compaction TableOptimizerType = "compaction"
+)
+
+type TargetFormat string
+
+const (
+	TargetFormat_json    TargetFormat = "json"
+	TargetFormat_csv     TargetFormat = "csv"
+	TargetFormat_avro    TargetFormat = "avro"
+	TargetFormat_orc     TargetFormat = "orc"
+	TargetFormat_parquet TargetFormat = "parquet"
+	TargetFormat_hudi    TargetFormat = "hudi"
+	TargetFormat_delta   TargetFormat = "delta"
 )
 
 type TaskRunSortColumnType string
@@ -487,11 +849,25 @@ const (
 	TriggerType_EVENT       TriggerType = "EVENT"
 )
 
+type UnionType string
+
+const (
+	UnionType_ALL      UnionType = "ALL"
+	UnionType_DISTINCT UnionType = "DISTINCT"
+)
+
 type UpdateBehavior string
 
 const (
 	UpdateBehavior_LOG                UpdateBehavior = "LOG"
 	UpdateBehavior_UPDATE_IN_DATABASE UpdateBehavior = "UPDATE_IN_DATABASE"
+)
+
+type UpdateCatalogBehavior string
+
+const (
+	UpdateCatalogBehavior_UPDATE_IN_DATABASE UpdateCatalogBehavior = "UPDATE_IN_DATABASE"
+	UpdateCatalogBehavior_LOG                UpdateCatalogBehavior = "LOG"
 )
 
 type WorkerType string
@@ -500,6 +876,10 @@ const (
 	WorkerType_Standard WorkerType = "Standard"
 	WorkerType_G_1X     WorkerType = "G.1X"
 	WorkerType_G_2X     WorkerType = "G.2X"
+	WorkerType_G_025X   WorkerType = "G.025X"
+	WorkerType_G_4X     WorkerType = "G.4X"
+	WorkerType_G_8X     WorkerType = "G.8X"
+	WorkerType_Z_2X     WorkerType = "Z.2X"
 )
 
 type WorkflowRunStatus string

@@ -3,24 +3,22 @@ package functionurlconfig
 import (
 	"context"
 
+	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/lambda"
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/lambda/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
-
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupFunctionURL adds a controller that reconciles FunctionURLConfig.
@@ -42,17 +40,29 @@ func SetupFunctionURL(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.FunctionURLConfigGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.FunctionURLConfig{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.FunctionURLConfigGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.FunctionURLConfig, obj *svcsdk.GetFunctionUrlConfigInput) error {
@@ -88,12 +98,12 @@ func postObserve(_ context.Context, cr *svcapitypes.FunctionURLConfig, _ *svcsdk
 	return obs, nil
 }
 
-func isUpToDate(cr *svcapitypes.FunctionURLConfig, obj *svcsdk.GetFunctionUrlConfigOutput) (bool, error) {
+func isUpToDate(_ context.Context, cr *svcapitypes.FunctionURLConfig, obj *svcsdk.GetFunctionUrlConfigOutput) (bool, string, error) {
 	if aws.StringValue(cr.Spec.ForProvider.AuthType) != aws.StringValue(obj.AuthType) {
-		return false, nil
+		return false, "", nil
 	}
 
-	return isUpToDateCors(cr, obj), nil
+	return isUpToDateCors(cr, obj), "", nil
 }
 
 func isUpToDateCors(cr *svcapitypes.FunctionURLConfig, obj *svcsdk.GetFunctionUrlConfigOutput) bool {

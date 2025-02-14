@@ -21,21 +21,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/smithy-go/document"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/document"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/s3/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	clients3 "github.com/crossplane-contrib/provider-aws/pkg/clients/s3"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/s3/fake"
 	s3testing "github.com/crossplane-contrib/provider-aws/pkg/controller/s3/testing"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
@@ -43,7 +44,7 @@ var (
 	location, _       = time.LoadLocation("UTC")
 	date              = metav1.Date(2020, time.September, 25, 11, 40, 0, 0, location)
 	awsDate           = time.Date(2020, time.September, 25, 11, 40, 0, 0, location)
-	marker            = false
+	marker            = true
 	prefix            = "test-"
 	id                = "test-id"
 	storage           = "ONEZONE_IA"
@@ -57,17 +58,16 @@ func generateLifecycleConfig() *v1beta1.BucketLifecycleConfiguration {
 			{
 				AbortIncompleteMultipartUpload: &v1beta1.AbortIncompleteMultipartUpload{DaysAfterInitiation: 1},
 				Expiration: &v1beta1.LifecycleExpiration{
-					Date:                      &date,
-					Days:                      days,
-					ExpiredObjectDeleteMarker: marker,
+					Date: &date,
+					Days: days,
 				},
 				Filter: &v1beta1.LifecycleRuleFilter{
 					And: &v1beta1.LifecycleRuleAndOperator{
-						Prefix: awsclient.String(prefix),
+						Prefix: pointer.ToOrNilIfZeroValue(prefix),
 						Tags:   tags,
 					},
 				},
-				ID:                          awsclient.String(id),
+				ID:                          pointer.ToOrNilIfZeroValue(id),
 				NoncurrentVersionExpiration: &v1beta1.NoncurrentVersionExpiration{NoncurrentDays: days},
 				NoncurrentVersionTransitions: []v1beta1.NoncurrentVersionTransition{{
 					NoncurrentDays: days,
@@ -84,32 +84,40 @@ func generateLifecycleConfig() *v1beta1.BucketLifecycleConfiguration {
 	}
 }
 
+func generateLifecycleConfigWithMarker() *v1beta1.BucketLifecycleConfiguration {
+	res := generateLifecycleConfig()
+	res.Rules[0].Expiration = &v1beta1.LifecycleExpiration{
+		ExpiredObjectDeleteMarker: marker,
+	}
+	return res
+}
+
 func generateAWSLifecycle(sortTag bool) *s3types.BucketLifecycleConfiguration {
 	conf := &s3types.BucketLifecycleConfiguration{
 		Rules: []s3types.LifecycleRule{
 			{
-				AbortIncompleteMultipartUpload: &s3types.AbortIncompleteMultipartUpload{DaysAfterInitiation: 1},
+				AbortIncompleteMultipartUpload: &s3types.AbortIncompleteMultipartUpload{DaysAfterInitiation: ptr.To[int32](1)},
 				Expiration: &s3types.LifecycleExpiration{
 					Date:                      &awsDate,
-					Days:                      days,
-					ExpiredObjectDeleteMarker: marker,
+					Days:                      &days,
+					ExpiredObjectDeleteMarker: nil,
 				},
 				Filter: &s3types.LifecycleRuleFilterMemberAnd{
 					Value: s3types.LifecycleRuleAndOperator{
-						Prefix: awsclient.String(prefix),
+						Prefix: pointer.ToOrNilIfZeroValue(prefix),
 						Tags:   awsTags,
 					},
 				},
-				ID:                          awsclient.String(id),
-				NoncurrentVersionExpiration: &s3types.NoncurrentVersionExpiration{NoncurrentDays: days},
+				ID:                          pointer.ToOrNilIfZeroValue(id),
+				NoncurrentVersionExpiration: &s3types.NoncurrentVersionExpiration{NoncurrentDays: &days},
 				NoncurrentVersionTransitions: []s3types.NoncurrentVersionTransition{{
-					NoncurrentDays: days,
+					NoncurrentDays: &days,
 					StorageClass:   s3types.TransitionStorageClassOnezoneIa,
 				}},
 				Status: s3types.ExpirationStatusEnabled,
 				Transitions: []s3types.Transition{{
 					Date:         &awsDate,
-					Days:         days,
+					Days:         &days,
 					StorageClass: s3types.TransitionStorageClassOnezoneIa,
 				}},
 			},
@@ -119,6 +127,14 @@ func generateAWSLifecycle(sortTag bool) *s3types.BucketLifecycleConfiguration {
 		sortFilterTags(conf.Rules)
 	}
 	return conf
+}
+
+func generateAWSLifecycleWithMarker(sortTag bool) *s3types.BucketLifecycleConfiguration {
+	res := generateAWSLifecycle(sortTag)
+	res.Rules[0].Expiration = &s3types.LifecycleExpiration{
+		ExpiredObjectDeleteMarker: &marker,
+	}
+	return res
 }
 
 func TestGenerateLifecycleConfiguration(t *testing.T) {
@@ -140,6 +156,14 @@ func TestGenerateLifecycleConfiguration(t *testing.T) {
 			},
 			want: want{
 				input: generateAWSLifecycle(true).Rules,
+			},
+		},
+		"Marker": {
+			args: args{
+				b: s3testing.Bucket(s3testing.WithLifecycleConfig(generateLifecycleConfigWithMarker())),
+			},
+			want: want{
+				input: generateAWSLifecycleWithMarker(true).Rules,
 			},
 		},
 	}
@@ -180,7 +204,7 @@ func TestLifecycleObserve(t *testing.T) {
 			},
 			want: want{
 				status: NeedsUpdate,
-				err:    awsclient.Wrap(errBoom, lifecycleGetFailed),
+				err:    errorutils.Wrap(errBoom, lifecycleGetFailed),
 			},
 		},
 		"UpdateNeeded": {
@@ -292,7 +316,7 @@ func TestLifecycleCreateOrUpdate(t *testing.T) {
 				}),
 			},
 			want: want{
-				err: awsclient.Wrap(errBoom, lifecyclePutFailed),
+				err: errorutils.Wrap(errBoom, lifecyclePutFailed),
 			},
 		},
 		"InvalidConfig": {
@@ -357,7 +381,7 @@ func TestLifecycleDelete(t *testing.T) {
 				}),
 			},
 			want: want{
-				err: awsclient.Wrap(errBoom, lifecycleDeleteFailed),
+				err: errorutils.Wrap(errBoom, lifecycleDeleteFailed),
 			},
 		},
 		"SuccessfulDelete": {
@@ -410,7 +434,7 @@ func TestLifecycleLateInit(t *testing.T) {
 				}),
 			},
 			want: want{
-				err: awsclient.Wrap(errBoom, lifecycleGetFailed),
+				err: errorutils.Wrap(errBoom, lifecycleGetFailed),
 				cr:  s3testing.Bucket(),
 			},
 		},

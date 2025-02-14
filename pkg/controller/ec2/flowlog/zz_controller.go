@@ -34,7 +34,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ec2/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -52,23 +53,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.FlowLog)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.FlowLog) (managed.TypedExternalClient[*svcapitypes.FlowLog], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.FlowLog)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.FlowLog) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -80,7 +73,7 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeFlowLogsWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	resp = e.filterList(cr, resp)
 	if len(resp.FlowLogs) == 0 {
@@ -91,23 +84,23 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateFlowLog(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.FlowLog)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.FlowLog) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateFlowLogsInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -115,7 +108,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateFlowLogsWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.ClientToken != nil {
@@ -127,19 +120,20 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	return e.update(ctx, mg)
+func (e *external) Update(ctx context.Context, cr *svcapitypes.FlowLog) (managed.ExternalUpdate, error) {
+	return e.update(ctx, cr)
 
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.FlowLog)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.FlowLog) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
-	return e.delete(ctx, mg)
+	return e.delete(ctx, cr)
 
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -171,11 +165,11 @@ type external struct {
 	postObserve    func(context.Context, *svcapitypes.FlowLog, *svcsdk.DescribeFlowLogsOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	filterList     func(*svcapitypes.FlowLog, *svcsdk.DescribeFlowLogsOutput) *svcsdk.DescribeFlowLogsOutput
 	lateInitialize func(*svcapitypes.FlowLogParameters, *svcsdk.DescribeFlowLogsOutput) error
-	isUpToDate     func(*svcapitypes.FlowLog, *svcsdk.DescribeFlowLogsOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.FlowLog, *svcsdk.DescribeFlowLogsOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.FlowLog, *svcsdk.CreateFlowLogsInput) error
 	postCreate     func(context.Context, *svcapitypes.FlowLog, *svcsdk.CreateFlowLogsOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
-	delete         func(context.Context, cpresource.Managed) error
-	update         func(context.Context, cpresource.Managed) (managed.ExternalUpdate, error)
+	delete         func(context.Context, *svcapitypes.FlowLog) (managed.ExternalDelete, error)
+	update         func(context.Context, *svcapitypes.FlowLog) (managed.ExternalUpdate, error)
 }
 
 func nopPreObserve(context.Context, *svcapitypes.FlowLog, *svcsdk.DescribeFlowLogsInput) error {
@@ -191,8 +185,8 @@ func nopFilterList(_ *svcapitypes.FlowLog, list *svcsdk.DescribeFlowLogsOutput) 
 func nopLateInitialize(*svcapitypes.FlowLogParameters, *svcsdk.DescribeFlowLogsOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.FlowLog, *svcsdk.DescribeFlowLogsOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.FlowLog, *svcsdk.DescribeFlowLogsOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.FlowLog, *svcsdk.CreateFlowLogsInput) error {
@@ -201,9 +195,9 @@ func nopPreCreate(context.Context, *svcapitypes.FlowLog, *svcsdk.CreateFlowLogsI
 func nopPostCreate(_ context.Context, _ *svcapitypes.FlowLog, _ *svcsdk.CreateFlowLogsOutput, cre managed.ExternalCreation, err error) (managed.ExternalCreation, error) {
 	return cre, err
 }
-func nopDelete(context.Context, cpresource.Managed) error {
-	return nil
+func nopDelete(context.Context, *svcapitypes.FlowLog) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, nil
 }
-func nopUpdate(context.Context, cpresource.Managed) (managed.ExternalUpdate, error) {
+func nopUpdate(context.Context, *svcapitypes.FlowLog) (managed.ExternalUpdate, error) {
 	return managed.ExternalUpdate{}, nil
 }

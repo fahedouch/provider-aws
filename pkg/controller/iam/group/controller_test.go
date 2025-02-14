@@ -23,19 +23,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	awsiamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -133,7 +132,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  group(withExternalName(groupName)),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 	}
@@ -203,7 +202,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  group(withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -326,7 +325,7 @@ func TestDelete(t *testing.T) {
 			want: want{
 				cr: group(withExternalName(groupName),
 					withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 	}
@@ -334,7 +333,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.iam}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

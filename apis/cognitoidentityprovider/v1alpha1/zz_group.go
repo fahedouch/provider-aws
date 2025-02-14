@@ -34,7 +34,7 @@ type GroupParameters struct {
 	// A non-negative integer value that specifies the precedence of this group
 	// relative to the other groups that a user can belong to in the user pool.
 	// Zero is the highest precedence value. Groups with lower Precedence values
-	// take precedence over groups with higher ornull Precedence values. If a user
+	// take precedence over groups with higher or null Precedence values. If a user
 	// belongs to two or more groups, it is the group with the lowest precedence
 	// value whose role ARN is given in the user's tokens for the cognito:roles
 	// and cognito:preferred_role claims.
@@ -45,7 +45,7 @@ type GroupParameters struct {
 	// in tokens for users in each group. If the two groups have different role
 	// ARNs, the cognito:preferred_role claim isn't set in users' tokens.
 	//
-	// The default Precedence value is null.
+	// The default Precedence value is null. The maximum Precedence value is 2^31-1.
 	Precedence            *int64 `json:"precedence,omitempty"`
 	CustomGroupParameters `json:",inline"`
 }
@@ -58,16 +58,20 @@ type GroupSpec struct {
 
 // GroupObservation defines the observed state of Group
 type GroupObservation struct {
-	// The date the group was created.
+	// The date and time, in ISO 8601 (https://www.iso.org/iso-8601-date-and-time-format.html)
+	// format, when the item was created.
 	CreationDate *metav1.Time `json:"creationDate,omitempty"`
 	// The name of the group.
 	GroupName *string `json:"groupName,omitempty"`
-	// The date the group was last modified.
+	// The date and time, in ISO 8601 (https://www.iso.org/iso-8601-date-and-time-format.html)
+	// format, when the item was modified.
 	LastModifiedDate *metav1.Time `json:"lastModifiedDate,omitempty"`
 	// The role Amazon Resource Name (ARN) for the group.
 	RoleARN *string `json:"roleARN,omitempty"`
 	// The user pool ID for the user pool.
 	UserPoolID *string `json:"userPoolID,omitempty"`
+
+	CustomGroupObservation `json:",inline"`
 }
 
 // GroupStatus defines the observed state of Group.
@@ -82,6 +86,7 @@ type GroupStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

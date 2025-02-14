@@ -20,22 +20,20 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/docdb"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/docdb/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/docdb/fake"
-	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/docdb"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -87,25 +85,25 @@ func withExternalName(value string) docDBModifier {
 
 func withDBClusterParameterGroupName(value string) docDBModifier {
 	return func(o *svcapitypes.DBClusterParameterGroup) {
-		o.Status.AtProvider.DBClusterParameterGroupName = awsclient.String(value)
+		o.Status.AtProvider.DBClusterParameterGroupName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withDescription(value string) docDBModifier {
 	return func(o *svcapitypes.DBClusterParameterGroup) {
-		o.Spec.ForProvider.Description = awsclient.String(value)
+		o.Spec.ForProvider.Description = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withDBParameterGroupFamily(value string) docDBModifier {
 	return func(o *svcapitypes.DBClusterParameterGroup) {
-		o.Spec.ForProvider.DBParameterGroupFamily = awsclient.String(value)
+		o.Spec.ForProvider.DBParameterGroupFamily = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withDBClusterParameterGroupARN(value string) docDBModifier {
 	return func(o *svcapitypes.DBClusterParameterGroup) {
-		o.Status.AtProvider.DBClusterParameterGroupARN = awsclient.String(value)
+		o.Status.AtProvider.DBClusterParameterGroupARN = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
@@ -115,10 +113,10 @@ func withConditions(value ...xpv1.Condition) docDBModifier {
 	}
 }
 
-func withParameters(values ...*svcapitypes.Parameter) docDBModifier {
+func withParameters(values ...*svcapitypes.CustomParameter) docDBModifier {
 	return func(o *svcapitypes.DBClusterParameterGroup) {
 		if values == nil {
-			o.Spec.ForProvider.Parameters = []*svcapitypes.Parameter{}
+			o.Spec.ForProvider.Parameters = []*svcapitypes.CustomParameter{}
 		} else {
 			o.Spec.ForProvider.Parameters = values
 		}
@@ -133,14 +131,6 @@ func withTags(values ...*svcapitypes.Tag) docDBModifier {
 			o.Spec.ForProvider.Tags = []*svcapitypes.Tag{}
 		}
 	}
-}
-
-func mergeTags(lists ...[]*svcapitypes.Tag) []*svcapitypes.Tag {
-	res := []*svcapitypes.Tag{}
-	for _, list := range lists {
-		res = append(res, list...)
-	}
-	return res
 }
 
 func TestObserve(t *testing.T) {
@@ -162,12 +152,12 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClusterParameterGroupsOutput{
 							DBClusterParameterGroups: []*docdb.DBClusterParameterGroup{
 								{
-									DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+									DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								},
 							},
 						}, nil
 					},
-					MockDescribeDBClusterParameters: func(ddpi *docdb.DescribeDBClusterParametersInput) (*docdb.DescribeDBClusterParametersOutput, error) {
+					MockDescribeDBClusterParametersWithContext: func(ctx context.Context, ddpi *docdb.DescribeDBClusterParametersInput, o []request.Option) (*docdb.DescribeDBClusterParametersOutput, error) {
 						return &docdb.DescribeDBClusterParametersOutput{
 							Parameters: []*docdb.Parameter{},
 						}, nil
@@ -197,19 +187,21 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParameterGroupsInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
-					DescribeDBClusterParameters: []*fake.CallDescribeDBClusterParameters{
+					DescribeDBClusterParametersWithContext: []*fake.CallDescribeDBClusterParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -228,17 +220,17 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClusterParameterGroupsOutput{
 							DBClusterParameterGroups: []*docdb.DBClusterParameterGroup{
 								{
-									DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+									DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								},
 							},
 						}, nil
 					},
-					MockDescribeDBClusterParameters: func(ddpi *docdb.DescribeDBClusterParametersInput) (*docdb.DescribeDBClusterParametersOutput, error) {
+					MockDescribeDBClusterParametersWithContext: func(ctx context.Context, ddpi *docdb.DescribeDBClusterParametersInput, o []request.Option) (*docdb.DescribeDBClusterParametersOutput, error) {
 						return &docdb.DescribeDBClusterParametersOutput{
 							Parameters: []*docdb.Parameter{
 								{
-									ParameterName:  awsclient.String(testParameterName),
-									ParameterValue: awsclient.String(testParameterValue),
+									ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+									ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 								},
 							},
 						}, nil
@@ -250,9 +242,9 @@ func TestObserve(t *testing.T) {
 				cr: instance(
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
 					),
 				),
@@ -262,9 +254,9 @@ func TestObserve(t *testing.T) {
 					withDBClusterParameterGroupName(testDBClusterParameterGroupName),
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
 					),
 					withConditions(xpv1.Available()),
@@ -278,19 +270,21 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParameterGroupsInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
-					DescribeDBClusterParameters: []*fake.CallDescribeDBClusterParameters{
+					DescribeDBClusterParametersWithContext: []*fake.CallDescribeDBClusterParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -309,21 +303,21 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClusterParameterGroupsOutput{
 							DBClusterParameterGroups: []*docdb.DBClusterParameterGroup{
 								{
-									DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+									DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								},
 							},
 						}, nil
 					},
-					MockDescribeDBClusterParameters: func(ddpi *docdb.DescribeDBClusterParametersInput) (*docdb.DescribeDBClusterParametersOutput, error) {
+					MockDescribeDBClusterParametersWithContext: func(ctx context.Context, ddpi *docdb.DescribeDBClusterParametersInput, o []request.Option) (*docdb.DescribeDBClusterParametersOutput, error) {
 						return &docdb.DescribeDBClusterParametersOutput{
 							Parameters: []*docdb.Parameter{
 								{
-									ParameterName:  awsclient.String(testParameterName),
-									ParameterValue: awsclient.String(testParameterValue),
+									ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+									ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 								},
 								{
-									ParameterName:  awsclient.String(testOtherParameterName),
-									ParameterValue: awsclient.String(testOtherParameterValue),
+									ParameterName:  pointer.ToOrNilIfZeroValue(testOtherParameterName),
+									ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 								},
 							},
 						}, nil
@@ -335,9 +329,9 @@ func TestObserve(t *testing.T) {
 				cr: instance(
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
 					),
 				),
@@ -347,13 +341,13 @@ func TestObserve(t *testing.T) {
 					withDBClusterParameterGroupName(testDBClusterParameterGroupName),
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testOtherParameterName),
-							ParameterValue: awsclient.String(testOtherParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testOtherParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 						},
 					),
 					withConditions(xpv1.Available()),
@@ -368,19 +362,21 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParameterGroupsInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
-					DescribeDBClusterParameters: []*fake.CallDescribeDBClusterParameters{
+					DescribeDBClusterParametersWithContext: []*fake.CallDescribeDBClusterParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -399,13 +395,13 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClusterParameterGroupsOutput{
 							DBClusterParameterGroups: []*docdb.DBClusterParameterGroup{
 								{
-									DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
-									Description:                 awsclient.String(testDescription),
+									DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
+									Description:                 pointer.ToOrNilIfZeroValue(testDescription),
 								},
 							},
 						}, nil
 					},
-					MockDescribeDBClusterParameters: func(ddpi *docdb.DescribeDBClusterParametersInput) (*docdb.DescribeDBClusterParametersOutput, error) {
+					MockDescribeDBClusterParametersWithContext: func(ctx context.Context, ddpi *docdb.DescribeDBClusterParametersInput, o []request.Option) (*docdb.DescribeDBClusterParametersOutput, error) {
 						return &docdb.DescribeDBClusterParametersOutput{
 							Parameters: []*docdb.Parameter{},
 						}, nil
@@ -436,14 +432,15 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParameterGroupsInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
-					DescribeDBClusterParameters: []*fake.CallDescribeDBClusterParameters{
+					DescribeDBClusterParametersWithContext: []*fake.CallDescribeDBClusterParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -457,13 +454,13 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClusterParameterGroupsOutput{
 							DBClusterParameterGroups: []*docdb.DBClusterParameterGroup{
 								{
-									DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
-									DBParameterGroupFamily:      awsclient.String(testFamily),
+									DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
+									DBParameterGroupFamily:      pointer.ToOrNilIfZeroValue(testFamily),
 								},
 							},
 						}, nil
 					},
-					MockDescribeDBClusterParameters: func(ddpi *docdb.DescribeDBClusterParametersInput) (*docdb.DescribeDBClusterParametersOutput, error) {
+					MockDescribeDBClusterParametersWithContext: func(ctx context.Context, ddpi *docdb.DescribeDBClusterParametersInput, o []request.Option) (*docdb.DescribeDBClusterParametersOutput, error) {
 						return &docdb.DescribeDBClusterParametersOutput{
 							Parameters: []*docdb.Parameter{},
 						}, nil
@@ -494,14 +491,15 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParameterGroupsInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
-					DescribeDBClusterParameters: []*fake.CallDescribeDBClusterParameters{
+					DescribeDBClusterParametersWithContext: []*fake.CallDescribeDBClusterParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -515,17 +513,17 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClusterParameterGroupsOutput{
 							DBClusterParameterGroups: []*docdb.DBClusterParameterGroup{
 								{
-									DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+									DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								},
 							},
 						}, nil
 					},
-					MockDescribeDBClusterParameters: func(ddpi *docdb.DescribeDBClusterParametersInput) (*docdb.DescribeDBClusterParametersOutput, error) {
+					MockDescribeDBClusterParametersWithContext: func(ctx context.Context, ddpi *docdb.DescribeDBClusterParametersInput, o []request.Option) (*docdb.DescribeDBClusterParametersOutput, error) {
 						return &docdb.DescribeDBClusterParametersOutput{
 							Parameters: []*docdb.Parameter{
 								{
-									ParameterName:  awsclient.String(testParameterName),
-									ParameterValue: awsclient.String(testParameterValue),
+									ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+									ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 								},
 							},
 						}, nil
@@ -534,9 +532,9 @@ func TestObserve(t *testing.T) {
 				cr: instance(
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testOtherParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 						},
 					),
 				),
@@ -546,9 +544,9 @@ func TestObserve(t *testing.T) {
 					withDBClusterParameterGroupName(testDBClusterParameterGroupName),
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testOtherParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 						},
 					),
 					withConditions(xpv1.Available()),
@@ -562,19 +560,21 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParameterGroupsInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
-					DescribeDBClusterParameters: []*fake.CallDescribeDBClusterParameters{
+					DescribeDBClusterParametersWithContext: []*fake.CallDescribeDBClusterParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -606,7 +606,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParameterGroupsInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -620,12 +620,12 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClusterParameterGroupsOutput{
 							DBClusterParameterGroups: []*docdb.DBClusterParameterGroup{
 								{
-									DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+									DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								},
 							},
 						}, nil
 					},
-					MockDescribeDBClusterParameters: func(ddpi *docdb.DescribeDBClusterParametersInput) (*docdb.DescribeDBClusterParametersOutput, error) {
+					MockDescribeDBClusterParametersWithContext: func(ctx context.Context, ddpi *docdb.DescribeDBClusterParametersInput, o []request.Option) (*docdb.DescribeDBClusterParametersOutput, error) {
 						return &docdb.DescribeDBClusterParametersOutput{}, errors.New(testErrDescribeDBClusterParametersFailed)
 					},
 				},
@@ -647,14 +647,15 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParameterGroupsInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
-					DescribeDBClusterParameters: []*fake.CallDescribeDBClusterParameters{
+					DescribeDBClusterParametersWithContext: []*fake.CallDescribeDBClusterParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &docdb.DescribeDBClusterParametersInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -678,7 +679,7 @@ func TestObserve(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -703,7 +704,7 @@ func TestCreate(t *testing.T) {
 					MockCreateDBClusterParameterGroupWithContext: func(c context.Context, cdpgi *docdb.CreateDBClusterParameterGroupInput, o []request.Option) (*docdb.CreateDBClusterParameterGroupOutput, error) {
 						return &docdb.CreateDBClusterParameterGroupOutput{
 							DBClusterParameterGroup: &docdb.DBClusterParameterGroup{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						}, nil
 					},
@@ -724,7 +725,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.CreateDBClusterParameterGroupInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -737,7 +738,7 @@ func TestCreate(t *testing.T) {
 					MockCreateDBClusterParameterGroupWithContext: func(c context.Context, cdpgi *docdb.CreateDBClusterParameterGroupInput, o []request.Option) (*docdb.CreateDBClusterParameterGroupOutput, error) {
 						return &docdb.CreateDBClusterParameterGroupOutput{
 							DBClusterParameterGroup: &docdb.DBClusterParameterGroup{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						}, nil
 					},
@@ -745,13 +746,13 @@ func TestCreate(t *testing.T) {
 				cr: instance(
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testOtherParameterName),
-							ParameterValue: awsclient.String(testOtherParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testOtherParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 						},
 					),
 				),
@@ -762,13 +763,13 @@ func TestCreate(t *testing.T) {
 					withExternalName(testDBClusterParameterGroupName),
 					withConditions(xpv1.Creating()),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testOtherParameterName),
-							ParameterValue: awsclient.String(testOtherParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testOtherParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 						},
 					),
 				),
@@ -778,7 +779,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.CreateDBClusterParameterGroupInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -808,7 +809,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.CreateDBClusterParameterGroupInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -821,7 +822,7 @@ func TestCreate(t *testing.T) {
 					MockCreateDBClusterParameterGroupWithContext: func(c context.Context, cdpgi *docdb.CreateDBClusterParameterGroupInput, o []request.Option) (*docdb.CreateDBClusterParameterGroupOutput, error) {
 						return &docdb.CreateDBClusterParameterGroupOutput{
 							DBClusterParameterGroup: &docdb.DBClusterParameterGroup{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						}, nil
 					},
@@ -829,9 +830,9 @@ func TestCreate(t *testing.T) {
 				cr: instance(
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
 					),
 				),
@@ -842,9 +843,9 @@ func TestCreate(t *testing.T) {
 					withExternalName(testDBClusterParameterGroupName),
 					withConditions(xpv1.Creating()),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
 					),
 				),
@@ -854,7 +855,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.CreateDBClusterParameterGroupInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -878,7 +879,7 @@ func TestCreate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -917,7 +918,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DeleteDBClusterParameterGroupInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -946,7 +947,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DeleteDBClusterParameterGroupInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 							},
 						},
 					},
@@ -959,7 +960,7 @@ func TestDelete(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			opts := []option{setupExternal}
 			e := newExternal(tc.args.kube, tc.args.docdb, opts)
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
@@ -967,7 +968,7 @@ func TestDelete(t *testing.T) {
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -991,7 +992,7 @@ func TestUpdate(t *testing.T) {
 				docdb: &fake.MockDocDBClient{
 					MockModifyDBClusterParameterGroupWithContext: func(c context.Context, mdpgi *docdb.ModifyDBClusterParameterGroupInput, o []request.Option) (*docdb.ModifyDBClusterParameterGroupOutput, error) {
 						return &docdb.ModifyDBClusterParameterGroupOutput{
-							DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+							DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 						}, nil
 					},
 					MockListTagsForResource: func(ltfri *docdb.ListTagsForResourceInput) (*docdb.ListTagsForResourceOutput, error) {
@@ -1007,18 +1008,18 @@ func TestUpdate(t *testing.T) {
 					withDBClusterParameterGroupARN(testDBClusterParameterGroupARN),
 					withExternalName(testDBClusterParameterGroupName),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testOtherParameterName),
-							ParameterValue: awsclient.String(testOtherParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testOtherParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 						},
 					),
 					withTags(
-						&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-						&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 					),
 				),
 			},
@@ -1028,18 +1029,18 @@ func TestUpdate(t *testing.T) {
 					withExternalName(testDBClusterParameterGroupName),
 					withConditions(xpv1.Available()),
 					withParameters(
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testParameterName),
-							ParameterValue: awsclient.String(testParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 						},
-						&svcapitypes.Parameter{
-							ParameterName:  awsclient.String(testOtherParameterName),
-							ParameterValue: awsclient.String(testOtherParameterValue),
+						&svcapitypes.CustomParameter{
+							ParameterName:  pointer.ToOrNilIfZeroValue(testOtherParameterName),
+							ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 						},
 					),
 					withTags(
-						&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-						&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 					),
 				),
 				docdb: fake.MockDocDBClientCall{
@@ -1047,15 +1048,15 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBClusterParameterGroupInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								Parameters: []*docdb.Parameter{
 									{
-										ParameterName:  awsclient.String(testParameterName),
-										ParameterValue: awsclient.String(testParameterValue),
+										ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+										ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 									},
 									{
-										ParameterName:  awsclient.String(testOtherParameterName),
-										ParameterValue: awsclient.String(testOtherParameterValue),
+										ParameterName:  pointer.ToOrNilIfZeroValue(testOtherParameterName),
+										ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 									},
 								},
 							},
@@ -1064,17 +1065,17 @@ func TestUpdate(t *testing.T) {
 					ListTagsForResource: []*fake.CallListTagsForResource{
 						{
 							I: &docdb.ListTagsForResourceInput{
-								ResourceName: awsclient.String(testDBClusterParameterGroupARN),
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupARN),
 							},
 						},
 					},
 					AddTagsToResource: []*fake.CallAddTagsToResource{
 						{
 							I: &docdb.AddTagsToResourceInput{
-								ResourceName: awsclient.String(testDBClusterParameterGroupARN),
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupARN),
 								Tags: []*docdb.Tag{
-									{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-									{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 								},
 							},
 						},
@@ -1103,7 +1104,7 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBClusterParameterGroupInput{
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								Parameters:                  []*docdb.Parameter{},
 							},
 						},
@@ -1128,75 +1129,7 @@ func TestUpdate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestInitialize(t *testing.T) {
-	type want struct {
-		cr  *svcapitypes.DBClusterParameterGroup
-		err error
-	}
-
-	cases := map[string]struct {
-		args
-		want
-	}{
-		"Successful": {
-			args: args{
-				cr: instance(withTags(
-					&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-					&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
-				)),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: instance(withTags(
-					mergeTags(
-						[]*svcapitypes.Tag{
-							{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-							{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
-						},
-						svcutils.GetExternalTags(instance()),
-					)...,
-				)),
-			},
-		},
-		"UpdateFailed": {
-			args: args{
-				cr: instance(withTags(
-					&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-					&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
-				)),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errors.New(testErrBoom))},
-			},
-			want: want{
-				cr: instance(withTags(
-					mergeTags(
-						[]*svcapitypes.Tag{
-							{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-							{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
-						},
-						svcutils.GetExternalTags(instance()),
-					)...,
-				)),
-				err: awsclient.Wrap(errors.New(testErrBoom), errKubeUpdateFailed),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			e := &tagger{kube: tc.kube}
-			err := e.Initialize(context.Background(), tc.args.cr)
-
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

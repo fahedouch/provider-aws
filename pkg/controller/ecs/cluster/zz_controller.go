@@ -34,7 +34,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ecs/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -52,23 +53,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.Cluster)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.Cluster) (managed.TypedExternalClient[*svcapitypes.Cluster], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.Cluster)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.Cluster) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -80,30 +73,30 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeClustersWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateCluster(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.Cluster)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.Cluster) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateClusterInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -111,7 +104,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateClusterWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.Cluster.ActiveServicesCount != nil {
@@ -247,26 +240,19 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Status.AtProvider.RunningTasksCount = nil
 	}
-	if resp.Cluster.Settings != nil {
-		f11 := []*svcapitypes.ClusterSetting{}
-		for _, f11iter := range resp.Cluster.Settings {
-			f11elem := &svcapitypes.ClusterSetting{}
-			if f11iter.Name != nil {
-				f11elem.Name = f11iter.Name
-			}
-			if f11iter.Value != nil {
-				f11elem.Value = f11iter.Value
-			}
-			f11 = append(f11, f11elem)
+	if resp.Cluster.ServiceConnectDefaults != nil {
+		f11 := &svcapitypes.ClusterServiceConnectDefaultsRequest{}
+		if resp.Cluster.ServiceConnectDefaults.Namespace != nil {
+			f11.Namespace = resp.Cluster.ServiceConnectDefaults.Namespace
 		}
-		cr.Spec.ForProvider.Settings = f11
+		cr.Spec.ForProvider.ServiceConnectDefaults = f11
 	} else {
-		cr.Spec.ForProvider.Settings = nil
+		cr.Spec.ForProvider.ServiceConnectDefaults = nil
 	}
-	if resp.Cluster.Statistics != nil {
-		f12 := []*svcapitypes.KeyValuePair{}
-		for _, f12iter := range resp.Cluster.Statistics {
-			f12elem := &svcapitypes.KeyValuePair{}
+	if resp.Cluster.Settings != nil {
+		f12 := []*svcapitypes.ClusterSetting{}
+		for _, f12iter := range resp.Cluster.Settings {
+			f12elem := &svcapitypes.ClusterSetting{}
 			if f12iter.Name != nil {
 				f12elem.Name = f12iter.Name
 			}
@@ -275,7 +261,23 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 			}
 			f12 = append(f12, f12elem)
 		}
-		cr.Status.AtProvider.Statistics = f12
+		cr.Spec.ForProvider.Settings = f12
+	} else {
+		cr.Spec.ForProvider.Settings = nil
+	}
+	if resp.Cluster.Statistics != nil {
+		f13 := []*svcapitypes.KeyValuePair{}
+		for _, f13iter := range resp.Cluster.Statistics {
+			f13elem := &svcapitypes.KeyValuePair{}
+			if f13iter.Name != nil {
+				f13elem.Name = f13iter.Name
+			}
+			if f13iter.Value != nil {
+				f13elem.Value = f13iter.Value
+			}
+			f13 = append(f13, f13elem)
+		}
+		cr.Status.AtProvider.Statistics = f13
 	} else {
 		cr.Status.AtProvider.Statistics = nil
 	}
@@ -285,18 +287,18 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.Status = nil
 	}
 	if resp.Cluster.Tags != nil {
-		f14 := []*svcapitypes.Tag{}
-		for _, f14iter := range resp.Cluster.Tags {
-			f14elem := &svcapitypes.Tag{}
-			if f14iter.Key != nil {
-				f14elem.Key = f14iter.Key
+		f15 := []*svcapitypes.Tag{}
+		for _, f15iter := range resp.Cluster.Tags {
+			f15elem := &svcapitypes.Tag{}
+			if f15iter.Key != nil {
+				f15elem.Key = f15iter.Key
 			}
-			if f14iter.Value != nil {
-				f14elem.Value = f14iter.Value
+			if f15iter.Value != nil {
+				f15elem.Value = f15iter.Value
 			}
-			f14 = append(f14, f14elem)
+			f15 = append(f15, f15elem)
 		}
-		cr.Spec.ForProvider.Tags = f14
+		cr.Spec.ForProvider.Tags = f15
 	} else {
 		cr.Spec.ForProvider.Tags = nil
 	}
@@ -304,35 +306,32 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.Cluster)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Update(ctx context.Context, cr *svcapitypes.Cluster) (managed.ExternalUpdate, error) {
 	input := GenerateUpdateClusterInput(cr)
 	if err := e.preUpdate(ctx, cr, input); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.UpdateClusterWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Cluster)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.Cluster) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteClusterInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteClusterWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -364,11 +363,11 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.Cluster, *svcsdk.DescribeClustersInput) error
 	postObserve    func(context.Context, *svcapitypes.Cluster, *svcsdk.DescribeClustersOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.ClusterParameters, *svcsdk.DescribeClustersOutput) error
-	isUpToDate     func(*svcapitypes.Cluster, *svcsdk.DescribeClustersOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.Cluster, *svcsdk.DescribeClustersOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.Cluster, *svcsdk.CreateClusterInput) error
 	postCreate     func(context.Context, *svcapitypes.Cluster, *svcsdk.CreateClusterOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.Cluster, *svcsdk.DeleteClusterInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.Cluster, *svcsdk.DeleteClusterOutput, error) error
+	postDelete     func(context.Context, *svcapitypes.Cluster, *svcsdk.DeleteClusterOutput, error) (managed.ExternalDelete, error)
 	preUpdate      func(context.Context, *svcapitypes.Cluster, *svcsdk.UpdateClusterInput) error
 	postUpdate     func(context.Context, *svcapitypes.Cluster, *svcsdk.UpdateClusterOutput, managed.ExternalUpdate, error) (managed.ExternalUpdate, error)
 }
@@ -383,8 +382,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.Cluster, _ *svcsdk.Describ
 func nopLateInitialize(*svcapitypes.ClusterParameters, *svcsdk.DescribeClustersOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.Cluster, *svcsdk.DescribeClustersOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.Cluster, *svcsdk.DescribeClustersOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.Cluster, *svcsdk.CreateClusterInput) error {
@@ -396,8 +395,8 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.Cluster, _ *svcsdk.CreateCl
 func nopPreDelete(context.Context, *svcapitypes.Cluster, *svcsdk.DeleteClusterInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.Cluster, _ *svcsdk.DeleteClusterOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.Cluster, _ *svcsdk.DeleteClusterOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
 func nopPreUpdate(context.Context, *svcapitypes.Cluster, *svcsdk.UpdateClusterInput) error {
 	return nil

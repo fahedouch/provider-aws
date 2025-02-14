@@ -18,11 +18,6 @@ import (
 	"time"
 
 	svcsdk "github.com/aws/aws-sdk-go/service/glue"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -30,11 +25,16 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/glue/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupClassifier adds a controller that reconciles Classifier.
@@ -56,26 +56,38 @@ func SetupClassifier(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.ClassifierGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Classifier{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.ClassifierGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.DeleteClassifierInput) (bool, error) {
-	obj.Name = awsclients.String(meta.GetExternalName(cr))
+	obj.Name = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.GetClassifierInput) error {
-	obj.Name = awsclients.String(meta.GetExternalName(cr))
+	obj.Name = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -114,29 +126,30 @@ func postObserve(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.GetC
 // potential defaults e.g.  csvClassifier.DisableValueTrimming <-> true
 // csvClassifier.QuoteSymbol <-> Double-Quote (") | csvClassifier.Delimiter <-> Comma (,)
 
-func isUpToDate(cr *svcapitypes.Classifier, resp *svcsdk.GetClassifierOutput) (bool, error) {
+func isUpToDate(_ context.Context, cr *svcapitypes.Classifier, resp *svcsdk.GetClassifierOutput) (bool, string, error) {
 
 	currentParams := customGenerateClassifier(resp).Spec.ForProvider
 
 	if cr.Spec.ForProvider.CustomGrokClassifier != nil {
 
-		if awsclients.StringValue(cr.Spec.ForProvider.CustomGrokClassifier.CustomPatterns) !=
-			awsclients.StringValue(resp.Classifier.GrokClassifier.CustomPatterns) {
+		if pointer.StringValue(cr.Spec.ForProvider.CustomGrokClassifier.CustomPatterns) !=
+			pointer.StringValue(resp.Classifier.GrokClassifier.CustomPatterns) {
 
-			return false, nil
+			return false, "", nil
 		}
 	}
 
-	return cmp.Equal(cr.Spec.ForProvider, currentParams, cmpopts.EquateEmpty(),
+	diff := cmp.Diff(cr.Spec.ForProvider, currentParams, cmpopts.EquateEmpty(),
 		cmpopts.IgnoreFields(svcapitypes.ClassifierParameters{}, "Region"),
-		cmpopts.IgnoreFields(svcapitypes.CustomCreateGrokClassifierRequest{}, "CustomPatterns")), nil
+		cmpopts.IgnoreFields(svcapitypes.CustomCreateGrokClassifierRequest{}, "CustomPatterns"))
+	return diff == "", diff, nil
 }
 
 func preUpdate(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.UpdateClassifierInput) error {
 
 	if cr.Spec.ForProvider.CustomCSVClassifier != nil {
 		obj.CsvClassifier = &svcsdk.UpdateCsvClassifierRequest{
-			Name:                 awsclients.String(meta.GetExternalName(cr)),
+			Name:                 pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			AllowSingleColumn:    cr.Spec.ForProvider.CustomCSVClassifier.AllowSingleColumn,
 			ContainsHeader:       cr.Spec.ForProvider.CustomCSVClassifier.ContainsHeader,
 			Delimiter:            cr.Spec.ForProvider.CustomCSVClassifier.Delimiter,
@@ -149,8 +162,8 @@ func preUpdate(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.Update
 	if cr.Spec.ForProvider.CustomXMLClassifier != nil {
 
 		obj.XMLClassifier = &svcsdk.UpdateXMLClassifierRequest{
-			Name:           awsclients.String(meta.GetExternalName(cr)),
-			Classification: awsclients.String(cr.Spec.ForProvider.CustomXMLClassifier.Classification),
+			Name:           pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+			Classification: pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.CustomXMLClassifier.Classification),
 			RowTag:         cr.Spec.ForProvider.CustomXMLClassifier.RowTag,
 		}
 	}
@@ -158,10 +171,10 @@ func preUpdate(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.Update
 	if cr.Spec.ForProvider.CustomGrokClassifier != nil {
 
 		obj.GrokClassifier = &svcsdk.UpdateGrokClassifierRequest{
-			Name:           awsclients.String(meta.GetExternalName(cr)),
-			Classification: awsclients.String(cr.Spec.ForProvider.CustomGrokClassifier.Classification),
+			Name:           pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+			Classification: pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.CustomGrokClassifier.Classification),
 			CustomPatterns: cr.Spec.ForProvider.CustomGrokClassifier.CustomPatterns,
-			GrokPattern:    awsclients.String(cr.Spec.ForProvider.CustomGrokClassifier.GrokPattern),
+			GrokPattern:    pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.CustomGrokClassifier.GrokPattern),
 		}
 		// if CustomPatterns was not nil before but is changed to nil through update, AWS just keeps the old value... (see on AWS Console)
 		// however if we fill the spec field with "", AWS sets it to nil/empty
@@ -173,7 +186,7 @@ func preUpdate(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.Update
 
 	if cr.Spec.ForProvider.CustomJSONClassifier != nil {
 		obj.JsonClassifier = &svcsdk.UpdateJsonClassifierRequest{
-			Name:     awsclients.String(meta.GetExternalName(cr)),
+			Name:     pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			JsonPath: cr.Spec.ForProvider.CustomJSONClassifier.JSONPath,
 		}
 	}
@@ -185,7 +198,7 @@ func preCreate(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.Create
 
 	if cr.Spec.ForProvider.CustomCSVClassifier != nil {
 		obj.CsvClassifier = &svcsdk.CreateCsvClassifierRequest{
-			Name:                 awsclients.String(meta.GetExternalName(cr)),
+			Name:                 pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			AllowSingleColumn:    cr.Spec.ForProvider.CustomCSVClassifier.AllowSingleColumn,
 			ContainsHeader:       cr.Spec.ForProvider.CustomCSVClassifier.ContainsHeader,
 			Delimiter:            cr.Spec.ForProvider.CustomCSVClassifier.Delimiter,
@@ -197,24 +210,24 @@ func preCreate(_ context.Context, cr *svcapitypes.Classifier, obj *svcsdk.Create
 
 	if cr.Spec.ForProvider.CustomXMLClassifier != nil {
 		obj.XMLClassifier = &svcsdk.CreateXMLClassifierRequest{
-			Name:           awsclients.String(meta.GetExternalName(cr)),
-			Classification: awsclients.String(cr.Spec.ForProvider.CustomXMLClassifier.Classification),
+			Name:           pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+			Classification: pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.CustomXMLClassifier.Classification),
 			RowTag:         cr.Spec.ForProvider.CustomXMLClassifier.RowTag,
 		}
 	}
 
 	if cr.Spec.ForProvider.CustomGrokClassifier != nil {
 		obj.GrokClassifier = &svcsdk.CreateGrokClassifierRequest{
-			Name:           awsclients.String(meta.GetExternalName(cr)),
-			Classification: awsclients.String(cr.Spec.ForProvider.CustomGrokClassifier.Classification),
+			Name:           pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+			Classification: pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.CustomGrokClassifier.Classification),
 			CustomPatterns: cr.Spec.ForProvider.CustomGrokClassifier.CustomPatterns,
-			GrokPattern:    awsclients.String(cr.Spec.ForProvider.CustomGrokClassifier.GrokPattern),
+			GrokPattern:    pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.CustomGrokClassifier.GrokPattern),
 		}
 	}
 
 	if cr.Spec.ForProvider.CustomJSONClassifier != nil {
 		obj.JsonClassifier = &svcsdk.CreateJsonClassifierRequest{
-			Name:     awsclients.String(meta.GetExternalName(cr)),
+			Name:     pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			JsonPath: cr.Spec.ForProvider.CustomJSONClassifier.JSONPath,
 		}
 	}
@@ -240,16 +253,16 @@ func customGenerateClassifier(resp *svcsdk.GetClassifierOutput) *svcapitypes.Cla
 
 	if resp.Classifier.XMLClassifier != nil {
 		cr.Spec.ForProvider.CustomXMLClassifier = &svcapitypes.CustomCreateXMLClassifierRequest{
-			Classification: awsclients.StringValue(resp.Classifier.XMLClassifier.Classification),
+			Classification: pointer.StringValue(resp.Classifier.XMLClassifier.Classification),
 			RowTag:         resp.Classifier.XMLClassifier.RowTag,
 		}
 	}
 
 	if resp.Classifier.GrokClassifier != nil {
 		cr.Spec.ForProvider.CustomGrokClassifier = &svcapitypes.CustomCreateGrokClassifierRequest{
-			Classification: awsclients.StringValue(resp.Classifier.GrokClassifier.Classification),
+			Classification: pointer.StringValue(resp.Classifier.GrokClassifier.Classification),
 			CustomPatterns: resp.Classifier.GrokClassifier.CustomPatterns,
-			GrokPattern:    awsclients.StringValue(resp.Classifier.GrokClassifier.GrokPattern),
+			GrokPattern:    pointer.StringValue(resp.Classifier.GrokClassifier.GrokPattern),
 		}
 	}
 

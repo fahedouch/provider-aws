@@ -29,12 +29,11 @@ type IdentityProviderParameters struct {
 	// Region is which region the IdentityProvider will be created.
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
-	// A mapping of identity provider attributes to standard and custom user pool
-	// attributes.
+	// A mapping of IdP attributes to standard and custom user pool attributes.
 	AttributeMapping map[string]*string `json:"attributeMapping,omitempty"`
-	// A list of identity provider identifiers.
+	// A list of IdP identifiers.
 	IDpIdentifiers []*string `json:"idpIdentifiers,omitempty"`
-	// The identity provider type.
+	// The IdP type.
 	// +kubebuilder:validation:Required
 	ProviderType                     *string `json:"providerType"`
 	CustomIdentityProviderParameters `json:",inline"`
@@ -48,14 +47,18 @@ type IdentityProviderSpec struct {
 
 // IdentityProviderObservation defines the observed state of IdentityProvider
 type IdentityProviderObservation struct {
-	// The date the identity provider was created.
+	// The date and time, in ISO 8601 (https://www.iso.org/iso-8601-date-and-time-format.html)
+	// format, when the item was created.
 	CreationDate *metav1.Time `json:"creationDate,omitempty"`
-	// The date the identity provider was last modified.
+	// The date and time, in ISO 8601 (https://www.iso.org/iso-8601-date-and-time-format.html)
+	// format, when the item was modified.
 	LastModifiedDate *metav1.Time `json:"lastModifiedDate,omitempty"`
-	// The identity provider name.
+	// The IdP name.
 	ProviderName *string `json:"providerName,omitempty"`
 	// The user pool ID.
 	UserPoolID *string `json:"userPoolID,omitempty"`
+
+	CustomIdentityProviderObservation `json:",inline"`
 }
 
 // IdentityProviderStatus defines the observed state of IdentityProvider.
@@ -70,6 +73,7 @@ type IdentityProviderStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

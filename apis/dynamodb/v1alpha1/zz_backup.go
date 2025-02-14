@@ -50,7 +50,8 @@ type BackupObservation struct {
 	// Time at which the automatic on-demand backup created by DynamoDB will expire.
 	// This SYSTEM on-demand backup expires automatically 35 days after its creation.
 	BackupExpiryDateTime *metav1.Time `json:"backupExpiryDateTime,omitempty"`
-	// Size of the backup in bytes.
+	// Size of the backup in bytes. DynamoDB updates this value approximately every
+	// six hours. Recent changes might not be reflected in this value.
 	BackupSizeBytes *int64 `json:"backupSizeBytes,omitempty"`
 	// Backup can be in one of the following states: CREATING, ACTIVE, DELETED.
 	BackupStatus *string `json:"backupStatus,omitempty"`
@@ -65,6 +66,8 @@ type BackupObservation struct {
 	//
 	//    * AWS_BACKUP - On-demand backup created by you from Backup service.
 	BackupType *string `json:"backupType,omitempty"`
+
+	CustomBackupObservation `json:",inline"`
 }
 
 // BackupStatus defines the observed state of Backup.
@@ -79,6 +82,7 @@ type BackupStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

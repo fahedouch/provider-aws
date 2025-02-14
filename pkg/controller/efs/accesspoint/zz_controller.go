@@ -34,7 +34,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/efs/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -52,23 +53,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.AccessPoint)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.AccessPoint) (managed.TypedExternalClient[*svcapitypes.AccessPoint], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.AccessPoint)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.AccessPoint) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -80,7 +73,7 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeAccessPointsWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	resp = e.filterList(cr, resp)
 	if len(resp.AccessPoints) == 0 {
@@ -91,23 +84,23 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateAccessPoint(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.AccessPoint)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.AccessPoint) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateAccessPointInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -115,7 +108,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateAccessPointWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.AccessPointArn != nil {
@@ -216,27 +209,28 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	return e.update(ctx, mg)
+func (e *external) Update(ctx context.Context, cr *svcapitypes.AccessPoint) (managed.ExternalUpdate, error) {
+	return e.update(ctx, cr)
 
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.AccessPoint)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.AccessPoint) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteAccessPointInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteAccessPointWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -269,12 +263,12 @@ type external struct {
 	postObserve    func(context.Context, *svcapitypes.AccessPoint, *svcsdk.DescribeAccessPointsOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	filterList     func(*svcapitypes.AccessPoint, *svcsdk.DescribeAccessPointsOutput) *svcsdk.DescribeAccessPointsOutput
 	lateInitialize func(*svcapitypes.AccessPointParameters, *svcsdk.DescribeAccessPointsOutput) error
-	isUpToDate     func(*svcapitypes.AccessPoint, *svcsdk.DescribeAccessPointsOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.AccessPoint, *svcsdk.DescribeAccessPointsOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.AccessPoint, *svcsdk.CreateAccessPointInput) error
 	postCreate     func(context.Context, *svcapitypes.AccessPoint, *svcsdk.CreateAccessPointOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.AccessPoint, *svcsdk.DeleteAccessPointInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.AccessPoint, *svcsdk.DeleteAccessPointOutput, error) error
-	update         func(context.Context, cpresource.Managed) (managed.ExternalUpdate, error)
+	postDelete     func(context.Context, *svcapitypes.AccessPoint, *svcsdk.DeleteAccessPointOutput, error) (managed.ExternalDelete, error)
+	update         func(context.Context, *svcapitypes.AccessPoint) (managed.ExternalUpdate, error)
 }
 
 func nopPreObserve(context.Context, *svcapitypes.AccessPoint, *svcsdk.DescribeAccessPointsInput) error {
@@ -290,8 +284,8 @@ func nopFilterList(_ *svcapitypes.AccessPoint, list *svcsdk.DescribeAccessPoints
 func nopLateInitialize(*svcapitypes.AccessPointParameters, *svcsdk.DescribeAccessPointsOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.AccessPoint, *svcsdk.DescribeAccessPointsOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.AccessPoint, *svcsdk.DescribeAccessPointsOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.AccessPoint, *svcsdk.CreateAccessPointInput) error {
@@ -303,9 +297,9 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.AccessPoint, _ *svcsdk.Crea
 func nopPreDelete(context.Context, *svcapitypes.AccessPoint, *svcsdk.DeleteAccessPointInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.AccessPoint, _ *svcsdk.DeleteAccessPointOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.AccessPoint, _ *svcsdk.DeleteAccessPointOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
-func nopUpdate(context.Context, cpresource.Managed) (managed.ExternalUpdate, error) {
+func nopUpdate(context.Context, *svcapitypes.AccessPoint) (managed.ExternalUpdate, error) {
 	return managed.ExternalUpdate{}, nil
 }

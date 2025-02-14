@@ -20,25 +20,21 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	awsiamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-
-	"github.com/pkg/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -102,9 +98,15 @@ func withTags(tagMaps ...map[string]string) userModifier {
 	}
 }
 
-func withGroupVersionKind() userModifier {
-	return func(iamRole *v1beta1.User) {
-		iamRole.TypeMeta.SetGroupVersionKind(v1beta1.PolicyGroupVersionKind)
+func withPath(path *string) userModifier {
+	return func(r *v1beta1.User) {
+		r.Spec.ForProvider.Path = path
+	}
+}
+
+func withBoundary(boundary *string) userModifier {
+	return func(r *v1beta1.User) {
+		r.Spec.ForProvider.PermissionsBoundary = boundary
 	}
 }
 
@@ -168,7 +170,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  user(withExternalName(userName)),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 		"DifferentTags": {
@@ -190,6 +192,31 @@ func TestObserve(t *testing.T) {
 				cr: user(withExternalName(userName),
 					withConditions(xpv1.Available()),
 					withTags(map[string]string{"k1": "v2"})),
+				result: managed.ExternalObservation{
+					ResourceExists:   true,
+					ResourceUpToDate: false,
+				},
+			},
+		},
+		"DifferentBoundary": {
+			args: args{
+				iam: &fake.MockUserClient{
+					MockGetUser: func(ctx context.Context, input *awsiam.GetUserInput, opts []func(*awsiam.Options)) (*awsiam.GetUserOutput, error) {
+						return &awsiam.GetUserOutput{
+							User: &awsiamtypes.User{
+								PermissionsBoundary: &awsiamtypes.AttachedPermissionsBoundary{
+									PermissionsBoundaryArn: aws.String("old"),
+								},
+							},
+						}, nil
+					},
+				},
+				cr: user(withExternalName(userName), withBoundary(aws.String("new"))),
+			},
+			want: want{
+				cr: user(withExternalName(userName),
+					withConditions(xpv1.Available()),
+					withBoundary(aws.String("new"))),
 				result: managed.ExternalObservation{
 					ResourceExists:   true,
 					ResourceUpToDate: false,
@@ -263,7 +290,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  user(withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -331,12 +358,17 @@ func TestUpdate(t *testing.T) {
 					MockUpdateUser: func(ctx context.Context, input *awsiam.UpdateUserInput, opts []func(*awsiam.Options)) (*awsiam.UpdateUserOutput, error) {
 						return nil, errBoom
 					},
+					MockGetUser: func(ctx context.Context, input *awsiam.GetUserInput, opts []func(*awsiam.Options)) (*awsiam.GetUserOutput, error) {
+						return &awsiam.GetUserOutput{
+							User: &awsiamtypes.User{},
+						}, nil
+					},
 				},
-				cr: user(withExternalName(userName)),
+				cr: user(withExternalName(userName), withPath(aws.String("foo"))),
 			},
 			want: want{
-				cr:  user(withExternalName(userName)),
-				err: awsclient.Wrap(errBoom, errUpdate),
+				cr:  user(withExternalName(userName), withPath(aws.String("foo"))),
+				err: errorutils.Wrap(errBoom, errUpdateUser),
 			},
 		},
 		"GetUserError": {
@@ -353,7 +385,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  user(withExternalName(userName)),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 	}
@@ -414,7 +446,7 @@ func TestUpdate_Tags(t *testing.T) {
 					withTags(map[string]string{
 						"key": "value",
 					})),
-				err: awsclient.Wrap(errBoom, errTag),
+				err: errorutils.Wrap(errBoom, errTag),
 			},
 		},
 		"AddTagsSuccess": {
@@ -517,7 +549,7 @@ func TestUpdate_Tags(t *testing.T) {
 					withTags(map[string]string{
 						"key2": "value2",
 					})),
-				err: awsclient.Wrap(errBoom, errUntag),
+				err: errorutils.Wrap(errBoom, errUntag),
 			},
 		},
 		"RemoveTagsSuccess": {
@@ -634,7 +666,7 @@ func TestDelete(t *testing.T) {
 			want: want{
 				cr: user(withExternalName(userName),
 					withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 	}
@@ -642,109 +674,12 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.iam}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestTagger_Initialize(t *testing.T) {
-	type args struct {
-		cr   resource.Managed
-		kube client.Client
-	}
-	type want struct {
-		cr  *v1beta1.User
-		err error
-	}
-
-	cases := map[string]struct {
-		args
-		want
-	}{
-		"Unexpected": {
-			args: args{
-				cr:   unexpectedItem,
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				err: errors.New(errUnexpectedObject),
-			},
-		},
-		"Successful": {
-			args: args{
-				cr: user(
-					withExternalName(userName),
-					withGroupVersionKind(),
-					withTags(map[string]string{"foo": "bar"})),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: user(
-					withExternalName(userName),
-					withGroupVersionKind(),
-					withTags(resource.GetExternalTags(user(withGroupVersionKind())), map[string]string{"foo": "bar"})),
-			},
-		},
-		"DefaultTags": {
-			args: args{
-				cr: user(withExternalName(userName),
-					withTags(map[string]string{"foo": "bar"}), withGroupVersionKind()),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: user(withExternalName(userName),
-					withTags(resource.GetExternalTags(user(withGroupVersionKind())), map[string]string{"foo": "bar"}), withGroupVersionKind()),
-			},
-		},
-		"UpdateDefaultTags": {
-			args: args{
-				cr: user(withExternalName(userName),
-					withTags(map[string]string{resource.ExternalResourceTagKeyKind: "bar"}), withGroupVersionKind()),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: user(withExternalName(userName),
-					withTags(resource.GetExternalTags(user(withGroupVersionKind()))), withGroupVersionKind()),
-			},
-		},
-		"NoChange": {
-			args: args{
-				cr: user(withExternalName(userName), withGroupVersionKind(),
-					withTags(map[string]string{"foo": "bar"}, resource.GetExternalTags(user(withExternalName(userName), withGroupVersionKind())))),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: user(withExternalName(userName), withGroupVersionKind(),
-					withTags(map[string]string{"foo": "bar"}, resource.GetExternalTags(user(withExternalName(userName), withGroupVersionKind())))),
-			},
-		},
-		"UpdateFailed": {
-			args: args{
-				cr:   user(),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errBoom)},
-			},
-			want: want{
-				err: errors.Wrap(errBoom, errKubeUpdateFailed),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			e := &tagger{kube: tc.kube}
-			err := e.Initialize(context.Background(), tc.args.cr)
-
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.cr, tc.args.cr, cmpopts.SortSlices(func(a, b v1beta1.Tag) bool { return a.Key > b.Key })); err == nil && diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

@@ -22,20 +22,18 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/dax"
-
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
-
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/dax/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/dax/fake"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -93,21 +91,21 @@ func withName(value string) daxModifier {
 
 func withStatusParameterGroupName(value string) daxModifier {
 	return func(o *svcapitypes.ParameterGroup) {
-		o.Status.AtProvider.ParameterGroupName = awsclient.String(value)
+		o.Status.AtProvider.ParameterGroupName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withDescription(value string) daxModifier {
 	return func(o *svcapitypes.ParameterGroup) {
-		o.Spec.ForProvider.Description = awsclient.String(value)
+		o.Spec.ForProvider.Description = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withParameters(k, v string) daxModifier {
 	return func(o *svcapitypes.ParameterGroup) {
 		o.Spec.ForProvider.ParameterNameValues = append(o.Spec.ForProvider.ParameterNameValues, &svcapitypes.ParameterNameValue{
-			ParameterName:  awsclient.String(k),
-			ParameterValue: awsclient.String(v),
+			ParameterName:  pointer.ToOrNilIfZeroValue(k),
+			ParameterValue: pointer.ToOrNilIfZeroValue(v),
 		})
 	}
 }
@@ -136,16 +134,16 @@ func TestObserve(t *testing.T) {
 					MockDescribeParameterGroupsWithContext: func(c context.Context, dpgi *dax.DescribeParameterGroupsInput, o []request.Option) (*dax.DescribeParameterGroupsOutput, error) {
 						return &dax.DescribeParameterGroupsOutput{ParameterGroups: []*dax.ParameterGroup{
 							{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
-								Description:        awsclient.String(testDescription),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
+								Description:        pointer.ToOrNilIfZeroValue(testDescription),
 							},
 						}}, nil
 					},
-					MockDescribeParameters: func(input *dax.DescribeParametersInput) (*dax.DescribeParametersOutput, error) {
+					MockDescribeParametersWithContext: func(ctx context.Context, input *dax.DescribeParametersInput, o []request.Option) (*dax.DescribeParametersOutput, error) {
 						return &dax.DescribeParametersOutput{
 							Parameters: []*dax.Parameter{{
-								ParameterName:  awsclient.String(testParameterName),
-								ParameterValue: awsclient.String(testParameterValue),
+								ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+								ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 							}},
 						}, nil
 					},
@@ -178,11 +176,12 @@ func TestObserve(t *testing.T) {
 							Opts: nil,
 						},
 					},
-					DescribeParameters: []*fake.CallDescribeParameters{
+					DescribeParametersWithContext: []*fake.CallDescribeParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &dax.DescribeParametersInput{
-								MaxResults:         awsclient.Int64(100),
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								MaxResults:         pointer.ToIntAsInt64(100),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						},
 					},
@@ -195,16 +194,16 @@ func TestObserve(t *testing.T) {
 					MockDescribeParameterGroupsWithContext: func(c context.Context, dpgi *dax.DescribeParameterGroupsInput, o []request.Option) (*dax.DescribeParameterGroupsOutput, error) {
 						return &dax.DescribeParameterGroupsOutput{ParameterGroups: []*dax.ParameterGroup{
 							{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
-								Description:        awsclient.String(testDescription),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
+								Description:        pointer.ToOrNilIfZeroValue(testDescription),
 							},
 						}}, nil
 					},
-					MockDescribeParameters: func(input *dax.DescribeParametersInput) (*dax.DescribeParametersOutput, error) {
+					MockDescribeParametersWithContext: func(ctx context.Context, input *dax.DescribeParametersInput, o []request.Option) (*dax.DescribeParametersOutput, error) {
 						return &dax.DescribeParametersOutput{
 							Parameters: []*dax.Parameter{{
-								ParameterName:  awsclient.String(testParameterName),
-								ParameterValue: awsclient.String(testParameterValue),
+								ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+								ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 							}},
 						}, nil
 					},
@@ -237,11 +236,12 @@ func TestObserve(t *testing.T) {
 							Opts: nil,
 						},
 					},
-					DescribeParameters: []*fake.CallDescribeParameters{
+					DescribeParametersWithContext: []*fake.CallDescribeParametersWithContext{
 						{
+							Ctx: context.Background(),
 							I: &dax.DescribeParametersInput{
-								MaxResults:         awsclient.Int64(100),
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								MaxResults:         pointer.ToIntAsInt64(100),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						},
 					},
@@ -254,8 +254,8 @@ func TestObserve(t *testing.T) {
 					MockDescribeParameterGroupsWithContext: func(c context.Context, dpgi *dax.DescribeParameterGroupsInput, o []request.Option) (*dax.DescribeParameterGroupsOutput, error) {
 						return &dax.DescribeParameterGroupsOutput{ParameterGroups: []*dax.ParameterGroup{
 							{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
-								Description:        awsclient.String(testDescription),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
+								Description:        pointer.ToOrNilIfZeroValue(testDescription),
 							},
 						}}, nil
 					},
@@ -339,7 +339,7 @@ func TestObserve(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -364,8 +364,8 @@ func TestUpdate(t *testing.T) {
 					MockUpdateParameterGroupWithContext: func(c context.Context, upgi *dax.UpdateParameterGroupInput, o []request.Option) (*dax.UpdateParameterGroupOutput, error) {
 						return &dax.UpdateParameterGroupOutput{
 							ParameterGroup: &dax.ParameterGroup{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
-								Description:        awsclient.String(testDescription),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
+								Description:        pointer.ToOrNilIfZeroValue(testDescription),
 							},
 						}, nil
 					},
@@ -390,11 +390,11 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.UpdateParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 								ParameterNameValues: []*dax.ParameterNameValue{
 									{
-										ParameterName:  awsclient.String(testParameterName),
-										ParameterValue: awsclient.String(testParameterValue),
+										ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+										ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 									},
 								},
 							},
@@ -409,8 +409,8 @@ func TestUpdate(t *testing.T) {
 					MockUpdateParameterGroupWithContext: func(c context.Context, upgi *dax.UpdateParameterGroupInput, o []request.Option) (*dax.UpdateParameterGroupOutput, error) {
 						return &dax.UpdateParameterGroupOutput{
 							ParameterGroup: &dax.ParameterGroup{
-								Description:        awsclient.String(testDescription),
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								Description:        pointer.ToOrNilIfZeroValue(testDescription),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						}, nil
 					},
@@ -437,15 +437,15 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.UpdateParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 								ParameterNameValues: []*dax.ParameterNameValue{
 									{
-										ParameterName:  awsclient.String(testParameterName),
-										ParameterValue: awsclient.String(testParameterValue),
+										ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+										ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 									},
 									{
-										ParameterName:  awsclient.String(testOtherParameterName),
-										ParameterValue: awsclient.String(testOtherParameterValue),
+										ParameterName:  pointer.ToOrNilIfZeroValue(testOtherParameterName),
+										ParameterValue: pointer.ToOrNilIfZeroValue(testOtherParameterValue),
 									},
 								},
 							},
@@ -480,11 +480,11 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.UpdateParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 								ParameterNameValues: []*dax.ParameterNameValue{
 									{
-										ParameterName:  awsclient.String(testParameterName),
-										ParameterValue: awsclient.String(testParameterValue),
+										ParameterName:  pointer.ToOrNilIfZeroValue(testParameterName),
+										ParameterValue: pointer.ToOrNilIfZeroValue(testParameterValue),
 									},
 								},
 							},
@@ -509,7 +509,7 @@ func TestUpdate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -534,7 +534,7 @@ func TestCreate(t *testing.T) {
 					MockCreateParameterGroupWithContext: func(c context.Context, cpgi *dax.CreateParameterGroupInput, o []request.Option) (*dax.CreateParameterGroupOutput, error) {
 						return &dax.CreateParameterGroupOutput{
 							ParameterGroup: &dax.ParameterGroup{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						}, nil
 					},
@@ -557,7 +557,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.CreateParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						},
 					},
@@ -570,7 +570,7 @@ func TestCreate(t *testing.T) {
 					MockCreateParameterGroupWithContext: func(c context.Context, cpgi *dax.CreateParameterGroupInput, o []request.Option) (*dax.CreateParameterGroupOutput, error) {
 						return &dax.CreateParameterGroupOutput{
 							ParameterGroup: &dax.ParameterGroup{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						}, nil
 					},
@@ -596,7 +596,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.CreateParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						},
 					},
@@ -627,7 +627,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.CreateParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						},
 					},
@@ -660,7 +660,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.CreateParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						},
 					},
@@ -684,7 +684,7 @@ func TestCreate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -723,7 +723,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.DeleteParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						},
 					},
@@ -752,7 +752,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.DeleteParameterGroupInput{
-								ParameterGroupName: awsclient.String(testParameterGroupName),
+								ParameterGroupName: pointer.ToOrNilIfZeroValue(testParameterGroupName),
 							},
 						},
 					},
@@ -765,7 +765,7 @@ func TestDelete(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			opts := []option{setupExternal}
 			e := newExternal(tc.args.kube, tc.args.dax, opts)
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
@@ -773,7 +773,7 @@ func TestDelete(t *testing.T) {
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

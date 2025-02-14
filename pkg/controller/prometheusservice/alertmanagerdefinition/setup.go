@@ -5,8 +5,6 @@ import (
 	"context"
 	"strings"
 
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/prometheusservice"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/prometheusservice/prometheusserviceiface"
@@ -18,10 +16,12 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/prometheusservice/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupAlertManagerDefinition adds a controller that reconciles AlertManagerDefinition.
@@ -46,18 +46,30 @@ func SetupAlertManagerDefinition(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.AlertManagerDefinitionGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.AlertManagerDefinition{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.AlertManagerDefinitionGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.AlertManagerDefinition, obj *svcsdk.DescribeAlertManagerDefinitionInput) error {
@@ -83,15 +95,15 @@ func postCreate(_ context.Context, cr *svcapitypes.AlertManagerDefinition, resp 
 	return cre, nil
 }
 
-func postDelete(_ context.Context, cr *svcapitypes.AlertManagerDefinition, obj *svcsdk.DeleteAlertManagerDefinitionOutput, err error) error {
+func postDelete(_ context.Context, cr *svcapitypes.AlertManagerDefinition, obj *svcsdk.DeleteAlertManagerDefinitionOutput, err error) (managed.ExternalDelete, error) {
 	if err != nil {
 		if strings.Contains(err.Error(), svcsdk.ErrCodeConflictException) {
 			// skip: Can't delete alertmanagerdefinition in non-ACTIVE state. Current status is DELETING
-			return nil
+			return managed.ExternalDelete{}, nil
 		}
-		return err
+		return managed.ExternalDelete{}, err
 	}
-	return err
+	return managed.ExternalDelete{}, err
 }
 
 func postObserve(_ context.Context, cr *svcapitypes.AlertManagerDefinition, resp *svcsdk.DescribeAlertManagerDefinitionOutput, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) {
@@ -114,19 +126,19 @@ func postObserve(_ context.Context, cr *svcapitypes.AlertManagerDefinition, resp
 	return obs, nil
 }
 
-func isUpToDate(cr *svcapitypes.AlertManagerDefinition, resp *svcsdk.DescribeAlertManagerDefinitionOutput) (bool, error) {
+func isUpToDate(_ context.Context, cr *svcapitypes.AlertManagerDefinition, resp *svcsdk.DescribeAlertManagerDefinitionOutput) (bool, string, error) {
 	// An AlertManager Definition that's currently creating, deleting, or updating can't be
 	// updated, so we temporarily consider it to be up-to-date no matter
 	// what.
 	switch aws.StringValue(cr.Status.AtProvider.StatusCode) {
 	case string(svcapitypes.AlertManagerDefinitionStatusCode_CREATING), string(svcapitypes.AlertManagerDefinitionStatusCode_UPDATING), string(svcapitypes.AlertManagerDefinitionStatusCode_DELETING):
-		return true, nil
+		return true, "", nil
 	}
 
 	if cmp := bytes.Compare(cr.Spec.ForProvider.Data, resp.AlertManagerDefinition.Data); cmp != 0 {
-		return false, nil
+		return false, "", nil
 	}
-	return true, nil
+	return true, "", nil
 }
 
 type updateClient struct {
@@ -147,11 +159,7 @@ func GeneratePutAlertManagerDefinitionInput(cr *svcapitypes.AlertManagerDefiniti
 	return res
 }
 
-func (e *updateClient) update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.AlertManagerDefinition)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *updateClient) update(ctx context.Context, cr *svcapitypes.AlertManagerDefinition) (managed.ExternalUpdate, error) {
 	input := GeneratePutAlertManagerDefinitionInput(cr)
 	_, err := e.client.PutAlertManagerDefinitionWithContext(ctx, input)
 	if err != nil {

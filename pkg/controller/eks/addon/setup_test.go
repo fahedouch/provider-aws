@@ -20,20 +20,20 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golang/mock/gomock"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-
+	"github.com/aws/aws-sdk-go/aws"
 	awseks "github.com/aws/aws-sdk-go/service/eks"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/golang/mock/gomock"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
 	"github.com/crossplane-contrib/provider-aws/apis/eks/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	mockeksiface "github.com/crossplane-contrib/provider-aws/pkg/clients/eks/fake/eksiface"
+	mockeksiface "github.com/crossplane-contrib/provider-aws/pkg/clients/mock/eksiface"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
@@ -115,7 +115,7 @@ func TestObserve(t *testing.T) {
 						).
 						Return(&awseks.DescribeAddonOutput{
 							Addon: &awseks.Addon{
-								Status: awsclient.String(awseks.AddonStatusActive),
+								Status: pointer.ToOrNilIfZeroValue(awseks.AddonStatusActive),
 							},
 						}, nil)
 				}),
@@ -128,7 +128,7 @@ func TestObserve(t *testing.T) {
 					withExternalName(testExternalName),
 					withConditions(xpv1.Available()),
 					withStatus(v1alpha1.AddonObservation{
-						Status: awsclient.String(awseks.AddonStatusActive),
+						Status: pointer.ToOrNilIfZeroValue(awseks.AddonStatusActive),
 					}),
 				),
 				result: managed.ExternalObservation{
@@ -156,7 +156,7 @@ func TestObserve(t *testing.T) {
 				cr: addon(
 					withExternalName(testExternalName),
 				),
-				err: awsclient.Wrap(errBoom, errDescribe),
+				err: errorutils.Wrap(errBoom, errDescribe),
 			},
 		},
 		"LateInitSuccess": {
@@ -170,7 +170,7 @@ func TestObserve(t *testing.T) {
 						Return(&awseks.DescribeAddonOutput{
 							Addon: &awseks.Addon{
 								ServiceAccountRoleArn: &testServiceAccountRoleArn,
-								Status:                awsclient.String(awseks.AddonStatusActive),
+								Status:                pointer.ToOrNilIfZeroValue(awseks.AddonStatusActive),
 							},
 						}, nil)
 				}),
@@ -188,7 +188,7 @@ func TestObserve(t *testing.T) {
 						},
 					),
 					withStatus(v1alpha1.AddonObservation{
-						Status: awsclient.String(awseks.AddonStatusActive),
+						Status: pointer.ToOrNilIfZeroValue(awseks.AddonStatusActive),
 					}),
 				),
 				result: managed.ExternalObservation{
@@ -325,7 +325,7 @@ func TestCreate(t *testing.T) {
 					}),
 					withConditions(xpv1.Creating()),
 				),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -491,7 +491,7 @@ func TestUpdate(t *testing.T) {
 						},
 					}),
 				),
-				err: awsclient.Wrap(errBoom, errUpdate),
+				err: errorutils.Wrap(errBoom, errUpdate),
 			},
 		},
 		"FailedDescribeAddon": {
@@ -545,7 +545,7 @@ func TestUpdate(t *testing.T) {
 						},
 					}),
 				),
-				err: awsclient.Wrap(errBoom, errDescribe),
+				err: errorutils.Wrap(errBoom, errDescribe),
 			},
 		},
 		"FailedTagResource": {
@@ -627,7 +627,7 @@ func TestUpdate(t *testing.T) {
 						v1alpha1.AddonObservation{AddonARN: &testExternalName},
 					),
 				),
-				err: awsclient.Wrap(errBoom, errTagResource),
+				err: errorutils.Wrap(errBoom, errTagResource),
 			},
 		},
 		"UntagResource": {
@@ -717,7 +717,7 @@ func TestUpdate(t *testing.T) {
 						v1alpha1.AddonObservation{AddonARN: &testExternalName},
 					),
 				),
-				err: awsclient.Wrap(errBoom, errUntagResource),
+				err: errorutils.Wrap(errBoom, errUntagResource),
 			},
 		},
 	}
@@ -816,7 +816,7 @@ func TestDelete(t *testing.T) {
 					}),
 					withConditions(xpv1.Deleting()),
 				),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 	}
@@ -824,13 +824,234 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := newExternal(nil, tc.eks(t), []option{setupHooks})
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestIsUpToDateConfigurationValues(t *testing.T) {
+	type args struct {
+		cr  *v1alpha1.Addon
+		obj *awseks.DescribeAddonOutput
+	}
+	type want struct {
+		isUpToDate bool
+		isError    bool
+	}
+
+	cases := map[string]struct {
+		args
+		want
+	}{
+		"UpToDateForEmpty": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String(""),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("")}},
+			},
+			want: want{
+				isUpToDate: true,
+				isError:    false,
+			},
+		},
+		"UpToDateForJson": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("{\"controller\": {\"podAnnotations\": {\"fluentbit.io/exclude\": \"true\"}}}"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("{\"controller\": {\"podAnnotations\": {\"fluentbit.io/exclude\": \"true\"}}}")}},
+			},
+			want: want{
+				isUpToDate: true,
+				isError:    false,
+			},
+		},
+		"UpToDateForJsonWithIndentationAndWhitespace": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("{\"controller\": {\"podAnnotations\": {\"fluentbit.io/exclude\": \"true\"}}}"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("{\"controller\":     {\"podAnnotations\":\n{\"fluentbit.io/exclude\":   \"true\"   }}}\n")}},
+			},
+			want: want{
+				isUpToDate: true,
+				isError:    false,
+			},
+		},
+		"UpToDateForYaml": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("controller:\\r\\n  podAnnotations:\\r\\n    fluentbit.io/exclude: \\\"true\\"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("controller:\\r\\n  podAnnotations:\\r\\n    fluentbit.io/exclude: \\\"true\\")}},
+			},
+			want: want{
+				isUpToDate: true,
+				isError:    false,
+			},
+		},
+		"NotUpToDateForYamlToJson": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("controller:\\r\\n  podAnnotations:\\r\\n    fluentbit.io/exclude: \\\"true\\"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("{\"controller\": {\"podAnnotations\": {\"fluentbit.io/exclude\": \"true\"}}}")}},
+			},
+			want: want{
+				isUpToDate: false,
+				isError:    false,
+			},
+		},
+		"NotUpToDateForJsonToYaml": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("controller:\\r\\n  podAnnotations:\\r\\n    fluentbit.io/exclude: \\\"true\\"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("{\"controller\": {\"podAnnotations\": {\"fluentbit.io/exclude\": \"true\"}}}")}},
+			},
+			want: want{
+				isUpToDate: false,
+				isError:    false,
+			},
+		},
+		"NotUpToDateForEmptyCr": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("{}")}},
+			},
+			want: want{
+				isUpToDate: false,
+				isError:    false,
+			},
+		},
+		"NotUpToDateForEmptyObj": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("{}"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{}},
+			},
+			want: want{
+				isUpToDate: false,
+				isError:    false,
+			},
+		},
+		"NotUpToDateHandleInvalidJson": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("{InvalidJson {}!}"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("{}")}},
+			},
+			want: want{
+				isUpToDate: false,
+				isError:    true,
+			},
+		},
+		"NotUpToDateHandleCrGarbage": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("abcd1234"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("{}")}},
+			},
+			want: want{
+				isUpToDate: false,
+				isError:    true,
+			},
+		},
+		"NotUpToDateForDifferentJson": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("{\"controller\": {\"podAnnotations\": {\"fluentbit.io/exclude\": \"true\"}}}"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("{\"controller\": {\"podAnnotations\": {\"fluentbit.io/exclude\": \"false\"}}}")}},
+			},
+			want: want{
+				isUpToDate: false,
+				isError:    false,
+			},
+		},
+		"NotUpToDateForDifferentYaml": {
+			args: args{
+				cr: &v1alpha1.Addon{
+					Spec: v1alpha1.AddonSpec{
+						ForProvider: v1alpha1.AddonParameters{
+							ConfigurationValues: aws.String("controller:\\r\\n  podAnnotations:\\r\\n    fluentbit.io/exclude: \\\"true\\"),
+						},
+					},
+				},
+				obj: &awseks.DescribeAddonOutput{Addon: &awseks.Addon{ConfigurationValues: aws.String("controller:\\r\\n  podAnnotations:\\r\\n    fluentbit.io/exclude: \\\"false\\")}},
+			},
+			want: want{
+				isUpToDate: false,
+				isError:    false,
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			actualUpToDate, _, err := isUpToDateConfigurationValues(tc.args.cr, tc.args.obj)
+
+			// Assert
+			if diff := cmp.Diff(tc.want.isUpToDate, actualUpToDate); diff != "" {
+				t.Errorf("r: -want, +got:\n%s", diff)
+			}
+			// Assert
+			if diff := cmp.Diff(tc.want.isError, err != nil); diff != "" {
+				t.Errorf("isError: -want, +got:\n%s", diff)
 			}
 		})
 	}

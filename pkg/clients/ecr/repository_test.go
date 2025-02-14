@@ -5,17 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crossplane-contrib/provider-aws/apis/ecr/v1beta1"
-
-	"github.com/aws/smithy-go/document"
-
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	ecrtypes "github.com/aws/aws-sdk-go-v2/service/ecr/types"
+	"github.com/aws/smithy-go/document"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/apis/ecr/v1beta1"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
@@ -47,10 +45,10 @@ func TestGenerateRepositoryObservation(t *testing.T) {
 				CreatedAt:                  &createTime,
 				ImageScanningConfiguration: &awsImageScanConfig,
 				ImageTagMutability:         ecrtypes.ImageTagMutability(tagMutability),
-				RegistryId:                 aws.String(registryID),
-				RepositoryName:             aws.String(repositoryName),
-				RepositoryArn:              aws.String(repositoryARN),
-				RepositoryUri:              aws.String(repositoryURI),
+				RegistryId:                 pointer.ToOrNilIfZeroValue(registryID),
+				RepositoryName:             pointer.ToOrNilIfZeroValue(repositoryName),
+				RepositoryArn:              pointer.ToOrNilIfZeroValue(repositoryARN),
+				RepositoryUri:              pointer.ToOrNilIfZeroValue(repositoryURI),
 			},
 			out: v1beta1.RepositoryObservation{
 				CreatedAt:      &metav1.Time{Time: createTime},
@@ -239,7 +237,7 @@ func TestDiffTags(t *testing.T) {
 			},
 			want: want{
 				add: []ecrtypes.Tag{
-					{Key: aws.String("key"), Value: aws.String("val")},
+					{Key: pointer.ToOrNilIfZeroValue("key"), Value: pointer.ToOrNilIfZeroValue("val")},
 				},
 			},
 		},
@@ -251,13 +249,13 @@ func TestDiffTags(t *testing.T) {
 					{Key: "key2", Value: "val2"},
 				},
 				remote: []ecrtypes.Tag{
-					{Key: aws.String("key"), Value: aws.String("val")},
+					{Key: pointer.ToOrNilIfZeroValue("key"), Value: pointer.ToOrNilIfZeroValue("val")},
 				},
 			},
 			want: want{
 				add: []ecrtypes.Tag{
-					{Key: aws.String("key1"), Value: aws.String("val1")},
-					{Key: aws.String("key2"), Value: aws.String("val2")},
+					{Key: pointer.ToOrNilIfZeroValue("key1"), Value: pointer.ToOrNilIfZeroValue("val1")},
+					{Key: pointer.ToOrNilIfZeroValue("key2"), Value: pointer.ToOrNilIfZeroValue("val2")},
 				},
 			},
 		},
@@ -269,14 +267,14 @@ func TestDiffTags(t *testing.T) {
 					{Key: "key2", Value: "val2"},
 				},
 				remote: []ecrtypes.Tag{
-					{Key: aws.String("key"), Value: aws.String("val")},
-					{Key: aws.String("key1"), Value: aws.String("val1")},
-					{Key: aws.String("key2"), Value: aws.String("val2")},
+					{Key: pointer.ToOrNilIfZeroValue("key"), Value: pointer.ToOrNilIfZeroValue("val")},
+					{Key: pointer.ToOrNilIfZeroValue("key1"), Value: pointer.ToOrNilIfZeroValue("val1")},
+					{Key: pointer.ToOrNilIfZeroValue("key2"), Value: pointer.ToOrNilIfZeroValue("val2")},
 				},
 			},
 			want: want{
 				add: []ecrtypes.Tag{
-					{Key: aws.String("key"), Value: aws.String("different")},
+					{Key: pointer.ToOrNilIfZeroValue("key"), Value: pointer.ToOrNilIfZeroValue("different")},
 				},
 				remove: []string{"key"},
 			},
@@ -284,9 +282,9 @@ func TestDiffTags(t *testing.T) {
 		"RemoveAll": {
 			args: args{
 				remote: []ecrtypes.Tag{
-					{Key: aws.String("key"), Value: aws.String("val")},
-					{Key: aws.String("key1"), Value: aws.String("val1")},
-					{Key: aws.String("key2"), Value: aws.String("val2")},
+					{Key: pointer.ToOrNilIfZeroValue("key"), Value: pointer.ToOrNilIfZeroValue("val")},
+					{Key: pointer.ToOrNilIfZeroValue("key1"), Value: pointer.ToOrNilIfZeroValue("val1")},
+					{Key: pointer.ToOrNilIfZeroValue("key2"), Value: pointer.ToOrNilIfZeroValue("val2")},
 				},
 			},
 			want: want{
@@ -298,7 +296,7 @@ func TestDiffTags(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			tagCmp := cmpopts.SortSlices(func(i, j ecrtypes.Tag) bool {
-				return aws.StringValue(i.Key) < aws.StringValue(j.Key)
+				return pointer.StringValue(i.Key) < pointer.StringValue(j.Key)
 			})
 			add, remove := DiffTags(tc.args.local, tc.args.remote)
 			if diff := cmp.Diff(tc.want.add, add, tagCmp, cmpopts.IgnoreTypes(document.NoSerde{})); diff != "" {

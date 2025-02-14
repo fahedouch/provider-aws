@@ -22,11 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awseks "github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/eks/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -34,12 +29,19 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/eks/manualv1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/eks"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
+	tagutils "github.com/crossplane-contrib/provider-aws/pkg/utils/tags"
 )
 
 const (
@@ -61,19 +63,31 @@ func SetupIdentityProviderConfig(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newEKSClientFn: eks.NewEKSClient}),
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(manualv1alpha1.IdentityProviderConfigGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&manualv1alpha1.IdentityProviderConfig{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(manualv1alpha1.IdentityProviderConfigGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newEKSClientFn: eks.NewEKSClient}),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient()), managed.NewNameAsExternalName(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -86,7 +100,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errNotEKSIdentityProviderConfig)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +135,7 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 			cr.Status.AtProvider.Status = ""
 			return managed.ExternalObservation{}, nil
 		}
-		return managed.ExternalObservation{}, awsclient.Wrap(err, errDescribeFailed)
+		return managed.ExternalObservation{}, errorutils.Wrap(err, errDescribeFailed)
 	}
 
 	current := cr.Spec.ForProvider.DeepCopy()
@@ -132,7 +146,7 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// Any of the statuses we don't explicitly address should be considered as
 	// the identity provider config being unavailable.
-	switch cr.Status.AtProvider.Status { // nolint:exhaustive
+	switch cr.Status.AtProvider.Status { //nolint:exhaustive
 	case manualv1alpha1.IdentityProviderConfigStatusActive:
 		cr.Status.SetConditions(xpv1.Available())
 	case manualv1alpha1.IdentityProviderConfigStatusCreating:
@@ -160,7 +174,7 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalCreation{}, nil
 	}
 	_, err := e.client.AssociateIdentityProviderConfig(ctx, eks.GenerateAssociateIdentityProviderConfigInput(meta.GetExternalName(cr), &cr.Spec.ForProvider))
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errCreateFailed)
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errCreateFailed)
 }
 
 func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
@@ -180,49 +194,36 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		ClusterName: &cr.Spec.ForProvider.ClusterName})
 
 	if err != nil || rsp.IdentityProviderConfig == nil || rsp.IdentityProviderConfig.Oidc == nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(err, errDescribeFailed)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errDescribeFailed)
 	}
-	add, remove := awsclient.DiffTags(cr.Spec.ForProvider.Tags, rsp.IdentityProviderConfig.Oidc.Tags)
+	add, remove := tagutils.DiffTags(cr.Spec.ForProvider.Tags, rsp.IdentityProviderConfig.Oidc.Tags)
 	if len(remove) != 0 {
 		if _, err := e.client.UntagResource(ctx, &awseks.UntagResourceInput{ResourceArn: rsp.IdentityProviderConfig.Oidc.IdentityProviderConfigArn, TagKeys: remove}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(eks.IsErrorInUse, err), errAddTagsFailed)
+			return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(eks.IsErrorInUse, err), errAddTagsFailed)
 		}
 	}
 	if len(add) != 0 {
 		if _, err := e.client.TagResource(ctx, &awseks.TagResourceInput{ResourceArn: rsp.IdentityProviderConfig.Oidc.IdentityProviderConfigArn, Tags: add}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(eks.IsErrorInUse, err), errAddTagsFailed)
+			return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(eks.IsErrorInUse, err), errAddTagsFailed)
 		}
 	}
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*manualv1alpha1.IdentityProviderConfig)
 	if !ok {
-		return errors.New(errNotEKSIdentityProviderConfig)
+		return managed.ExternalDelete{}, errors.New(errNotEKSIdentityProviderConfig)
 	}
 	cr.SetConditions(xpv1.Deleting())
 	if cr.Status.AtProvider.Status == manualv1alpha1.IdentityProviderConfigStatusDeleting {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	_, err := e.client.DisassociateIdentityProviderConfig(ctx, eks.GenerateDisassociateIdentityProviderConfigInput(meta.GetExternalName(cr), cr.Spec.ForProvider.ClusterName))
-	return awsclient.Wrap(resource.Ignore(eks.IsErrorNotFound, err), errDeleteFailed)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(eks.IsErrorNotFound, err), errDeleteFailed)
 }
 
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*manualv1alpha1.IdentityProviderConfig)
-	if !ok {
-		return errors.New(errNotEKSIdentityProviderConfig)
-	}
-	if cr.Spec.ForProvider.Tags == nil {
-		cr.Spec.ForProvider.Tags = map[string]string{}
-	}
-	for k, v := range resource.GetExternalTags(mg) {
-		cr.Spec.ForProvider.Tags[k] = v
-	}
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

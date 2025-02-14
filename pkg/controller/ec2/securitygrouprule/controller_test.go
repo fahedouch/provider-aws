@@ -6,20 +6,17 @@ import (
 	"testing"
 
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
-
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
-
-	"github.com/crossplane-contrib/provider-aws/apis/ec2/manualv1alpha1"
-	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
-	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2/fake"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/crossplane-contrib/provider-aws/apis/ec2/manualv1alpha1"
+	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
+	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2/fake"
 )
 
 var (
@@ -29,6 +26,7 @@ var (
 	sgrIDEgress                 = "some sgr egress ID"
 	cidrIpv4Block               = "172.1.0.0/16"
 	cidrIpv6Block               = "2001:0DB8:7654:0010:FEDC:0000:0000:3210/128"
+	prefixListID                = "some prefix ID"
 	fromPort              int32 = 10
 	wrongFromPort         int32 = 0
 	toPort                int32 = 20
@@ -75,7 +73,7 @@ func withConditions(c ...xpv1.Condition) sgrModifier {
 var _ managed.ExternalClient = &external{}
 var _ managed.ExternalConnecter = &connector{}
 
-func TestObserce(t *testing.T) {
+func TestObserve(t *testing.T) {
 	type want struct {
 		cr     *manualv1alpha1.SecurityGroupRule
 		result managed.ExternalObservation
@@ -323,11 +321,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -359,11 +357,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -420,11 +418,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -456,11 +454,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -510,6 +508,117 @@ func TestCreate(t *testing.T) {
 				err:    nil,
 			},
 		},
+		"CreateIngressPrefixListId": {
+			// Create an ingress sgr with a prefix list id
+			args: args{
+				sgr: &fake.MockSecurityGroupRuleClient{
+					MockAuthorizeIngress: func(ctx context.Context, input *awsec2.AuthorizeSecurityGroupIngressInput, opts []func(*awsec2.Options)) (*awsec2.AuthorizeSecurityGroupIngressOutput, error) {
+						var cidrIpv6 *string = nil
+						var cidrIpv4 *string = nil
+						var prefixListID *string = nil
+						var description *string = nil
+						var refSg *types.ReferencedSecurityGroup = nil
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
+							description = input.IpPermissions[0].Ipv6Ranges[0].Description
+						}
+						if len(input.IpPermissions[0].IpRanges) > 0 {
+							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
+							description = input.IpPermissions[0].IpRanges[0].Description
+						}
+						if len(input.IpPermissions[0].PrefixListIds) > 0 {
+							prefixListID = input.IpPermissions[0].PrefixListIds[0].PrefixListId
+							description = input.IpPermissions[0].PrefixListIds[0].Description
+						}
+						if len(input.IpPermissions[0].UserIdGroupPairs) > 0 {
+							refSg = &types.ReferencedSecurityGroup{
+								GroupId: input.IpPermissions[0].UserIdGroupPairs[0].GroupId,
+							}
+							description = input.IpPermissions[0].UserIdGroupPairs[0].Description
+						}
+						return &awsec2.AuthorizeSecurityGroupIngressOutput{
+							Return: &trueValue,
+							SecurityGroupRules: []types.SecurityGroupRule{
+								{
+									CidrIpv4:            cidrIpv4,
+									CidrIpv6:            cidrIpv6,
+									PrefixListId:        prefixListID,
+									Description:         description,
+									GroupId:             input.GroupId,
+									SecurityGroupRuleId: &sgrIDIngress,
+									ReferencedGroupInfo: refSg,
+									FromPort:            input.IpPermissions[0].FromPort,
+									ToPort:              input.IpPermissions[0].ToPort,
+									IsEgress:            &falseValue,
+								},
+							},
+						}, nil
+					},
+					MockAuthorizeEgress: func(ctx context.Context, input *awsec2.AuthorizeSecurityGroupEgressInput, opts []func(*awsec2.Options)) (*awsec2.AuthorizeSecurityGroupEgressOutput, error) {
+						var cidrIpv6 *string = nil
+						var cidrIpv4 *string = nil
+						var prefixListID *string = nil
+						var description *string = nil
+						var refSg *types.ReferencedSecurityGroup = nil
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
+							description = input.IpPermissions[0].Ipv6Ranges[0].Description
+						}
+						if len(input.IpPermissions[0].IpRanges) > 0 {
+							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
+							description = input.IpPermissions[0].IpRanges[0].Description
+						}
+						if len(input.IpPermissions[0].PrefixListIds) > 0 {
+							prefixListID = input.IpPermissions[0].PrefixListIds[0].PrefixListId
+							description = input.IpPermissions[0].PrefixListIds[0].Description
+						}
+						if len(input.IpPermissions[0].UserIdGroupPairs) > 0 {
+							refSg = &types.ReferencedSecurityGroup{
+								GroupId: input.IpPermissions[0].UserIdGroupPairs[0].GroupId,
+							}
+							description = input.IpPermissions[0].UserIdGroupPairs[0].Description
+						}
+						return &awsec2.AuthorizeSecurityGroupEgressOutput{
+							Return: &trueValue,
+							SecurityGroupRules: []types.SecurityGroupRule{
+								{
+									CidrIpv4:            cidrIpv4,
+									CidrIpv6:            cidrIpv6,
+									PrefixListId:        prefixListID,
+									Description:         description,
+									GroupId:             input.GroupId,
+									SecurityGroupRuleId: &sgrIDEgress,
+									ReferencedGroupInfo: refSg,
+									FromPort:            input.IpPermissions[0].FromPort,
+									ToPort:              input.IpPermissions[0].ToPort,
+									IsEgress:            &trueValue,
+								},
+							},
+						}, nil
+					},
+				},
+				cr: securityGroupRule(withSpec(manualv1alpha1.SecurityGroupRuleParameters{
+					PrefixListID:    &prefixListID,
+					FromPort:        &fromPort,
+					ToPort:          &toPort,
+					Type:            &ingressTypeTest,
+					SecurityGroupID: &sgID,
+					Description:     &description,
+				})),
+			},
+			want: want{
+				cr: securityGroupRule(withSpec(manualv1alpha1.SecurityGroupRuleParameters{
+					SecurityGroupID: &sgID,
+					FromPort:        &fromPort,
+					ToPort:          &toPort,
+					Type:            &ingressTypeTest,
+					PrefixListID:    &prefixListID,
+					Description:     &description,
+				}), withExternalName(sgrIDIngress)),
+				result: managed.ExternalCreation{},
+				err:    nil,
+			},
+		},
 		"CreateIngressRefSG": {
 			// Create a ingress sgr with a reference security group
 			args: args{
@@ -519,11 +628,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -555,11 +664,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -618,11 +727,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -654,11 +763,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -715,11 +824,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -751,11 +860,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -805,6 +914,117 @@ func TestCreate(t *testing.T) {
 				err:    nil,
 			},
 		},
+		"CreateEgressPrefixListId": {
+			// Create an egress sgr with a prefix list id
+			args: args{
+				sgr: &fake.MockSecurityGroupRuleClient{
+					MockAuthorizeIngress: func(ctx context.Context, input *awsec2.AuthorizeSecurityGroupIngressInput, opts []func(*awsec2.Options)) (*awsec2.AuthorizeSecurityGroupIngressOutput, error) {
+						var cidrIpv6 *string = nil
+						var cidrIpv4 *string = nil
+						var prefixListID *string = nil
+						var description *string = nil
+						var refSg *types.ReferencedSecurityGroup = nil
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
+							description = input.IpPermissions[0].Ipv6Ranges[0].Description
+						}
+						if len(input.IpPermissions[0].IpRanges) > 0 {
+							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
+							description = input.IpPermissions[0].IpRanges[0].Description
+						}
+						if len(input.IpPermissions[0].PrefixListIds) > 0 {
+							prefixListID = input.IpPermissions[0].PrefixListIds[0].PrefixListId
+							description = input.IpPermissions[0].PrefixListIds[0].Description
+						}
+						if len(input.IpPermissions[0].UserIdGroupPairs) > 0 {
+							refSg = &types.ReferencedSecurityGroup{
+								GroupId: input.IpPermissions[0].UserIdGroupPairs[0].GroupId,
+							}
+							description = input.IpPermissions[0].UserIdGroupPairs[0].Description
+						}
+						return &awsec2.AuthorizeSecurityGroupIngressOutput{
+							Return: &trueValue,
+							SecurityGroupRules: []types.SecurityGroupRule{
+								{
+									CidrIpv4:            cidrIpv4,
+									CidrIpv6:            cidrIpv6,
+									PrefixListId:        prefixListID,
+									Description:         description,
+									GroupId:             input.GroupId,
+									SecurityGroupRuleId: &sgrIDIngress,
+									ReferencedGroupInfo: refSg,
+									FromPort:            input.IpPermissions[0].FromPort,
+									ToPort:              input.IpPermissions[0].ToPort,
+									IsEgress:            &falseValue,
+								},
+							},
+						}, nil
+					},
+					MockAuthorizeEgress: func(ctx context.Context, input *awsec2.AuthorizeSecurityGroupEgressInput, opts []func(*awsec2.Options)) (*awsec2.AuthorizeSecurityGroupEgressOutput, error) {
+						var cidrIpv6 *string = nil
+						var cidrIpv4 *string = nil
+						var prefixListID *string = nil
+						var description *string = nil
+						var refSg *types.ReferencedSecurityGroup = nil
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
+							description = input.IpPermissions[0].Ipv6Ranges[0].Description
+						}
+						if len(input.IpPermissions[0].IpRanges) > 0 {
+							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
+							description = input.IpPermissions[0].IpRanges[0].Description
+						}
+						if len(input.IpPermissions[0].PrefixListIds) > 0 {
+							prefixListID = input.IpPermissions[0].PrefixListIds[0].PrefixListId
+							description = input.IpPermissions[0].PrefixListIds[0].Description
+						}
+						if len(input.IpPermissions[0].UserIdGroupPairs) > 0 {
+							refSg = &types.ReferencedSecurityGroup{
+								GroupId: input.IpPermissions[0].UserIdGroupPairs[0].GroupId,
+							}
+							description = input.IpPermissions[0].UserIdGroupPairs[0].Description
+						}
+						return &awsec2.AuthorizeSecurityGroupEgressOutput{
+							Return: &trueValue,
+							SecurityGroupRules: []types.SecurityGroupRule{
+								{
+									CidrIpv4:            cidrIpv4,
+									CidrIpv6:            cidrIpv6,
+									PrefixListId:        prefixListID,
+									Description:         description,
+									GroupId:             input.GroupId,
+									SecurityGroupRuleId: &sgrIDEgress,
+									ReferencedGroupInfo: refSg,
+									FromPort:            input.IpPermissions[0].FromPort,
+									ToPort:              input.IpPermissions[0].ToPort,
+									IsEgress:            &trueValue,
+								},
+							},
+						}, nil
+					},
+				},
+				cr: securityGroupRule(withSpec(manualv1alpha1.SecurityGroupRuleParameters{
+					PrefixListID:    &prefixListID,
+					FromPort:        &fromPort,
+					ToPort:          &toPort,
+					Type:            &egressTypeTest,
+					SecurityGroupID: &sgID,
+					Description:     &description,
+				})),
+			},
+			want: want{
+				cr: securityGroupRule(withSpec(manualv1alpha1.SecurityGroupRuleParameters{
+					SecurityGroupID: &sgID,
+					FromPort:        &fromPort,
+					ToPort:          &toPort,
+					Type:            &egressTypeTest,
+					PrefixListID:    &prefixListID,
+					Description:     &description,
+				}), withExternalName(sgrIDEgress)),
+				result: managed.ExternalCreation{},
+				err:    nil,
+			},
+		},
 		"CreateEgressRefSG": {
 			// Create a egress sgr with a reference security group
 			args: args{
@@ -814,11 +1034,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -850,11 +1070,11 @@ func TestCreate(t *testing.T) {
 						var cidrIpv4 *string = nil
 						var description *string = nil
 						var refSg *types.ReferencedSecurityGroup = nil
-						if input.IpPermissions[0].Ipv6Ranges != nil && len(input.IpPermissions[0].Ipv6Ranges) > 0 {
+						if len(input.IpPermissions[0].Ipv6Ranges) > 0 {
 							cidrIpv6 = input.IpPermissions[0].Ipv6Ranges[0].CidrIpv6
 							description = input.IpPermissions[0].Ipv6Ranges[0].Description
 						}
-						if input.IpPermissions[0].IpRanges != nil && len(input.IpPermissions[0].IpRanges) > 0 {
+						if len(input.IpPermissions[0].IpRanges) > 0 {
 							cidrIpv4 = input.IpPermissions[0].IpRanges[0].CidrIp
 							description = input.IpPermissions[0].IpRanges[0].Description
 						}
@@ -1007,7 +1227,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{kube: tc.args.kube, client: tc.sgr}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

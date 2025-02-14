@@ -4,9 +4,8 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/ec2"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -14,11 +13,13 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ec2/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupLaunchTemplateVersion adds a controller that reconciles LaunchTemplateVersion.
@@ -39,18 +40,30 @@ func SetupLaunchTemplateVersion(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		cpresource.ManagedKind(svcapitypes.LaunchTemplateVersionGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(cpresource.DesiredStateChanged()).
 		For(&svcapitypes.LaunchTemplateVersion{}).
-		Complete(managed.NewReconciler(mgr,
-			cpresource.ManagedKind(svcapitypes.LaunchTemplateVersionGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithInitializers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.LaunchTemplateVersion, obj *svcsdk.CreateLaunchTemplateVersionInput) error {
@@ -82,14 +95,13 @@ func postObserve(_ context.Context, cr *svcapitypes.LaunchTemplateVersion, obj *
 	return obs, nil
 }
 
-func (e *external) deleter(ctx context.Context, mg cpresource.Managed) error {
-	cr, _ := mg.(*svcapitypes.LaunchTemplateVersion)
+func (e *external) deleter(ctx context.Context, cr *svcapitypes.LaunchTemplateVersion) (managed.ExternalDelete, error) {
 	input := GenerateDeleteLaunchTemplateVersionInput(cr)
 	_, err := e.client.DeleteLaunchTemplateVersionsWithContext(ctx, input)
 	if err != nil {
-		return err
+		return managed.ExternalDelete{}, err
 	}
-	return nil
+	return managed.ExternalDelete{}, nil
 }
 
 // GenerateDeleteLaunchTemplateVersionInput returns a deletion input.
@@ -97,10 +109,10 @@ func GenerateDeleteLaunchTemplateVersionInput(cr *svcapitypes.LaunchTemplateVers
 	res := &svcsdk.DeleteLaunchTemplateVersionsInput{}
 	res.SetDryRun(false)
 	if cr.Spec.ForProvider.LaunchTemplateName != nil {
-		res.SetLaunchTemplateName(aws.StringValue(cr.Spec.ForProvider.LaunchTemplateName))
+		res.SetLaunchTemplateName(pointer.StringValue(cr.Spec.ForProvider.LaunchTemplateName))
 	}
 	if cr.Spec.ForProvider.LaunchTemplateID != nil {
-		res.SetLaunchTemplateId(aws.StringValue(cr.Spec.ForProvider.LaunchTemplateID))
+		res.SetLaunchTemplateId(pointer.StringValue(cr.Spec.ForProvider.LaunchTemplateID))
 	}
 	if meta.GetExternalName(cr) != "" {
 		res.SetVersions(append(res.Versions, aws.String(meta.GetExternalName(cr))))

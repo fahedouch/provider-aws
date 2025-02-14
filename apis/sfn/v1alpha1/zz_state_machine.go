@@ -37,7 +37,7 @@ type StateMachineParameters struct {
 	//
 	// By default, the level is set to OFF. For more information see Log Levels
 	// (https://docs.aws.amazon.com/step-functions/latest/dg/cloudwatch-log-level.html)
-	// in the AWS Step Functions User Guide.
+	// in the Step Functions User Guide.
 	LoggingConfiguration *LoggingConfiguration `json:"loggingConfiguration,omitempty"`
 	// The name of the state machine.
 	//
@@ -57,18 +57,25 @@ type StateMachineParameters struct {
 	// A-Z, a-z, - and _.
 	// +kubebuilder:validation:Required
 	Name *string `json:"name"`
+	// Set to true to publish the first version of the state machine during creation.
+	// The default is false.
+	Publish *bool `json:"publish,omitempty"`
 	// Tags to be added when creating a state machine.
 	//
 	// An array of key-value pairs. For more information, see Using Cost Allocation
 	// Tags (https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/cost-alloc-tags.html)
-	// in the AWS Billing and Cost Management User Guide, and Controlling Access
-	// Using IAM Tags (https://docs.aws.amazon.com/IAM/latest/UserGuide/access_iam-tags.html).
+	// in the Amazon Web Services Billing and Cost Management User Guide, and Controlling
+	// Access Using IAM Tags (https://docs.aws.amazon.com/IAM/latest/UserGuide/access_iam-tags.html).
 	//
 	// Tags may only contain Unicode letters, digits, white space, or these symbols:
 	// _ . : / = + - @.
 	Tags []*Tag `json:"tags,omitempty"`
-	// Selects whether AWS X-Ray tracing is enabled.
-	TracingConfiguration         *TracingConfiguration `json:"tracingConfiguration,omitempty"`
+	// Selects whether X-Ray tracing is enabled.
+	TracingConfiguration *TracingConfiguration `json:"tracingConfiguration,omitempty"`
+	// Sets description about the state machine version. You can only set the description
+	// if the publish parameter is set to true. Otherwise, if you set versionDescription,
+	// but publish to false, this API action throws ValidationException.
+	VersionDescription           *string `json:"versionDescription,omitempty"`
 	CustomStateMachineParameters `json:",inline"`
 }
 
@@ -84,6 +91,12 @@ type StateMachineObservation struct {
 	CreationDate *metav1.Time `json:"creationDate,omitempty"`
 	// The Amazon Resource Name (ARN) that identifies the created state machine.
 	StateMachineARN *string `json:"stateMachineARN,omitempty"`
+	// The Amazon Resource Name (ARN) that identifies the created state machine
+	// version. If you do not set the publish parameter to true, this field returns
+	// null value.
+	StateMachineVersionARN *string `json:"stateMachineVersionARN,omitempty"`
+
+	CustomStateMachineObservation `json:",inline"`
 }
 
 // StateMachineStatus defines the observed state of StateMachine.
@@ -98,6 +111,7 @@ type StateMachineStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

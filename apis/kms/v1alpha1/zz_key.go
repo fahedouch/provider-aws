@@ -29,56 +29,52 @@ type KeyParameters struct {
 	// Region is which region the Key will be created.
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
-	// A flag to indicate whether to bypass the key policy lockout safety check.
+	// Skips ("bypasses") the key policy lockout safety check. The default value
+	// is false.
 	//
 	// Setting this value to true increases the risk that the KMS key becomes unmanageable.
 	// Do not set this value to true indiscriminately.
 	//
-	// For more information, refer to the scenario in the Default Key Policy (https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html#key-policy-default-allow-root-enable-iam)
-	// section in the Key Management Service Developer Guide .
+	// For more information, see Default key policy (https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html#prevent-unmanageable-key)
+	// in the Key Management Service Developer Guide.
 	//
-	// Use this parameter only when you include a policy in the request and you
-	// intend to prevent the principal that is making the request from making a
-	// subsequent PutKeyPolicy request on the KMS key.
-	//
-	// The default value is false.
+	// Use this parameter only when you intend to prevent the principal that is
+	// making the request from making a subsequent PutKeyPolicy request on the KMS
+	// key.
 	BypassPolicyLockoutSafetyCheck *bool `json:"bypassPolicyLockoutSafetyCheck,omitempty"`
-	// Creates the KMS key in the specified custom key store (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html)
-	// and the key material in its associated CloudHSM cluster. To create a KMS
-	// key in a custom key store, you must also specify the Origin parameter with
-	// a value of AWS_CLOUDHSM. The CloudHSM cluster that is associated with the
-	// custom key store must have at least two active HSMs, each in a different
-	// Availability Zone in the Region.
+	// Creates the KMS key in the specified custom key store (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html).
+	// The ConnectionState of the custom key store must be CONNECTED. To find the
+	// CustomKeyStoreID and ConnectionState use the DescribeCustomKeyStores operation.
 	//
 	// This parameter is valid only for symmetric encryption KMS keys in a single
 	// Region. You cannot create any other type of KMS key in a custom key store.
 	//
-	// To find the ID of a custom key store, use the DescribeCustomKeyStores operation.
-	//
-	// The response includes the custom key store ID and the ID of the CloudHSM
-	// cluster.
-	//
-	// This operation is part of the Custom Key Store feature (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html)
-	// feature in KMS, which combines the convenience and extensive integration
-	// of KMS with the isolation and control of a single-tenant key store.
+	// When you create a KMS key in an CloudHSM key store, KMS generates a non-exportable
+	// 256-bit symmetric key in its associated CloudHSM cluster and associates it
+	// with the KMS key. When you create a KMS key in an external key store, you
+	// must use the XksKeyId parameter to specify an external key that serves as
+	// key material for the KMS key.
 	CustomKeyStoreID *string `json:"customKeyStoreID,omitempty"`
 	// Instead, use the KeySpec parameter.
 	//
 	// The KeySpec and CustomerMasterKeySpec parameters work the same way. Only
 	// the names differ. We recommend that you use KeySpec parameter in your code.
-	// However, to avoid breaking changes, KMS will support both parameters.
+	// However, to avoid breaking changes, KMS supports both parameters.
 	CustomerMasterKeySpec *string `json:"customerMasterKeySpec,omitempty"`
-	// A description of the KMS key.
+	// A description of the KMS key. Use a description that helps you decide whether
+	// the KMS key is appropriate for a task. The default value is an empty string
+	// (no description).
 	//
-	// Use a description that helps you decide whether the KMS key is appropriate
-	// for a task. The default value is an empty string (no description).
+	// Do not include confidential or sensitive information in this field. This
+	// field may be displayed in plaintext in CloudTrail logs and other output.
 	//
 	// To set or change the description after the key is created, use UpdateKeyDescription.
 	Description *string `json:"description,omitempty"`
 	// Specifies the type of KMS key to create. The default value, SYMMETRIC_DEFAULT,
-	// creates a KMS key with a 256-bit symmetric key for encryption and decryption.
-	// For help choosing a key spec for your KMS key, see Choosing a KMS key type
-	// (https://docs.aws.amazon.com/kms/latest/developerguide/key-types.html#symm-asymm-choose)
+	// creates a KMS key with a 256-bit AES-GCM key that is used for encryption
+	// and decryption, except in China Regions, where it creates a 128-bit symmetric
+	// key that uses SM4 encryption. For help choosing a key spec for your KMS key,
+	// see Choosing a KMS key type (https://docs.aws.amazon.com/kms/latest/developerguide/key-types.html#symm-asymm-choose)
 	// in the Key Management Service Developer Guide .
 	//
 	// The KeySpec determines whether the KMS key contains a symmetric key or an
@@ -97,7 +93,7 @@ type KeyParameters struct {
 	//
 	// KMS supports the following key specs for KMS keys:
 	//
-	//    * Symmetric encryption key (default) SYMMETRIC_DEFAULT (AES-256-GCM)
+	//    * Symmetric encryption key (default) SYMMETRIC_DEFAULT
 	//
 	//    * HMAC keys (symmetric) HMAC_224 HMAC_256 HMAC_384 HMAC_512
 	//
@@ -108,6 +104,8 @@ type KeyParameters struct {
 	//
 	//    * Other asymmetric elliptic curve key pairs ECC_SECG_P256K1 (secp256k1),
 	//    commonly used for cryptocurrencies.
+	//
+	//    * SM2 key pairs (China Regions only) SM2
 	KeySpec *string `json:"keySpec,omitempty"`
 	// Determines the cryptographic operations (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#cryptographic-operations)
 	// for which you can use the KMS key. The default value is ENCRYPT_DECRYPT.
@@ -125,6 +123,9 @@ type KeyParameters struct {
 	//    or SIGN_VERIFY.
 	//
 	//    * For asymmetric KMS keys with ECC key material, specify SIGN_VERIFY.
+	//
+	//    * For asymmetric KMS keys with SM2 key material (China Regions only),
+	//    specify ENCRYPT_DECRYPT or SIGN_VERIFY.
 	KeyUsage *string `json:"keyUsage,omitempty"`
 	// Creates a multi-Region primary key that you can replicate into other Amazon
 	// Web Services Regions. You cannot change this value after you create the KMS
@@ -153,40 +154,43 @@ type KeyParameters struct {
 	// after you create the KMS key. The default is AWS_KMS, which means that KMS
 	// creates the key material.
 	//
-	// To create a KMS key with no key material (for imported key material), set
-	// the value to EXTERNAL. For more information about importing key material
-	// into KMS, see Importing Key Material (https://docs.aws.amazon.com/kms/latest/developerguide/importing-keys.html)
-	// in the Key Management Service Developer Guide. This value is valid only for
-	// symmetric encryption KMS keys.
+	// To create a KMS key with no key material (https://docs.aws.amazon.com/kms/latest/developerguide/importing-keys-create-cmk.html)
+	// (for imported key material), set this value to EXTERNAL. For more information
+	// about importing key material into KMS, see Importing Key Material (https://docs.aws.amazon.com/kms/latest/developerguide/importing-keys.html)
+	// in the Key Management Service Developer Guide. The EXTERNAL origin value
+	// is valid only for symmetric KMS keys.
 	//
-	// To create a KMS key in an KMS custom key store (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html)
+	// To create a KMS key in an CloudHSM key store (https://docs.aws.amazon.com/kms/latest/developerguide/create-cmk-keystore.html)
 	// and create its key material in the associated CloudHSM cluster, set this
 	// value to AWS_CLOUDHSM. You must also use the CustomKeyStoreId parameter to
-	// identify the custom key store. This value is valid only for symmetric encryption
-	// KMS keys.
+	// identify the CloudHSM key store. The KeySpec value must be SYMMETRIC_DEFAULT.
+	//
+	// To create a KMS key in an external key store (https://docs.aws.amazon.com/kms/latest/developerguide/create-xks-keys.html),
+	// set this value to EXTERNAL_KEY_STORE. You must also use the CustomKeyStoreId
+	// parameter to identify the external key store and the XksKeyId parameter to
+	// identify the associated external key. The KeySpec value must be SYMMETRIC_DEFAULT.
 	Origin *string `json:"origin,omitempty"`
 	// The key policy to attach to the KMS key.
 	//
 	// If you provide a key policy, it must meet the following criteria:
 	//
-	//    * If you don't set BypassPolicyLockoutSafetyCheck to true, the key policy
-	//    must allow the principal that is making the CreateKey request to make
-	//    a subsequent PutKeyPolicy request on the KMS key. This reduces the risk
-	//    that the KMS key becomes unmanageable. For more information, refer to
-	//    the scenario in the Default Key Policy (https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html#key-policy-default-allow-root-enable-iam)
-	//    section of the Key Management Service Developer Guide .
+	//    * The key policy must allow the calling principal to make a subsequent
+	//    PutKeyPolicy request on the KMS key. This reduces the risk that the KMS
+	//    key becomes unmanageable. For more information, see Default key policy
+	//    (https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-default.html#prevent-unmanageable-key)
+	//    in the Key Management Service Developer Guide. (To omit this condition,
+	//    set BypassPolicyLockoutSafetyCheck to true.)
 	//
 	//    * Each statement in the key policy must contain one or more principals.
 	//    The principals in the key policy must exist and be visible to KMS. When
-	//    you create a new Amazon Web Services principal (for example, an IAM user
-	//    or role), you might need to enforce a delay before including the new principal
-	//    in a key policy because the new principal might not be immediately visible
-	//    to KMS. For more information, see Changes that I make are not always immediately
-	//    visible (https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_general.html#troubleshoot_general_eventual-consistency)
+	//    you create a new Amazon Web Services principal, you might need to enforce
+	//    a delay before including the new principal in a key policy because the
+	//    new principal might not be immediately visible to KMS. For more information,
+	//    see Changes that I make are not always immediately visible (https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_general.html#troubleshoot_general_eventual-consistency)
 	//    in the Amazon Web Services Identity and Access Management User Guide.
 	//
 	// If you do not provide a key policy, KMS attaches a default key policy to
-	// the KMS key. For more information, see Default Key Policy (https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html#key-policy-default)
+	// the KMS key. For more information, see Default key policy (https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html#key-policy-default)
 	// in the Key Management Service Developer Guide.
 	//
 	// The key policy size quota is 32 kilobytes (32768 bytes).
@@ -198,8 +202,11 @@ type KeyParameters struct {
 	// Assigns one or more tags to the KMS key. Use this parameter to tag the KMS
 	// key when it is created. To tag an existing KMS key, use the TagResource operation.
 	//
+	// Do not include confidential or sensitive information in this field. This
+	// field may be displayed in plaintext in CloudTrail logs and other output.
+	//
 	// Tagging or untagging a KMS key can allow or deny permission to the KMS key.
-	// For details, see ABAC in KMS (https://docs.aws.amazon.com/kms/latest/developerguide/abac.html)
+	// For details, see ABAC for KMS (https://docs.aws.amazon.com/kms/latest/developerguide/abac.html)
 	// in the Key Management Service Developer Guide.
 	//
 	// To use this parameter, you must have kms:TagResource (https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html)
@@ -215,7 +222,33 @@ type KeyParameters struct {
 	// generates a cost allocation report with usage and costs aggregated by tags.
 	// Tags can also be used to control access to a KMS key. For details, see Tagging
 	// Keys (https://docs.aws.amazon.com/kms/latest/developerguide/tagging-keys.html).
-	Tags                []*Tag `json:"tags,omitempty"`
+	Tags []*Tag `json:"tags,omitempty"`
+	// Identifies the external key (https://docs.aws.amazon.com/kms/latest/developerguide/keystore-external.html#concept-external-key)
+	// that serves as key material for the KMS key in an external key store (https://docs.aws.amazon.com/kms/latest/developerguide/keystore-external.html).
+	// Specify the ID that the external key store proxy (https://docs.aws.amazon.com/kms/latest/developerguide/keystore-external.html#concept-xks-proxy)
+	// uses to refer to the external key. For help, see the documentation for your
+	// external key store proxy.
+	//
+	// This parameter is required for a KMS key with an Origin value of EXTERNAL_KEY_STORE.
+	// It is not valid for KMS keys with any other Origin value.
+	//
+	// The external key must be an existing 256-bit AES symmetric encryption key
+	// hosted outside of Amazon Web Services in an external key manager associated
+	// with the external key store specified by the CustomKeyStoreId parameter.
+	// This key must be enabled and configured to perform encryption and decryption.
+	// Each KMS key in an external key store must use a different external key.
+	// For details, see Requirements for a KMS key in an external key store (https://docs.aws.amazon.com/create-xks-keys.html#xks-key-requirements)
+	// in the Key Management Service Developer Guide.
+	//
+	// Each KMS key in an external key store is associated two backing keys. One
+	// is key material that KMS generates. The other is the external key specified
+	// by this parameter. When you use the KMS key in an external key store to encrypt
+	// data, the encryption operation is performed first by KMS using the KMS key
+	// material, and then by the external key manager using the specified external
+	// key, a process known as double encryption. For details, see Double encryption
+	// (https://docs.aws.amazon.com/kms/latest/developerguide/keystore-external.html#concept-double-encryption)
+	// in the Key Management Service Developer Guide.
+	XksKeyID            *string `json:"xksKeyID,omitempty"`
 	CustomKeyParameters `json:",inline"`
 }
 
@@ -235,9 +268,10 @@ type KeyObservation struct {
 	// in the Example ARNs section of the Amazon Web Services General Reference.
 	ARN *string `json:"arn,omitempty"`
 	// The cluster ID of the CloudHSM cluster that contains the key material for
-	// the KMS key. When you create a KMS key in a custom key store (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html),
+	// the KMS key. When you create a KMS key in an CloudHSM custom key store (https://docs.aws.amazon.com/kms/latest/developerguide/custom-key-store-overview.html),
 	// KMS creates the key material for the KMS key in the associated CloudHSM cluster.
-	// This value is present only when the KMS key is created in a custom key store.
+	// This field is present only when the KMS key is created in an CloudHSM key
+	// store.
 	CloudHsmClusterID *string `json:"cloudHsmClusterID,omitempty"`
 	// The date and time when the KMS key was created.
 	CreationDate *metav1.Time `json:"creationDate,omitempty"`
@@ -315,6 +349,14 @@ type KeyObservation struct {
 	// value is present only for KMS keys whose Origin is EXTERNAL and whose ExpirationModel
 	// is KEY_MATERIAL_EXPIRES, otherwise this value is omitted.
 	ValidTo *metav1.Time `json:"validTo,omitempty"`
+	// Information about the external key that is associated with a KMS key in an
+	// external key store.
+	//
+	// For more information, see External key (https://docs.aws.amazon.com/kms/latest/developerguide/keystore-external.html#concept-external-key)
+	// in the Key Management Service Developer Guide.
+	XksKeyConfiguration *XksKeyConfigurationType `json:"xksKeyConfiguration,omitempty"`
+
+	CustomKeyObservation `json:",inline"`
 }
 
 // KeyStatus defines the observed state of Key.
@@ -329,6 +371,7 @@ type KeyStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

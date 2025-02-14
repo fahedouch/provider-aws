@@ -20,21 +20,20 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws/request"
+	"github.com/aws/aws-sdk-go/service/cloudsearch"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	test "github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cloudsearch/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	fake "github.com/crossplane-contrib/provider-aws/pkg/clients/cloudsearch/fake"
-
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/service/cloudsearch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
-var _ managed.ExternalClient = &external{}
-var _ managed.ExternalConnecter = &connector{}
+var _ managed.TypedExternalClient[*svcapitypes.Domain] = &external{}
+var _ managed.TypedExternalConnecter[*svcapitypes.Domain] = &connector{}
 
 var domainName string = "test-domain-name"
 
@@ -60,10 +59,10 @@ func TestLateInitialize(t *testing.T) {
 		"NothingToInitialize": {
 			args: args{
 				spec: svcapitypes.CustomDomainParameters{
-					DesiredReplicationCount: aws.Int64(4),
-					DesiredInstanceType:     aws.String("small"),
-					DesiredPartitionCount:   aws.Int64(0),
-					AccessPolicies: aws.String(`{
+					DesiredReplicationCount: pointer.ToIntAsInt64(4),
+					DesiredInstanceType:     pointer.ToOrNilIfZeroValue("small"),
+					DesiredPartitionCount:   pointer.ToIntAsInt64(0),
+					AccessPolicies: pointer.ToOrNilIfZeroValue(`{
 						"Version": "2012-10-17",
 						"Statement": [
 						  {
@@ -75,14 +74,14 @@ func TestLateInitialize(t *testing.T) {
 					  }`),
 				},
 				statusScaling: cloudsearch.ScalingParameters{
-					DesiredPartitionCount:   aws.Int64(4),
-					DesiredInstanceType:     aws.String("small"),
-					DesiredReplicationCount: aws.Int64(0),
+					DesiredPartitionCount:   pointer.ToIntAsInt64(4),
+					DesiredInstanceType:     pointer.ToOrNilIfZeroValue("small"),
+					DesiredReplicationCount: pointer.ToIntAsInt64(0),
 				},
 				statusPolicies: cloudsearch.AccessPoliciesStatus{
-					Options: aws.String(""),
+					Options: pointer.ToOrNilIfZeroValue(""),
 					Status: &cloudsearch.OptionStatus{
-						PendingDeletion: aws.Bool(false),
+						PendingDeletion: pointer.ToOrNilIfZeroValue(false),
 					},
 				},
 				statusScalingError:  nil,
@@ -90,10 +89,10 @@ func TestLateInitialize(t *testing.T) {
 			},
 			want: want{
 				result: svcapitypes.CustomDomainParameters{
-					DesiredReplicationCount: aws.Int64(4),
-					DesiredInstanceType:     aws.String("small"),
-					DesiredPartitionCount:   aws.Int64(0),
-					AccessPolicies: aws.String(`{
+					DesiredReplicationCount: pointer.ToIntAsInt64(4),
+					DesiredInstanceType:     pointer.ToOrNilIfZeroValue("small"),
+					DesiredPartitionCount:   pointer.ToIntAsInt64(0),
+					AccessPolicies: pointer.ToOrNilIfZeroValue(`{
 						"Version": "2012-10-17",
 						"Statement": [
 						  {
@@ -111,14 +110,14 @@ func TestLateInitialize(t *testing.T) {
 			args: args{
 				spec: svcapitypes.CustomDomainParameters{},
 				statusScaling: cloudsearch.ScalingParameters{
-					DesiredPartitionCount:   aws.Int64(0),
-					DesiredInstanceType:     aws.String(""),
-					DesiredReplicationCount: aws.Int64(0),
+					DesiredPartitionCount:   pointer.ToIntAsInt64(0),
+					DesiredInstanceType:     pointer.ToOrNilIfZeroValue(""),
+					DesiredReplicationCount: pointer.ToIntAsInt64(0),
 				},
 				statusPolicies: cloudsearch.AccessPoliciesStatus{
-					Options: aws.String(""),
+					Options: pointer.ToOrNilIfZeroValue(""),
 					Status: &cloudsearch.OptionStatus{
-						PendingDeletion: aws.Bool(false),
+						PendingDeletion: pointer.ToOrNilIfZeroValue(false),
 					},
 				},
 				statusScalingError:  nil,
@@ -126,10 +125,10 @@ func TestLateInitialize(t *testing.T) {
 			},
 			want: want{
 				result: svcapitypes.CustomDomainParameters{
-					DesiredReplicationCount: aws.Int64(0),
-					DesiredInstanceType:     aws.String(""),
-					DesiredPartitionCount:   aws.Int64(0),
-					AccessPolicies:          aws.String(""),
+					DesiredReplicationCount: pointer.ToIntAsInt64(0),
+					DesiredInstanceType:     pointer.ToOrNilIfZeroValue(""),
+					DesiredPartitionCount:   pointer.ToIntAsInt64(0),
+					AccessPolicies:          pointer.ToOrNilIfZeroValue(""),
 				},
 				err: nil,
 			},
@@ -149,7 +148,7 @@ func TestLateInitialize(t *testing.T) {
 						return &cloudsearch.DescribeScalingParametersOutput{
 							ScalingParameters: &cloudsearch.ScalingParametersStatus{
 								Options: &tc.statusScaling,
-								Status:  &cloudsearch.OptionStatus{PendingDeletion: aws.Bool(false)},
+								Status:  &cloudsearch.OptionStatus{PendingDeletion: pointer.ToOrNilIfZeroValue(false)},
 							},
 						}, tc.args.statusScalingError
 					},
@@ -175,7 +174,7 @@ func TestLateInitialize(t *testing.T) {
 
 func TestIsUpToDate(t *testing.T) {
 
-	defaultPolicy := aws.String(`{
+	defaultPolicy := pointer.ToOrNilIfZeroValue(`{
 		"Version": "2012-10-17",
 		"Statement": [
 		  {
@@ -187,9 +186,9 @@ func TestIsUpToDate(t *testing.T) {
 	  }`)
 
 	defaultScalingParameters := cloudsearch.ScalingParameters{
-		DesiredPartitionCount:   aws.Int64(2),
-		DesiredInstanceType:     aws.String("small"),
-		DesiredReplicationCount: aws.Int64(1),
+		DesiredPartitionCount:   pointer.ToIntAsInt64(2),
+		DesiredInstanceType:     pointer.ToOrNilIfZeroValue("small"),
+		DesiredReplicationCount: pointer.ToIntAsInt64(1),
 	}
 
 	type args struct {
@@ -233,7 +232,7 @@ func TestIsUpToDate(t *testing.T) {
 		"UpdateNeededAccessPolicy": {
 			args: args{
 				policySpec: defaultPolicy,
-				policyStatus: aws.String(`{
+				policyStatus: pointer.ToOrNilIfZeroValue(`{
 					"Version": "2012-10-17",
 					"Statement": [
 					  {
@@ -257,7 +256,7 @@ func TestIsUpToDate(t *testing.T) {
 		},
 		"UpdateNeededAccessPolicyEmpty": {
 			args: args{
-				policySpec:                   aws.String(" "),
+				policySpec:                   pointer.ToOrNilIfZeroValue(" "),
 				policyStatus:                 defaultPolicy,
 				policyStatusErr:              nil,
 				scalingSpec:                  defaultScalingParameters,
@@ -294,9 +293,9 @@ func TestIsUpToDate(t *testing.T) {
 				policyStatusErr: nil,
 				scalingSpec:     defaultScalingParameters,
 				scalingStatus: cloudsearch.ScalingParameters{
-					DesiredPartitionCount:   aws.Int64(1),
-					DesiredInstanceType:     aws.String("small"),
-					DesiredReplicationCount: aws.Int64(1),
+					DesiredPartitionCount:   pointer.ToIntAsInt64(1),
+					DesiredInstanceType:     pointer.ToOrNilIfZeroValue("small"),
+					DesiredReplicationCount: pointer.ToIntAsInt64(1),
 				},
 				scalingStatusPendingDeletion: false,
 				scalingStatusErr:             nil,
@@ -358,7 +357,7 @@ func TestIsUpToDate(t *testing.T) {
 							ScalingParameters: &cloudsearch.ScalingParametersStatus{
 								Options: &tc.args.scalingStatus,
 								Status: &cloudsearch.OptionStatus{
-									PendingDeletion: aws.Bool(tc.args.scalingStatusPendingDeletion),
+									PendingDeletion: pointer.ToOrNilIfZeroValue(tc.args.scalingStatusPendingDeletion),
 								},
 							},
 						}, tc.args.scalingStatusErr
@@ -366,7 +365,7 @@ func TestIsUpToDate(t *testing.T) {
 				},
 			}
 
-			result, err := h.isUpToDate(&svcapitypes.Domain{
+			result, _, err := h.isUpToDate(context.Background(), &svcapitypes.Domain{
 				Spec: svcapitypes.DomainSpec{
 					ForProvider: svcapitypes.DomainParameters{
 						DomainName: &domainName,
@@ -380,8 +379,8 @@ func TestIsUpToDate(t *testing.T) {
 				},
 			}, &cloudsearch.DescribeDomainsOutput{
 				DomainStatusList: []*cloudsearch.DomainStatus{{
-					Created:                aws.Bool(true),
-					Deleted:                aws.Bool(false),
+					Created:                pointer.ToOrNilIfZeroValue(true),
+					Deleted:                pointer.ToOrNilIfZeroValue(false),
 					RequiresIndexDocuments: &tc.requiresIndexing,
 					DomainName:             &domainName,
 				}},

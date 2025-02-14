@@ -20,24 +20,25 @@ import (
 	"context"
 	"strconv"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	v1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/docdb"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/docdb/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/docdb/fake"
-	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/docdb"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
@@ -54,7 +55,8 @@ var (
 	testCloudWatchLog                    = "some-log"
 	testOtherCloudWatchLog               = "some-other-log"
 	testEngine                           = "some-engine"
-	testEngineVersion                    = "some-engine-version"
+	testEngineVersion                    = "4.0.0"
+	testOtherEngineVersion               = "5.0.0"
 	testKMSKeyID                         = "some-key"
 	testMasterUserName                   = "some-user"
 	testMasterUserPassword               = "some-pw"
@@ -84,8 +86,9 @@ var (
 	testErrCreateDBClusterFailed    = "CreateDBCluster failed"
 	testErrDeleteDBClusterFailed    = "DeleteDBCluster failed"
 	testErrModifyDBClusterFailed    = "ModifyDBCluster failed"
-	testErrBoom                     = "boom"
 	testErrGetSecret                = "testErrGetSecret"
+
+	timeNow = time.Now()
 )
 
 type args struct {
@@ -99,7 +102,7 @@ type docDBModifier func(*svcapitypes.DBCluster)
 func toStringPtrArray(values ...string) []*string {
 	ptrArr := make([]*string, len(values))
 	for i, s := range values {
-		ptrArr[i] = awsclient.String(s)
+		ptrArr[i] = pointer.ToOrNilIfZeroValue(s)
 	}
 	return ptrArr
 }
@@ -119,9 +122,15 @@ func withExternalName(value string) docDBModifier {
 	}
 }
 
+func withDeletionTimestamp(v *metav1.Time) docDBModifier {
+	return func(o *svcapitypes.DBCluster) {
+		o.SetDeletionTimestamp(v)
+	}
+}
+
 func withDBClusterIdentifier(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Status.AtProvider.DBClusterIdentifier = awsclient.String(value)
+		o.Status.AtProvider.DBClusterIdentifier = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
@@ -133,7 +142,7 @@ func withConditions(value ...xpv1.Condition) docDBModifier {
 
 func withStatus(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Status.AtProvider.Status = awsclient.String(value)
+		o.Status.AtProvider.Status = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
@@ -145,37 +154,37 @@ func withAvailabilityZones(values ...string) docDBModifier {
 
 func withBackupRetentionPeriod(value int) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.BackupRetentionPeriod = awsclient.Int64(value)
+		o.Spec.ForProvider.BackupRetentionPeriod = pointer.ToIntAsInt64(value)
 	}
 }
 
 func withDBClusterParameterGroupName(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.DBClusterParameterGroupName = awsclient.String(value)
+		o.Spec.ForProvider.DBClusterParameterGroupName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withStatusDBClusterParameterGroupName(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Status.AtProvider.DBClusterParameterGroup = awsclient.String(value)
+		o.Status.AtProvider.DBClusterParameterGroup = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withStatusDBClusterArn(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Status.AtProvider.DBClusterARN = awsclient.String(value)
+		o.Status.AtProvider.DBClusterARN = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withDBSubnetGroup(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.DBSubnetGroupName = awsclient.String(value)
+		o.Spec.ForProvider.DBSubnetGroupName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withDeletionProtection(value bool) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.DeletionProtection = awsclient.Bool(value, awsclient.FieldRequired)
+		o.Spec.ForProvider.DeletionProtection = ptr.To(value)
 	}
 }
 
@@ -193,28 +202,41 @@ func withStatusEnableCloudWatchLogsExports(values ...string) docDBModifier {
 
 func withEngine(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.Engine = awsclient.String(value)
+		o.Spec.ForProvider.Engine = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withEngineVersion(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.EngineVersion = awsclient.String(value)
+		o.Spec.ForProvider.EngineVersion = pointer.ToOrNilIfZeroValue(value)
+	}
+}
+
+func withStatusEngineVersion(value string) docDBModifier {
+	return func(o *svcapitypes.DBCluster) {
+		o.Status.AtProvider.EngineVersion = pointer.ToOrNilIfZeroValue(value)
+
+	}
+}
+
+func withAllowMajorVersionUpgrade(value bool) docDBModifier {
+	return func(o *svcapitypes.DBCluster) {
+		o.Spec.ForProvider.AllowMajorVersionUpgrade = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withMasterUserName(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.MasterUsername = awsclient.String(value)
+		o.Spec.ForProvider.MasterUsername = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
-func withMasterPasswordSecretRef(namesapce, name, key string) docDBModifier {
+func withMasterPasswordSecretRef(namespace, name, key string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
 		o.Spec.ForProvider.MasterUserPasswordSecretRef = &xpv1.SecretKeySelector{
 			SecretReference: xpv1.SecretReference{
 				Name:      name,
-				Namespace: o.Namespace,
+				Namespace: namespace,
 			},
 			Key: key,
 		}
@@ -223,49 +245,49 @@ func withMasterPasswordSecretRef(namesapce, name, key string) docDBModifier {
 
 func withKmsKeyID(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.KMSKeyID = awsclient.String(value)
+		o.Spec.ForProvider.KMSKeyID = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withPort(value int) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.Port = awsclient.Int64(value)
+		o.Spec.ForProvider.Port = pointer.ToIntAsInt64(value)
 	}
 }
 
 func withEndpoint(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Status.AtProvider.Endpoint = awsclient.String(value)
+		o.Status.AtProvider.Endpoint = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withReaderEndpoint(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Status.AtProvider.ReaderEndpoint = awsclient.String(value)
+		o.Status.AtProvider.ReaderEndpoint = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withPreSignedURL(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.PreSignedURL = awsclient.String(value)
+		o.Spec.ForProvider.PreSignedURL = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withPreferredBackupWindow(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.PreferredBackupWindow = awsclient.String(value)
+		o.Spec.ForProvider.PreferredBackupWindow = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withPreferredMaintenanceWindow(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.PreferredMaintenanceWindow = awsclient.String(value)
+		o.Spec.ForProvider.PreferredMaintenanceWindow = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withStorageEncrypted(value bool) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.StorageEncrypted = awsclient.Bool(value)
+		o.Spec.ForProvider.StorageEncrypted = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
@@ -287,22 +309,32 @@ func withTags(values ...*svcapitypes.Tag) docDBModifier {
 
 func withSkipFinalSnapshot(value bool) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.SkipFinalSnapshot = awsclient.Bool(value)
+		o.Spec.ForProvider.SkipFinalSnapshot = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withFinalDBSnapshotIdentifier(value string) docDBModifier {
 	return func(o *svcapitypes.DBCluster) {
-		o.Spec.ForProvider.FinalDBSnapshotIdentifier = awsclient.String(value)
+		o.Spec.ForProvider.FinalDBSnapshotIdentifier = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
-func mergeTags(lists ...[]*svcapitypes.Tag) []*svcapitypes.Tag {
-	res := []*svcapitypes.Tag{}
-	for _, list := range lists {
-		res = append(res, list...)
+func withRestoreFromSnapshot(v *svcapitypes.RestoreSnapshotConfiguration) docDBModifier {
+	return func(o *svcapitypes.DBCluster) {
+		o.Spec.ForProvider.RestoreFrom = &svcapitypes.RestoreDBClusterBackupConfiguration{
+			Snapshot: v,
+			Source:   svcapitypes.RestoreSourceSnapshot,
+		}
 	}
-	return res
+}
+
+func withRestoreToPointInTime(v *svcapitypes.RestorePointInTimeConfiguration) docDBModifier {
+	return func(o *svcapitypes.DBCluster) {
+		o.Spec.ForProvider.RestoreFrom = &svcapitypes.RestoreDBClusterBackupConfiguration{
+			PointInTime: v,
+			Source:      svcapitypes.RestoreSourcePointInTime,
+		}
+	}
 }
 
 func generateConnectionDetails(username, password, readerEndpoint, endpoint string, port int) managed.ConnectionDetails {
@@ -338,9 +370,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:   awsclient.String(testDBClusterIdentifier),
-									Status:                awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									BackupRetentionPeriod: awsclient.Int64(testBackupRetentionPeriod),
+									DBClusterIdentifier:   pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									BackupRetentionPeriod: pointer.ToIntAsInt64(testBackupRetentionPeriod),
 								},
 							},
 						}, nil
@@ -372,7 +404,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -386,9 +418,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:   awsclient.String(testDBClusterIdentifier),
-									Status:                awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									BackupRetentionPeriod: awsclient.Int64(testBackupRetentionPeriod),
+									DBClusterIdentifier:   pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									BackupRetentionPeriod: pointer.ToIntAsInt64(testBackupRetentionPeriod),
 								},
 							},
 						}, nil
@@ -425,7 +457,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -444,9 +476,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:   awsclient.String(testDBClusterIdentifier),
-									Status:                awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									BackupRetentionPeriod: awsclient.Int64(testBackupRetentionPeriod),
+									DBClusterIdentifier:   pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									BackupRetentionPeriod: pointer.ToIntAsInt64(testBackupRetentionPeriod),
 								},
 							},
 						}, nil
@@ -482,7 +514,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -501,8 +533,8 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
 								},
 							},
 						}, nil
@@ -537,7 +569,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -556,9 +588,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:     awsclient.String(testDBClusterIdentifier),
-									Status:                  awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									DBClusterParameterGroup: awsclient.String(testDBClusterParameterGroupName),
+									DBClusterIdentifier:     pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                  pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterParameterGroup: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								},
 							},
 						}, nil
@@ -591,7 +623,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -605,9 +637,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:     awsclient.String(testDBClusterIdentifier),
-									Status:                  awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									DBClusterParameterGroup: awsclient.String(testDBClusterParameterGroupName),
+									DBClusterIdentifier:     pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                  pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterParameterGroup: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								},
 							},
 						}, nil
@@ -645,7 +677,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -664,9 +696,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:     awsclient.String(testDBClusterIdentifier),
-									Status:                  awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									DBClusterParameterGroup: awsclient.String(testDBClusterParameterGroupName),
+									DBClusterIdentifier:     pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                  pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterParameterGroup: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
 								},
 							},
 						}, nil
@@ -703,7 +735,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -722,9 +754,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									DeletionProtection:  awsclient.Bool(true),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									DeletionProtection:  pointer.ToOrNilIfZeroValue(true),
 								},
 							},
 						}, nil
@@ -756,7 +788,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -770,9 +802,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									DeletionProtection:  awsclient.Bool(true),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									DeletionProtection:  pointer.ToOrNilIfZeroValue(true),
 								},
 							},
 						}, nil
@@ -809,7 +841,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -828,9 +860,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									DeletionProtection:  awsclient.Bool(true),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									DeletionProtection:  pointer.ToOrNilIfZeroValue(true),
 								},
 							},
 						}, nil
@@ -866,7 +898,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -885,10 +917,10 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
 									EnabledCloudwatchLogsExports: []*string{
-										awsclient.String(testCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testCloudWatchLog),
 									},
 								},
 							},
@@ -931,7 +963,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -945,11 +977,11 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
 									EnabledCloudwatchLogsExports: []*string{
-										awsclient.String(testCloudWatchLog),
-										awsclient.String(testOtherCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testOtherCloudWatchLog),
 									},
 								},
 							},
@@ -990,7 +1022,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1004,11 +1036,11 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
 									EnabledCloudwatchLogsExports: []*string{
-										awsclient.String(testCloudWatchLog),
-										awsclient.String(testOtherCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testOtherCloudWatchLog),
 									},
 								},
 							},
@@ -1056,7 +1088,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1075,11 +1107,11 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
 									EnabledCloudwatchLogsExports: []*string{
-										awsclient.String(testCloudWatchLog),
-										awsclient.String(testOtherCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testOtherCloudWatchLog),
 									},
 								},
 							},
@@ -1127,7 +1159,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1146,11 +1178,11 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
 									EnabledCloudwatchLogsExports: []*string{
-										awsclient.String(testCloudWatchLog),
-										awsclient.String(testOtherCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testCloudWatchLog),
+										pointer.ToOrNilIfZeroValue(testOtherCloudWatchLog),
 									},
 								},
 							},
@@ -1194,7 +1226,115 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+							},
+						},
+					},
+					ListTagsForResource: []*fake.CallListTagsForResource{
+						{
+							I: &docdb.ListTagsForResourceInput{},
+						},
+					},
+				},
+			},
+		},
+		"AvailableState_and_changed_EngineVersion_should_not_be_UpToDate": {
+			args: args{
+				docdb: &fake.MockDocDBClient{
+					MockDescribeDBClustersWithContext: func(c context.Context, ddi *docdb.DescribeDBClustersInput, o []request.Option) (*docdb.DescribeDBClustersOutput, error) {
+						return &docdb.DescribeDBClustersOutput{
+							DBClusters: []*docdb.DBCluster{
+								{
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									EngineVersion:       pointer.ToOrNilIfZeroValue(testEngineVersion),
+								},
+							},
+						}, nil
+					},
+				},
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withEngineVersion(testOtherEngineVersion),
+				),
+			},
+			want: want{
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withConditions(xpv1.Available()),
+					withStatus(svcapitypes.DocDBInstanceStateAvailable),
+					withEngineVersion(testOtherEngineVersion),
+					withStatusEngineVersion(testEngineVersion),
+					withVpcSecurityGroupIds(),
+				),
+				result: managed.ExternalObservation{
+					ResourceExists:          true,
+					ResourceUpToDate:        false,
+					ResourceLateInitialized: true,
+					ConnectionDetails:       generateConnectionDetails("", "", "", "", 0),
+				},
+				docdb: fake.MockDocDBClientCall{
+					DescribeDBClustersWithContext: []*fake.CallDescribeDBClustersWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.DescribeDBClustersInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+							},
+						},
+					},
+				},
+			},
+		},
+		"AvailableState_and_same_EngineVersion_should_be_UpToDate": {
+			args: args{
+				docdb: &fake.MockDocDBClient{
+					MockDescribeDBClustersWithContext: func(c context.Context, ddi *docdb.DescribeDBClustersInput, o []request.Option) (*docdb.DescribeDBClustersOutput, error) {
+						return &docdb.DescribeDBClustersOutput{
+							DBClusters: []*docdb.DBCluster{
+								{
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									EngineVersion:       pointer.ToOrNilIfZeroValue(testEngineVersion),
+								},
+							},
+						}, nil
+					},
+					MockListTagsForResource: func(ltfri *docdb.ListTagsForResourceInput) (*docdb.ListTagsForResourceOutput, error) {
+						return &docdb.ListTagsForResourceOutput{
+							TagList: []*docdb.Tag{},
+						}, nil
+					},
+				},
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withEngineVersion(testEngineVersion),
+				),
+			},
+			want: want{
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withConditions(xpv1.Available()),
+					withStatus(svcapitypes.DocDBInstanceStateAvailable),
+					withEngineVersion(testEngineVersion),
+					withStatusEngineVersion(testEngineVersion),
+					withVpcSecurityGroupIds(),
+				),
+				result: managed.ExternalObservation{
+					ResourceExists:          true,
+					ResourceUpToDate:        true,
+					ResourceLateInitialized: true,
+					ConnectionDetails:       generateConnectionDetails("", "", "", "", 0),
+				},
+				docdb: fake.MockDocDBClientCall{
+					DescribeDBClustersWithContext: []*fake.CallDescribeDBClustersWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.DescribeDBClustersInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1213,9 +1353,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									Port:                awsclient.Int64(testPort),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									Port:                pointer.ToIntAsInt64(testPort),
 								},
 							},
 						}, nil
@@ -1247,7 +1387,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1261,9 +1401,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									Port:                awsclient.Int64(testPort),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									Port:                pointer.ToIntAsInt64(testPort),
 								},
 							},
 						}, nil
@@ -1300,7 +1440,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1319,9 +1459,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-									Status:              awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									Port:                awsclient.Int64(testPort),
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:              pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									Port:                pointer.ToIntAsInt64(testPort),
 								},
 							},
 						}, nil
@@ -1357,7 +1497,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1376,9 +1516,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:   awsclient.String(testDBClusterIdentifier),
-									Status:                awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									PreferredBackupWindow: awsclient.String(testPreferredBackupWindow),
+									DBClusterIdentifier:   pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									PreferredBackupWindow: pointer.ToOrNilIfZeroValue(testPreferredBackupWindow),
 								},
 							},
 						}, nil
@@ -1410,7 +1550,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1424,9 +1564,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:   awsclient.String(testDBClusterIdentifier),
-									Status:                awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									PreferredBackupWindow: awsclient.String(testPreferredBackupWindow),
+									DBClusterIdentifier:   pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									PreferredBackupWindow: pointer.ToOrNilIfZeroValue(testPreferredBackupWindow),
 								},
 							},
 						}, nil
@@ -1463,7 +1603,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1482,9 +1622,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:   awsclient.String(testDBClusterIdentifier),
-									Status:                awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									PreferredBackupWindow: awsclient.String(testPreferredBackupWindow),
+									DBClusterIdentifier:   pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									PreferredBackupWindow: pointer.ToOrNilIfZeroValue(testPreferredBackupWindow),
 								},
 							},
 						}, nil
@@ -1520,7 +1660,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1539,9 +1679,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:        awsclient.String(testDBClusterIdentifier),
-									Status:                     awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									PreferredMaintenanceWindow: awsclient.String(testPreferredMaintenanceWindow),
+									DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                     pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
 								},
 							},
 						}, nil
@@ -1573,7 +1713,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1587,9 +1727,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:        awsclient.String(testDBClusterIdentifier),
-									Status:                     awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									PreferredMaintenanceWindow: awsclient.String(testPreferredMaintenanceWindow),
+									DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                     pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
 								},
 							},
 						}, nil
@@ -1626,7 +1766,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1645,9 +1785,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBClustersOutput{
 							DBClusters: []*docdb.DBCluster{
 								{
-									DBClusterIdentifier:        awsclient.String(testDBClusterIdentifier),
-									Status:                     awsclient.String(svcapitypes.DocDBInstanceStateAvailable),
-									PreferredMaintenanceWindow: awsclient.String(testPreferredMaintenanceWindow),
+									DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                     pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
 								},
 							},
 						}, nil
@@ -1683,13 +1823,68 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
 					ListTagsForResource: []*fake.CallListTagsForResource{
 						{
 							I: &docdb.ListTagsForResourceInput{},
+						},
+					},
+				},
+			},
+		},
+		"AvailableState_and_Deleted_should_be_UpToDate": {
+			args: args{
+				docdb: &fake.MockDocDBClient{
+					MockDescribeDBClustersWithContext: func(c context.Context, ddi *docdb.DescribeDBClustersInput, o []request.Option) (*docdb.DescribeDBClustersOutput, error) {
+						return &docdb.DescribeDBClustersOutput{
+							DBClusters: []*docdb.DBCluster{
+								{
+									DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									Status:                     pointer.ToOrNilIfZeroValue(svcapitypes.DocDBInstanceStateAvailable),
+									PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+								},
+							},
+						}, nil
+					},
+					MockListTagsForResource: func(ltfri *docdb.ListTagsForResourceInput) (*docdb.ListTagsForResourceOutput, error) {
+						return &docdb.ListTagsForResourceOutput{
+							TagList: []*docdb.Tag{},
+						}, nil
+					},
+				},
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withDeletionTimestamp(&metav1.Time{Time: timeNow}),
+					withExternalName(testDBClusterIdentifier),
+					withPreferredMaintenanceWindow(testOtherPreferredMaintenanceWindow),
+					withVpcSecurityGroupIds(),
+				),
+			},
+			want: want{
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withDeletionTimestamp(&metav1.Time{Time: timeNow}),
+					withPreferredMaintenanceWindow(testOtherPreferredMaintenanceWindow),
+					withExternalName(testDBClusterIdentifier),
+					withConditions(xpv1.Available()),
+					withStatus(svcapitypes.DocDBInstanceStateAvailable),
+					withVpcSecurityGroupIds(),
+				),
+				result: managed.ExternalObservation{
+					ResourceExists:    true,
+					ResourceUpToDate:  true,
+					ConnectionDetails: generateConnectionDetails("", "", "", "", 0),
+				},
+				docdb: fake.MockDocDBClientCall{
+					DescribeDBClustersWithContext: []*fake.CallDescribeDBClustersWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.DescribeDBClustersInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+							},
 						},
 					},
 				},
@@ -1723,7 +1918,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1757,7 +1952,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBClustersInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -1781,7 +1976,7 @@ func TestObserve(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -1819,21 +2014,21 @@ func TestCreate(t *testing.T) {
 									&testAvailabilityZone,
 									&testOtherAvailabilityZone,
 								},
-								BackupRetentionPeriod:      awsclient.Int64(testBackupRetentionPeriod),
+								BackupRetentionPeriod:      pointer.ToIntAsInt64(testBackupRetentionPeriod),
 								DBClusterParameterGroup:    &testDBClusterParameterGroupName,
-								DBClusterIdentifier:        awsclient.String(testDBClusterIdentifier),
-								DBClusterArn:               awsclient.String(testDBClusterArn),
-								DeletionProtection:         awsclient.Bool(true),
-								Endpoint:                   awsclient.String(testEndpoint),
+								DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:               pointer.ToOrNilIfZeroValue(testDBClusterArn),
+								DeletionProtection:         pointer.ToOrNilIfZeroValue(true),
+								Endpoint:                   pointer.ToOrNilIfZeroValue(testEndpoint),
 								Engine:                     &testEngine,
 								EngineVersion:              &testEngineVersion,
 								KmsKeyId:                   &testKMSKeyID,
 								MasterUsername:             &testMasterUserName,
-								ReaderEndpoint:             awsclient.String(testReaderEndpoint),
-								Port:                       awsclient.Int64(testPort),
+								ReaderEndpoint:             pointer.ToOrNilIfZeroValue(testReaderEndpoint),
+								Port:                       pointer.ToIntAsInt64(testPort),
 								PreferredBackupWindow:      &testPreferredBackupWindow,
 								PreferredMaintenanceWindow: &testPreferredMaintenanceWindow,
-								StorageEncrypted:           awsclient.Bool(true),
+								StorageEncrypted:           pointer.ToOrNilIfZeroValue(true),
 							},
 						}, nil
 					},
@@ -1863,8 +2058,8 @@ func TestCreate(t *testing.T) {
 					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
 					withStorageEncrypted(true),
 					withTags(
-						&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-						&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 					),
 					withVpcSecurityGroupIds(
 						testVpcSecurityGroup,
@@ -1901,8 +2096,8 @@ func TestCreate(t *testing.T) {
 					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
 					withStorageEncrypted(true),
 					withTags(
-						&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-						&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 					),
 					withVpcSecurityGroupIds(
 						testVpcSecurityGroup,
@@ -1927,36 +2122,491 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.CreateDBClusterInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 								AvailabilityZones: toStringPtrArray(
 									testAvailabilityZone,
 									testOtherAvailabilityZone,
 								),
-								BackupRetentionPeriod:       awsclient.Int64(testBackupRetentionPeriod),
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
-								DBSubnetGroupName:           awsclient.String(testDBSubnetGroupName),
-								DeletionProtection:          awsclient.Bool(true),
+								BackupRetentionPeriod:       pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
+								DBSubnetGroupName:           pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
+								DeletionProtection:          pointer.ToOrNilIfZeroValue(true),
 								EnableCloudwatchLogsExports: toStringPtrArray(
 									testCloudWatchLog,
 									testOtherCloudWatchLog,
 								),
-								Engine:                     awsclient.String(testEngine),
-								EngineVersion:              awsclient.String(testEngineVersion),
-								KmsKeyId:                   awsclient.String(testKMSKeyID),
-								MasterUsername:             awsclient.String(testMasterUserName),
-								MasterUserPassword:         awsclient.String(testMasterUserPassword),
-								Port:                       awsclient.Int64(testPort),
-								PreSignedUrl:               awsclient.String(testPresignedURL),
-								PreferredBackupWindow:      awsclient.String(testPreferredBackupWindow),
-								PreferredMaintenanceWindow: awsclient.String(testPreferredMaintenanceWindow),
-								StorageEncrypted:           awsclient.Bool(true),
+								Engine:                     pointer.ToOrNilIfZeroValue(testEngine),
+								EngineVersion:              pointer.ToOrNilIfZeroValue(testEngineVersion),
+								KmsKeyId:                   pointer.ToOrNilIfZeroValue(testKMSKeyID),
+								MasterUsername:             pointer.ToOrNilIfZeroValue(testMasterUserName),
+								MasterUserPassword:         pointer.ToOrNilIfZeroValue(testMasterUserPassword),
+								Port:                       pointer.ToIntAsInt64(testPort),
+								PreSignedUrl:               pointer.ToOrNilIfZeroValue(testPresignedURL),
+								PreferredBackupWindow:      pointer.ToOrNilIfZeroValue(testPreferredBackupWindow),
+								PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+								StorageEncrypted:           pointer.ToOrNilIfZeroValue(true),
 								VpcSecurityGroupIds: toStringPtrArray(
 									testVpcSecurityGroup,
 									testOtherVpcSecurityGroup,
 								),
 								Tags: []*docdb.Tag{
-									{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-									{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"SuccessfulRestoreFromSnapshot": {
+			args: args{
+				kube: &test.MockClient{
+					MockGet: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+						s := obj.(*v1.Secret)
+						s.Data = map[string][]byte{
+							testMasterPasswordSecretKey: []byte(testMasterUserPassword),
+						}
+						return nil
+					},
+				},
+				docdb: &fake.MockDocDBClient{
+					MockRestoreDBClusterFromSnapshotWithContext: func(c context.Context, cdpgi *docdb.RestoreDBClusterFromSnapshotInput, o []request.Option) (*docdb.RestoreDBClusterFromSnapshotOutput, error) {
+						return &docdb.RestoreDBClusterFromSnapshotOutput{
+							DBCluster: &docdb.DBCluster{
+								AvailabilityZones: []*string{
+									&testAvailabilityZone,
+									&testOtherAvailabilityZone,
+								},
+								BackupRetentionPeriod:      pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroup:    &testDBClusterParameterGroupName,
+								DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:               pointer.ToOrNilIfZeroValue(testDBClusterArn),
+								DeletionProtection:         pointer.ToOrNilIfZeroValue(true),
+								Endpoint:                   pointer.ToOrNilIfZeroValue(testEndpoint),
+								Engine:                     &testEngine,
+								EngineVersion:              &testEngineVersion,
+								KmsKeyId:                   &testKMSKeyID,
+								MasterUsername:             &testMasterUserName,
+								ReaderEndpoint:             pointer.ToOrNilIfZeroValue(testReaderEndpoint),
+								Port:                       pointer.ToIntAsInt64(testPort),
+								PreferredBackupWindow:      &testPreferredBackupWindow,
+								PreferredMaintenanceWindow: &testPreferredMaintenanceWindow,
+								StorageEncrypted:           pointer.ToOrNilIfZeroValue(true),
+							},
+						}, nil
+					},
+					MockCreateDBClusterWithContext: func(c context.Context, cdpgi *docdb.CreateDBClusterInput, o []request.Option) (*docdb.CreateDBClusterOutput, error) {
+						return &docdb.CreateDBClusterOutput{
+							DBCluster: &docdb.DBCluster{
+								AvailabilityZones: []*string{
+									&testAvailabilityZone,
+									&testOtherAvailabilityZone,
+								},
+								BackupRetentionPeriod:      pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroup:    &testDBClusterParameterGroupName,
+								DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:               pointer.ToOrNilIfZeroValue(testDBClusterArn),
+								DeletionProtection:         pointer.ToOrNilIfZeroValue(true),
+								Endpoint:                   pointer.ToOrNilIfZeroValue(testEndpoint),
+								Engine:                     &testEngine,
+								EngineVersion:              &testEngineVersion,
+								KmsKeyId:                   &testKMSKeyID,
+								MasterUsername:             &testMasterUserName,
+								ReaderEndpoint:             pointer.ToOrNilIfZeroValue(testReaderEndpoint),
+								Port:                       pointer.ToIntAsInt64(testPort),
+								PreferredBackupWindow:      &testPreferredBackupWindow,
+								PreferredMaintenanceWindow: &testPreferredMaintenanceWindow,
+								StorageEncrypted:           pointer.ToOrNilIfZeroValue(true),
+							},
+						}, nil
+					},
+				},
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withAvailabilityZones(
+						testAvailabilityZone,
+						testOtherAvailabilityZone,
+					),
+					withBackupRetentionPeriod(testBackupRetentionPeriod),
+					withDBClusterParameterGroupName(testDBClusterParameterGroupName),
+					withDBSubnetGroup(testDBSubnetGroupName),
+					withDeletionProtection(true),
+					withEnableCloudWatchLogsExports(
+						testCloudWatchLog,
+						testOtherCloudWatchLog,
+					),
+					withEngine(testEngine),
+					withEngineVersion(testEngineVersion),
+					withKmsKeyID(testKMSKeyID),
+					withMasterUserName(testMasterUserName),
+					withPort(testPort),
+					withPreSignedURL(testPresignedURL),
+					withPreferredBackupWindow(testPreferredBackupWindow),
+					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
+					withStorageEncrypted(true),
+					withTags(
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+					),
+					withVpcSecurityGroupIds(
+						testVpcSecurityGroup,
+						testOtherVpcSecurityGroup,
+					),
+					withMasterPasswordSecretRef(testMasterPasswordSecretNamespace, testMasterPasswordSecretName, testMasterPasswordSecretKey),
+					withRestoreFromSnapshot(&svcapitypes.RestoreSnapshotConfiguration{
+						SnapshotIdentifier: "abcd",
+					}),
+				),
+			},
+			want: want{
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withConditions(xpv1.Creating()),
+					withAvailabilityZones(
+						testAvailabilityZone,
+						testOtherAvailabilityZone,
+					),
+					withBackupRetentionPeriod(testBackupRetentionPeriod),
+					withDBClusterParameterGroupName(testDBClusterParameterGroupName),
+					withDBSubnetGroup(testDBSubnetGroupName),
+					withStatusDBClusterArn(testDBClusterArn),
+					withDeletionProtection(true),
+					withEnableCloudWatchLogsExports(
+						testCloudWatchLog,
+						testOtherCloudWatchLog,
+					),
+					withEngine(testEngine),
+					withEngineVersion(testEngineVersion),
+					withKmsKeyID(testKMSKeyID),
+					withMasterUserName(testMasterUserName),
+					withPort(testPort),
+					withPreSignedURL(testPresignedURL),
+					withPreferredBackupWindow(testPreferredBackupWindow),
+					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
+					withStorageEncrypted(true),
+					withTags(
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+					),
+					withVpcSecurityGroupIds(
+						testVpcSecurityGroup,
+						testOtherVpcSecurityGroup,
+					),
+					withEndpoint(testEndpoint),
+					withReaderEndpoint(testReaderEndpoint),
+					withMasterPasswordSecretRef(testMasterPasswordSecretNamespace, testMasterPasswordSecretName, testMasterPasswordSecretKey),
+					withStatusDBClusterParameterGroupName(testDBClusterParameterGroupName),
+					withRestoreFromSnapshot(&svcapitypes.RestoreSnapshotConfiguration{
+						SnapshotIdentifier: "abcd",
+					}),
+				),
+				result: managed.ExternalCreation{
+					ConnectionDetails: generateConnectionDetails(
+						testMasterUserName,
+						testMasterUserPassword,
+						testReaderEndpoint,
+						testEndpoint,
+						testPort,
+					),
+				},
+				docdb: fake.MockDocDBClientCall{
+					RestoreDBClusterFromSnapshotWithContext: []*fake.CallRestoreDBClusterFromSnapshotWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.RestoreDBClusterFromSnapshotInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								AvailabilityZones: toStringPtrArray(
+									testAvailabilityZone,
+									testOtherAvailabilityZone,
+								),
+								DBSubnetGroupName:  pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
+								DeletionProtection: pointer.ToOrNilIfZeroValue(true),
+								EnableCloudwatchLogsExports: toStringPtrArray(
+									testCloudWatchLog,
+									testOtherCloudWatchLog,
+								),
+								Engine:        pointer.ToOrNilIfZeroValue(testEngine),
+								EngineVersion: pointer.ToOrNilIfZeroValue(testEngineVersion),
+								KmsKeyId:      pointer.ToOrNilIfZeroValue(testKMSKeyID),
+								Port:          pointer.ToIntAsInt64(testPort),
+								VpcSecurityGroupIds: toStringPtrArray(
+									testVpcSecurityGroup,
+									testOtherVpcSecurityGroup,
+								),
+								Tags: []*docdb.Tag{
+									{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+								},
+								SnapshotIdentifier: ptr.To("abcd"),
+							},
+						},
+					},
+					CreateDBClusterWithContext: []*fake.CallCreateDBClusterWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.CreateDBClusterInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								AvailabilityZones: toStringPtrArray(
+									testAvailabilityZone,
+									testOtherAvailabilityZone,
+								),
+								BackupRetentionPeriod:       pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
+								DBSubnetGroupName:           pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
+								DeletionProtection:          pointer.ToOrNilIfZeroValue(true),
+								EnableCloudwatchLogsExports: toStringPtrArray(
+									testCloudWatchLog,
+									testOtherCloudWatchLog,
+								),
+								Engine:                     pointer.ToOrNilIfZeroValue(testEngine),
+								EngineVersion:              pointer.ToOrNilIfZeroValue(testEngineVersion),
+								KmsKeyId:                   pointer.ToOrNilIfZeroValue(testKMSKeyID),
+								MasterUsername:             pointer.ToOrNilIfZeroValue(testMasterUserName),
+								MasterUserPassword:         pointer.ToOrNilIfZeroValue(testMasterUserPassword),
+								Port:                       pointer.ToIntAsInt64(testPort),
+								PreSignedUrl:               pointer.ToOrNilIfZeroValue(testPresignedURL),
+								PreferredBackupWindow:      pointer.ToOrNilIfZeroValue(testPreferredBackupWindow),
+								PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+								StorageEncrypted:           pointer.ToOrNilIfZeroValue(true),
+								VpcSecurityGroupIds: toStringPtrArray(
+									testVpcSecurityGroup,
+									testOtherVpcSecurityGroup,
+								),
+								Tags: []*docdb.Tag{
+									{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"SuccessfulRestoreFromPointInTime": {
+			args: args{
+				kube: &test.MockClient{
+					MockGet: func(ctx context.Context, key client.ObjectKey, obj client.Object) error {
+						s := obj.(*v1.Secret)
+						s.Data = map[string][]byte{
+							testMasterPasswordSecretKey: []byte(testMasterUserPassword),
+						}
+						return nil
+					},
+				},
+				docdb: &fake.MockDocDBClient{
+					MockRestoreDBClusterToPointInTimeWithContext: func(c context.Context, cdpgi *docdb.RestoreDBClusterToPointInTimeInput, o []request.Option) (*docdb.RestoreDBClusterToPointInTimeOutput, error) {
+						return &docdb.RestoreDBClusterToPointInTimeOutput{
+							DBCluster: &docdb.DBCluster{
+								AvailabilityZones: []*string{
+									&testAvailabilityZone,
+									&testOtherAvailabilityZone,
+								},
+								BackupRetentionPeriod:      pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroup:    &testDBClusterParameterGroupName,
+								DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:               pointer.ToOrNilIfZeroValue(testDBClusterArn),
+								DeletionProtection:         pointer.ToOrNilIfZeroValue(true),
+								Endpoint:                   pointer.ToOrNilIfZeroValue(testEndpoint),
+								Engine:                     &testEngine,
+								EngineVersion:              &testEngineVersion,
+								KmsKeyId:                   &testKMSKeyID,
+								MasterUsername:             &testMasterUserName,
+								ReaderEndpoint:             pointer.ToOrNilIfZeroValue(testReaderEndpoint),
+								Port:                       pointer.ToIntAsInt64(testPort),
+								PreferredBackupWindow:      &testPreferredBackupWindow,
+								PreferredMaintenanceWindow: &testPreferredMaintenanceWindow,
+								StorageEncrypted:           pointer.ToOrNilIfZeroValue(true),
+							},
+						}, nil
+					},
+					MockCreateDBClusterWithContext: func(c context.Context, cdpgi *docdb.CreateDBClusterInput, o []request.Option) (*docdb.CreateDBClusterOutput, error) {
+						return &docdb.CreateDBClusterOutput{
+							DBCluster: &docdb.DBCluster{
+								AvailabilityZones: []*string{
+									&testAvailabilityZone,
+									&testOtherAvailabilityZone,
+								},
+								BackupRetentionPeriod:      pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroup:    &testDBClusterParameterGroupName,
+								DBClusterIdentifier:        pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:               pointer.ToOrNilIfZeroValue(testDBClusterArn),
+								DeletionProtection:         pointer.ToOrNilIfZeroValue(true),
+								Endpoint:                   pointer.ToOrNilIfZeroValue(testEndpoint),
+								Engine:                     &testEngine,
+								EngineVersion:              &testEngineVersion,
+								KmsKeyId:                   &testKMSKeyID,
+								MasterUsername:             &testMasterUserName,
+								ReaderEndpoint:             pointer.ToOrNilIfZeroValue(testReaderEndpoint),
+								Port:                       pointer.ToIntAsInt64(testPort),
+								PreferredBackupWindow:      &testPreferredBackupWindow,
+								PreferredMaintenanceWindow: &testPreferredMaintenanceWindow,
+								StorageEncrypted:           pointer.ToOrNilIfZeroValue(true),
+							},
+						}, nil
+					},
+				},
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withAvailabilityZones(
+						testAvailabilityZone,
+						testOtherAvailabilityZone,
+					),
+					withBackupRetentionPeriod(testBackupRetentionPeriod),
+					withDBClusterParameterGroupName(testDBClusterParameterGroupName),
+					withDBSubnetGroup(testDBSubnetGroupName),
+					withDeletionProtection(true),
+					withEnableCloudWatchLogsExports(
+						testCloudWatchLog,
+						testOtherCloudWatchLog,
+					),
+					withEngine(testEngine),
+					withEngineVersion(testEngineVersion),
+					withKmsKeyID(testKMSKeyID),
+					withMasterUserName(testMasterUserName),
+					withPort(testPort),
+					withPreSignedURL(testPresignedURL),
+					withPreferredBackupWindow(testPreferredBackupWindow),
+					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
+					withStorageEncrypted(true),
+					withTags(
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+					),
+					withVpcSecurityGroupIds(
+						testVpcSecurityGroup,
+						testOtherVpcSecurityGroup,
+					),
+					withMasterPasswordSecretRef(testMasterPasswordSecretNamespace, testMasterPasswordSecretName, testMasterPasswordSecretKey),
+					withRestoreToPointInTime(&svcapitypes.RestorePointInTimeConfiguration{
+						RestoreTime:               &metav1.Time{Time: timeNow},
+						UseLatestRestorableTime:   ptr.To(true),
+						SourceDBClusterIdentifier: "abcd",
+						RestoreType:               ptr.To("full-copy"),
+					}),
+				),
+			},
+			want: want{
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withConditions(xpv1.Creating()),
+					withAvailabilityZones(
+						testAvailabilityZone,
+						testOtherAvailabilityZone,
+					),
+					withBackupRetentionPeriod(testBackupRetentionPeriod),
+					withDBClusterParameterGroupName(testDBClusterParameterGroupName),
+					withDBSubnetGroup(testDBSubnetGroupName),
+					withStatusDBClusterArn(testDBClusterArn),
+					withDeletionProtection(true),
+					withEnableCloudWatchLogsExports(
+						testCloudWatchLog,
+						testOtherCloudWatchLog,
+					),
+					withEngine(testEngine),
+					withEngineVersion(testEngineVersion),
+					withKmsKeyID(testKMSKeyID),
+					withMasterUserName(testMasterUserName),
+					withPort(testPort),
+					withPreSignedURL(testPresignedURL),
+					withPreferredBackupWindow(testPreferredBackupWindow),
+					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
+					withStorageEncrypted(true),
+					withTags(
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+					),
+					withVpcSecurityGroupIds(
+						testVpcSecurityGroup,
+						testOtherVpcSecurityGroup,
+					),
+					withEndpoint(testEndpoint),
+					withReaderEndpoint(testReaderEndpoint),
+					withMasterPasswordSecretRef(testMasterPasswordSecretNamespace, testMasterPasswordSecretName, testMasterPasswordSecretKey),
+					withStatusDBClusterParameterGroupName(testDBClusterParameterGroupName),
+					withRestoreToPointInTime(&svcapitypes.RestorePointInTimeConfiguration{
+						RestoreTime:               &metav1.Time{Time: timeNow},
+						UseLatestRestorableTime:   ptr.To(true),
+						SourceDBClusterIdentifier: "abcd",
+						RestoreType:               ptr.To("full-copy"),
+					}),
+				),
+				result: managed.ExternalCreation{
+					ConnectionDetails: generateConnectionDetails(
+						testMasterUserName,
+						testMasterUserPassword,
+						testReaderEndpoint,
+						testEndpoint,
+						testPort,
+					),
+				},
+				docdb: fake.MockDocDBClientCall{
+					RestoreDBClusterToPointInTimeWithContext: []*fake.CallRestoreDBClusterToPointInTimeWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.RestoreDBClusterToPointInTimeInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBSubnetGroupName:   pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
+								DeletionProtection:  pointer.ToOrNilIfZeroValue(true),
+								EnableCloudwatchLogsExports: toStringPtrArray(
+									testCloudWatchLog,
+									testOtherCloudWatchLog,
+								),
+								KmsKeyId: pointer.ToOrNilIfZeroValue(testKMSKeyID),
+								Port:     pointer.ToIntAsInt64(testPort),
+								VpcSecurityGroupIds: toStringPtrArray(
+									testVpcSecurityGroup,
+									testOtherVpcSecurityGroup,
+								),
+								Tags: []*docdb.Tag{
+									{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+								},
+								RestoreToTime:             &timeNow,
+								UseLatestRestorableTime:   ptr.To(true),
+								SourceDBClusterIdentifier: ptr.To("abcd"),
+								RestoreType:               ptr.To("full-copy"),
+							},
+						},
+					},
+					CreateDBClusterWithContext: []*fake.CallCreateDBClusterWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.CreateDBClusterInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								AvailabilityZones: toStringPtrArray(
+									testAvailabilityZone,
+									testOtherAvailabilityZone,
+								),
+								BackupRetentionPeriod:       pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
+								DBSubnetGroupName:           pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
+								DeletionProtection:          pointer.ToOrNilIfZeroValue(true),
+								EnableCloudwatchLogsExports: toStringPtrArray(
+									testCloudWatchLog,
+									testOtherCloudWatchLog,
+								),
+								Engine:                     pointer.ToOrNilIfZeroValue(testEngine),
+								EngineVersion:              pointer.ToOrNilIfZeroValue(testEngineVersion),
+								KmsKeyId:                   pointer.ToOrNilIfZeroValue(testKMSKeyID),
+								MasterUsername:             pointer.ToOrNilIfZeroValue(testMasterUserName),
+								MasterUserPassword:         pointer.ToOrNilIfZeroValue(testMasterUserPassword),
+								Port:                       pointer.ToIntAsInt64(testPort),
+								PreSignedUrl:               pointer.ToOrNilIfZeroValue(testPresignedURL),
+								PreferredBackupWindow:      pointer.ToOrNilIfZeroValue(testPreferredBackupWindow),
+								PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+								StorageEncrypted:           pointer.ToOrNilIfZeroValue(true),
+								VpcSecurityGroupIds: toStringPtrArray(
+									testVpcSecurityGroup,
+									testOtherVpcSecurityGroup,
+								),
+								Tags: []*docdb.Tag{
+									{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 								},
 							},
 						},
@@ -1989,7 +2639,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.CreateDBClusterInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -2007,11 +2657,11 @@ func TestCreate(t *testing.T) {
 					MockCreateDBClusterWithContext: func(c context.Context, cdpgi *docdb.CreateDBClusterInput, o []request.Option) (*docdb.CreateDBClusterOutput, error) {
 						return &docdb.CreateDBClusterOutput{
 							DBCluster: &docdb.DBCluster{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-								DBClusterArn:        awsclient.String(testDBClusterArn),
-								Endpoint:            awsclient.String(testEndpoint),
-								ReaderEndpoint:      awsclient.String(testReaderEndpoint),
-								Port:                awsclient.Int64(testPort),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:        pointer.ToOrNilIfZeroValue(testDBClusterArn),
+								Endpoint:            pointer.ToOrNilIfZeroValue(testEndpoint),
+								ReaderEndpoint:      pointer.ToOrNilIfZeroValue(testReaderEndpoint),
+								Port:                pointer.ToIntAsInt64(testPort),
 							},
 						}, nil
 					},
@@ -2051,7 +2701,7 @@ func TestCreate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -2096,9 +2746,9 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DeleteDBClusterInput{
-								DBClusterIdentifier:       awsclient.String(testDBClusterIdentifier),
-								FinalDBSnapshotIdentifier: awsclient.String(testFinalDBSnapshotIdentifier),
-								SkipFinalSnapshot:         awsclient.Bool(true),
+								DBClusterIdentifier:       pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								FinalDBSnapshotIdentifier: pointer.ToOrNilIfZeroValue(testFinalDBSnapshotIdentifier),
+								SkipFinalSnapshot:         pointer.ToOrNilIfZeroValue(true),
 							},
 						},
 					},
@@ -2129,7 +2779,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DeleteDBClusterInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 							},
 						},
 					},
@@ -2142,7 +2792,7 @@ func TestDelete(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			opts := []option{setupExternal}
 			e := newExternal(tc.args.kube, tc.args.docdb, opts)
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
@@ -2150,7 +2800,7 @@ func TestDelete(t *testing.T) {
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -2169,14 +2819,25 @@ func TestUpdate(t *testing.T) {
 		args
 		want
 	}{
-		"SuccessfulUpdate": {
+		"SuccessfulRegularUpdate": {
 			args: args{
 				docdb: &fake.MockDocDBClient{
 					MockModifyDBClusterWithContext: func(c context.Context, mdpgi *docdb.ModifyDBClusterInput, o []request.Option) (*docdb.ModifyDBClusterOutput, error) {
 						return &docdb.ModifyDBClusterOutput{
 							DBCluster: &docdb.DBCluster{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-								DBClusterArn:        awsclient.String(testDBClusterArn),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:        pointer.ToOrNilIfZeroValue(testDBClusterArn),
+							},
+						}, nil
+					},
+					MockDescribeDBClustersWithContext: func(ctx context.Context, ddi *docdb.DescribeDBClustersInput, o []request.Option) (*docdb.DescribeDBClustersOutput, error) {
+						return &docdb.DescribeDBClustersOutput{
+							DBClusters: []*docdb.DBCluster{
+								{
+									DBClusterIdentifier:     pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									DBClusterParameterGroup: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
+									EngineVersion:           pointer.ToOrNilIfZeroValue(testEngineVersion),
+								},
 							},
 						}, nil
 					},
@@ -2184,8 +2845,8 @@ func TestUpdate(t *testing.T) {
 						return &docdb.ListTagsForResourceOutput{
 							TagList: []*docdb.Tag{
 								{
-									Key:   awsclient.String(testOtherOtherTagKey),
-									Value: awsclient.String(testOtherOtherTagValue),
+									Key:   pointer.ToOrNilIfZeroValue(testOtherOtherTagKey),
+									Value: pointer.ToOrNilIfZeroValue(testOtherOtherTagValue),
 								},
 							},
 						}, nil
@@ -2218,8 +2879,8 @@ func TestUpdate(t *testing.T) {
 					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
 					withStorageEncrypted(true),
 					withTags(
-						&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-						&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 					),
 					withVpcSecurityGroupIds(
 						testVpcSecurityGroup,
@@ -2249,8 +2910,8 @@ func TestUpdate(t *testing.T) {
 					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
 					withStorageEncrypted(true),
 					withTags(
-						&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-						&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 					),
 					withVpcSecurityGroupIds(
 						testVpcSecurityGroup,
@@ -2262,14 +2923,14 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBClusterInput{
-								DBClusterIdentifier:         awsclient.String(testDBClusterIdentifier),
-								BackupRetentionPeriod:       awsclient.Int64(testBackupRetentionPeriod),
-								DBClusterParameterGroupName: awsclient.String(testDBClusterParameterGroupName),
-								DeletionProtection:          awsclient.Bool(true),
-								EngineVersion:               awsclient.String(testEngineVersion),
-								Port:                        awsclient.Int64(testPort),
-								PreferredBackupWindow:       awsclient.String(testPreferredBackupWindow),
-								PreferredMaintenanceWindow:  awsclient.String(testPreferredMaintenanceWindow),
+								DBClusterIdentifier:         pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								BackupRetentionPeriod:       pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroupName: nil,
+								DeletionProtection:          pointer.ToOrNilIfZeroValue(true),
+								EngineVersion:               nil,
+								Port:                        pointer.ToIntAsInt64(testPort),
+								PreferredBackupWindow:       pointer.ToOrNilIfZeroValue(testPreferredBackupWindow),
+								PreferredMaintenanceWindow:  pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
 								VpcSecurityGroupIds: toStringPtrArray(
 									testVpcSecurityGroup,
 									testOtherVpcSecurityGroup,
@@ -2281,20 +2942,28 @@ func TestUpdate(t *testing.T) {
 							},
 						},
 					},
+					DescribeDBClustersWithContext: []*fake.CallDescribeDBClustersWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.DescribeDBClustersInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+							},
+						},
+					},
 					ListTagsForResource: []*fake.CallListTagsForResource{
 						{
 							I: &docdb.ListTagsForResourceInput{
-								ResourceName: awsclient.String(testDBClusterArn),
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
 							},
 						},
 					},
 					AddTagsToResource: []*fake.CallAddTagsToResource{
 						{
 							I: &docdb.AddTagsToResourceInput{
-								ResourceName: awsclient.String(testDBClusterArn),
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
 								Tags: []*docdb.Tag{
-									{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-									{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
 								},
 							},
 						},
@@ -2302,9 +2971,184 @@ func TestUpdate(t *testing.T) {
 					RemoveTagsFromResource: []*fake.CallRemoveTagsFromResource{
 						{
 							I: &docdb.RemoveTagsFromResourceInput{
-								ResourceName: awsclient.String(testDBClusterArn),
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
 								TagKeys: []*string{
-									awsclient.String(testOtherOtherTagKey),
+									pointer.ToOrNilIfZeroValue(testOtherOtherTagKey),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"Successful_EngineVersion_DBClusterParameterGroupName_Update": {
+			args: args{
+				docdb: &fake.MockDocDBClient{
+					MockModifyDBClusterWithContext: func(c context.Context, mdpgi *docdb.ModifyDBClusterInput, o []request.Option) (*docdb.ModifyDBClusterOutput, error) {
+						return &docdb.ModifyDBClusterOutput{
+							DBCluster: &docdb.DBCluster{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:        pointer.ToOrNilIfZeroValue(testDBClusterArn),
+							},
+						}, nil
+					},
+					MockDescribeDBClustersWithContext: func(ctx context.Context, ddi *docdb.DescribeDBClustersInput, o []request.Option) (*docdb.DescribeDBClustersOutput, error) {
+						return &docdb.DescribeDBClustersOutput{
+							DBClusters: []*docdb.DBCluster{
+								{
+									DBClusterIdentifier:     pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+									DBClusterParameterGroup: pointer.ToOrNilIfZeroValue(testDBClusterParameterGroupName),
+									EngineVersion:           pointer.ToOrNilIfZeroValue(testEngineVersion),
+								},
+							},
+						}, nil
+					},
+					MockListTagsForResource: func(ltfri *docdb.ListTagsForResourceInput) (*docdb.ListTagsForResourceOutput, error) {
+						return &docdb.ListTagsForResourceOutput{
+							TagList: []*docdb.Tag{
+								{
+									Key:   pointer.ToOrNilIfZeroValue(testOtherOtherTagKey),
+									Value: pointer.ToOrNilIfZeroValue(testOtherOtherTagValue),
+								},
+							},
+						}, nil
+					},
+					MockAddTagsToResource: func(attri *docdb.AddTagsToResourceInput) (*docdb.AddTagsToResourceOutput, error) {
+						return &docdb.AddTagsToResourceOutput{}, nil
+					},
+					MockRemoveTagsFromResource: func(rtfri *docdb.RemoveTagsFromResourceInput) (*docdb.RemoveTagsFromResourceOutput, error) {
+						return &docdb.RemoveTagsFromResourceOutput{}, nil
+					},
+				},
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withAvailabilityZones(
+						testAvailabilityZone,
+						testOtherAvailabilityZone,
+					),
+					withBackupRetentionPeriod(testBackupRetentionPeriod),
+					withDBClusterParameterGroupName(testOtherDBClusterParameterGroupName),
+					withDBSubnetGroup(testDBSubnetGroupName),
+					withDeletionProtection(true),
+					withEngine(testEngine),
+					withEngineVersion(testOtherEngineVersion),
+					withAllowMajorVersionUpgrade(true),
+					withKmsKeyID(testKMSKeyID),
+					withMasterUserName(testMasterUserName),
+					withPort(testPort),
+					withPreSignedURL(testPresignedURL),
+					withPreferredBackupWindow(testPreferredBackupWindow),
+					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
+					withStorageEncrypted(true),
+					withTags(
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+					),
+					withVpcSecurityGroupIds(
+						testVpcSecurityGroup,
+						testOtherVpcSecurityGroup,
+					),
+				),
+			},
+			want: want{
+				cr: instance(
+					withDBClusterIdentifier(testDBClusterIdentifier),
+					withExternalName(testDBClusterIdentifier),
+					withAvailabilityZones(
+						testAvailabilityZone,
+						testOtherAvailabilityZone,
+					),
+					withBackupRetentionPeriod(testBackupRetentionPeriod),
+					withDBClusterParameterGroupName(testOtherDBClusterParameterGroupName),
+					withDBSubnetGroup(testDBSubnetGroupName),
+					withDeletionProtection(true),
+					withEngine(testEngine),
+					withEngineVersion(testOtherEngineVersion),
+					withAllowMajorVersionUpgrade(true),
+					withKmsKeyID(testKMSKeyID),
+					withMasterUserName(testMasterUserName),
+					withPort(testPort),
+					withPreSignedURL(testPresignedURL),
+					withPreferredBackupWindow(testPreferredBackupWindow),
+					withPreferredMaintenanceWindow(testPreferredMaintenanceWindow),
+					withStorageEncrypted(true),
+					withTags(
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+						&svcapitypes.Tag{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+					),
+					withVpcSecurityGroupIds(
+						testVpcSecurityGroup,
+						testOtherVpcSecurityGroup,
+					),
+				),
+				docdb: fake.MockDocDBClientCall{
+					ModifyDBClusterWithContext: []*fake.CallModifyDBClusterWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.ModifyDBClusterInput{
+								AllowMajorVersionUpgrade:    pointer.ToOrNilIfZeroValue(true),
+								DBClusterIdentifier:         pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								BackupRetentionPeriod:       pointer.ToIntAsInt64(testBackupRetentionPeriod),
+								DBClusterParameterGroupName: nil,
+								DeletionProtection:          pointer.ToOrNilIfZeroValue(true),
+								EngineVersion:               nil,
+								Port:                        pointer.ToIntAsInt64(testPort),
+								PreferredBackupWindow:       pointer.ToOrNilIfZeroValue(testPreferredBackupWindow),
+								PreferredMaintenanceWindow:  pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+								VpcSecurityGroupIds: toStringPtrArray(
+									testVpcSecurityGroup,
+									testOtherVpcSecurityGroup,
+								),
+								CloudwatchLogsExportConfiguration: &docdb.CloudwatchLogsExportConfiguration{
+									DisableLogTypes: []*string{},
+									EnableLogTypes:  []*string{},
+								},
+							},
+						},
+						{ // Modify call for engineVersion/dbClusterParameterGroupName in postUpdate
+							Ctx: context.Background(),
+							I: &docdb.ModifyDBClusterInput{
+								AllowMajorVersionUpgrade:    pointer.ToOrNilIfZeroValue(true),
+								DBClusterIdentifier:         pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterParameterGroupName: pointer.ToOrNilIfZeroValue(testOtherDBClusterParameterGroupName),
+								EngineVersion:               pointer.ToOrNilIfZeroValue(testOtherEngineVersion),
+							},
+						},
+					},
+					DescribeDBClustersWithContext: []*fake.CallDescribeDBClustersWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.DescribeDBClustersInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+							},
+						},
+					},
+
+					ListTagsForResource: []*fake.CallListTagsForResource{
+						{
+							I: &docdb.ListTagsForResourceInput{
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
+							},
+						},
+					},
+					AddTagsToResource: []*fake.CallAddTagsToResource{
+						{
+							I: &docdb.AddTagsToResourceInput{
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
+								Tags: []*docdb.Tag{
+									{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)},
+									{Key: pointer.ToOrNilIfZeroValue(testOtherTagKey), Value: pointer.ToOrNilIfZeroValue(testOtherTagValue)},
+								},
+							},
+						},
+					},
+					RemoveTagsFromResource: []*fake.CallRemoveTagsFromResource{
+						{
+							I: &docdb.RemoveTagsFromResourceInput{
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
+								TagKeys: []*string{
+									pointer.ToOrNilIfZeroValue(testOtherOtherTagKey),
 								},
 							},
 						},
@@ -2318,8 +3162,17 @@ func TestUpdate(t *testing.T) {
 					MockModifyDBClusterWithContext: func(c context.Context, mdpgi *docdb.ModifyDBClusterInput, o []request.Option) (*docdb.ModifyDBClusterOutput, error) {
 						return &docdb.ModifyDBClusterOutput{
 							DBCluster: &docdb.DBCluster{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-								DBClusterArn:        awsclient.String(testDBClusterArn),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:        pointer.ToOrNilIfZeroValue(testDBClusterArn),
+							},
+						}, nil
+					},
+					MockDescribeDBClustersWithContext: func(ctx context.Context, ddi *docdb.DescribeDBClustersInput, o []request.Option) (*docdb.DescribeDBClustersOutput, error) {
+						return &docdb.DescribeDBClustersOutput{
+							DBClusters: []*docdb.DBCluster{
+								{
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								},
 							},
 						}, nil
 					},
@@ -2352,7 +3205,7 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBClusterInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 								CloudwatchLogsExportConfiguration: &docdb.CloudwatchLogsExportConfiguration{
 									DisableLogTypes: []*string{},
 									EnableLogTypes: toStringPtrArray(
@@ -2363,10 +3216,18 @@ func TestUpdate(t *testing.T) {
 							},
 						},
 					},
+					DescribeDBClustersWithContext: []*fake.CallDescribeDBClustersWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.DescribeDBClustersInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+							},
+						},
+					},
 					ListTagsForResource: []*fake.CallListTagsForResource{
 						{
 							I: &docdb.ListTagsForResourceInput{
-								ResourceName: awsclient.String(testDBClusterArn),
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
 							},
 						},
 					},
@@ -2379,8 +3240,17 @@ func TestUpdate(t *testing.T) {
 					MockModifyDBClusterWithContext: func(c context.Context, mdpgi *docdb.ModifyDBClusterInput, o []request.Option) (*docdb.ModifyDBClusterOutput, error) {
 						return &docdb.ModifyDBClusterOutput{
 							DBCluster: &docdb.DBCluster{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-								DBClusterArn:        awsclient.String(testDBClusterArn),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:        pointer.ToOrNilIfZeroValue(testDBClusterArn),
+							},
+						}, nil
+					},
+					MockDescribeDBClustersWithContext: func(ctx context.Context, ddi *docdb.DescribeDBClustersInput, o []request.Option) (*docdb.DescribeDBClustersOutput, error) {
+						return &docdb.DescribeDBClustersOutput{
+							DBClusters: []*docdb.DBCluster{
+								{
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								},
 							},
 						}, nil
 					},
@@ -2413,7 +3283,7 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBClusterInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 								CloudwatchLogsExportConfiguration: &docdb.CloudwatchLogsExportConfiguration{
 									DisableLogTypes: toStringPtrArray(
 										testCloudWatchLog,
@@ -2423,10 +3293,18 @@ func TestUpdate(t *testing.T) {
 							},
 						},
 					},
+					DescribeDBClustersWithContext: []*fake.CallDescribeDBClustersWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.DescribeDBClustersInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+							},
+						},
+					},
 					ListTagsForResource: []*fake.CallListTagsForResource{
 						{
 							I: &docdb.ListTagsForResourceInput{
-								ResourceName: awsclient.String(testDBClusterArn),
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
 							},
 						},
 					},
@@ -2439,8 +3317,17 @@ func TestUpdate(t *testing.T) {
 					MockModifyDBClusterWithContext: func(c context.Context, mdpgi *docdb.ModifyDBClusterInput, o []request.Option) (*docdb.ModifyDBClusterOutput, error) {
 						return &docdb.ModifyDBClusterOutput{
 							DBCluster: &docdb.DBCluster{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
-								DBClusterArn:        awsclient.String(testDBClusterArn),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								DBClusterArn:        pointer.ToOrNilIfZeroValue(testDBClusterArn),
+							},
+						}, nil
+					},
+					MockDescribeDBClustersWithContext: func(ctx context.Context, ddi *docdb.DescribeDBClustersInput, o []request.Option) (*docdb.DescribeDBClustersOutput, error) {
+						return &docdb.DescribeDBClustersOutput{
+							DBClusters: []*docdb.DBCluster{
+								{
+									DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+								},
 							},
 						}, nil
 					},
@@ -2477,7 +3364,7 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBClusterInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 								CloudwatchLogsExportConfiguration: &docdb.CloudwatchLogsExportConfiguration{
 									DisableLogTypes: toStringPtrArray(
 										testCloudWatchLog,
@@ -2489,10 +3376,18 @@ func TestUpdate(t *testing.T) {
 							},
 						},
 					},
+					DescribeDBClustersWithContext: []*fake.CallDescribeDBClustersWithContext{
+						{
+							Ctx: context.Background(),
+							I: &docdb.DescribeDBClustersInput{
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
+							},
+						},
+					},
 					ListTagsForResource: []*fake.CallListTagsForResource{
 						{
 							I: &docdb.ListTagsForResourceInput{
-								ResourceName: awsclient.String(testDBClusterArn),
+								ResourceName: pointer.ToOrNilIfZeroValue(testDBClusterArn),
 							},
 						},
 					},
@@ -2522,7 +3417,7 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBClusterInput{
-								DBClusterIdentifier: awsclient.String(testDBClusterIdentifier),
+								DBClusterIdentifier: pointer.ToOrNilIfZeroValue(testDBClusterIdentifier),
 								CloudwatchLogsExportConfiguration: &docdb.CloudwatchLogsExportConfiguration{
 									DisableLogTypes: []*string{},
 									EnableLogTypes:  []*string{},
@@ -2550,75 +3445,7 @@ func TestUpdate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestInitialize(t *testing.T) {
-	type want struct {
-		cr  *svcapitypes.DBCluster
-		err error
-	}
-
-	cases := map[string]struct {
-		args
-		want
-	}{
-		"Successful": {
-			args: args{
-				cr: instance(withTags(
-					&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-					&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
-				)),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: instance(withTags(
-					mergeTags(
-						[]*svcapitypes.Tag{
-							{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-							{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
-						},
-						svcutils.GetExternalTags(instance()),
-					)...,
-				)),
-			},
-		},
-		"UpdateFailed": {
-			args: args{
-				cr: instance(withTags(
-					&svcapitypes.Tag{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-					&svcapitypes.Tag{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
-				)),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errors.New(testErrBoom))},
-			},
-			want: want{
-				cr: instance(withTags(
-					mergeTags(
-						[]*svcapitypes.Tag{
-							{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)},
-							{Key: awsclient.String(testOtherTagKey), Value: awsclient.String(testOtherTagValue)},
-						},
-						svcutils.GetExternalTags(instance()),
-					)...,
-				)),
-				err: awsclient.Wrap(errors.New(testErrBoom), errKubeUpdateFailed),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			e := &tagger{kube: tc.kube}
-			err := e.Initialize(context.Background(), tc.args.cr)
-
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

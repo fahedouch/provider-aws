@@ -5,26 +5,20 @@ import (
 	"encoding/json"
 	"net/url"
 
-	"github.com/aws/smithy-go/document"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/smithy-go/document"
+	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/mitchellh/copystructure"
-	"github.com/pkg/errors"
-
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
-)
-
-const (
-	errCheckUpToDate      = "unable to determine if external resource is up to date"
-	errPolicyJSONEscape   = "malformed AssumeRolePolicyDocument JSON"
-	errPolicyJSONUnescape = "malformed AssumeRolePolicyDocument escaping"
+	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam/convert"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/policy"
 )
 
 // RoleClient is the external client used for Role Custom Resource
@@ -33,6 +27,8 @@ type RoleClient interface {
 	CreateRole(ctx context.Context, input *iam.CreateRoleInput, opts ...func(*iam.Options)) (*iam.CreateRoleOutput, error)
 	DeleteRole(ctx context.Context, input *iam.DeleteRoleInput, opts ...func(*iam.Options)) (*iam.DeleteRoleOutput, error)
 	UpdateRole(ctx context.Context, input *iam.UpdateRoleInput, opts ...func(*iam.Options)) (*iam.UpdateRoleOutput, error)
+	PutRolePermissionsBoundary(ctx context.Context, params *iam.PutRolePermissionsBoundaryInput, optFns ...func(*iam.Options)) (*iam.PutRolePermissionsBoundaryOutput, error)
+	DeleteRolePermissionsBoundary(ctx context.Context, params *iam.DeleteRolePermissionsBoundaryInput, optFns ...func(*iam.Options)) (*iam.DeleteRolePermissionsBoundaryOutput, error)
 	UpdateAssumeRolePolicy(ctx context.Context, input *iam.UpdateAssumeRolePolicyInput, opts ...func(*iam.Options)) (*iam.UpdateAssumeRolePolicyOutput, error)
 	TagRole(ctx context.Context, input *iam.TagRoleInput, opts ...func(*iam.Options)) (*iam.TagRoleOutput, error)
 	UntagRole(ctx context.Context, input *iam.UntagRoleInput, opts ...func(*iam.Options)) (*iam.UntagRoleOutput, error)
@@ -69,26 +65,44 @@ func GenerateCreateRoleInput(name string, p *v1beta1.RoleParameters) *iam.Create
 
 // GenerateRoleObservation is used to produce RoleExternalStatus from iamtypes.Role
 func GenerateRoleObservation(role iamtypes.Role) v1beta1.RoleExternalStatus {
-	return v1beta1.RoleExternalStatus{
-		ARN:    aws.ToString(role.Arn),
-		RoleID: aws.ToString(role.RoleId),
+	o := v1beta1.RoleExternalStatus{
+		ARN:        pointer.StringValue(role.Arn),
+		CreateDate: pointer.TimeToMetaTime(role.CreateDate),
+		RoleID:     pointer.StringValue(role.RoleId),
 	}
+
+	if role.RoleLastUsed != nil {
+		o.RoleLastUsed = &v1beta1.RoleLastUsed{
+			LastUsedDate: pointer.TimeToMetaTime(role.RoleLastUsed.LastUsedDate),
+			Region:       role.RoleLastUsed.Region,
+		}
+	}
+
+	return o
 }
 
 // GenerateRole assigns the in RoleParamters to role.
 func GenerateRole(in v1beta1.RoleParameters, role *iamtypes.Role) error {
-
-	if in.AssumeRolePolicyDocument != "" {
-		s, err := awsclients.CompactAndEscapeJSON(in.AssumeRolePolicyDocument)
-		if err != nil {
-			return errors.Wrap(err, errPolicyJSONEscape)
+	// iamtypes.Role has url-encoded policy document, while RoleParameters has plain.
+	// Assign policy from `in` only if it is different from the one in `role`.
+	if escapedPolicyDoc := role.AssumeRolePolicyDocument; escapedPolicyDoc != nil {
+		policyDoc, err := url.QueryUnescape(*escapedPolicyDoc)
+		if err != nil || !policy.ArePolicyDocumentsEqual(policyDoc, in.AssumeRolePolicyDocument) {
+			role.AssumeRolePolicyDocument = nil
 		}
-
-		role.AssumeRolePolicyDocument = &s
 	}
+	if role.AssumeRolePolicyDocument == nil && in.AssumeRolePolicyDocument != "" {
+		role.AssumeRolePolicyDocument = ptr.To(url.QueryEscape(in.AssumeRolePolicyDocument))
+	}
+
 	role.Description = in.Description
 	role.MaxSessionDuration = in.MaxSessionDuration
 	role.Path = in.Path
+	if in.PermissionsBoundary != nil {
+		role.PermissionsBoundary = &iamtypes.AttachedPermissionsBoundary{
+			PermissionsBoundaryArn: in.PermissionsBoundary,
+		}
+	}
 
 	if len(in.Tags) != 0 {
 		role.Tags = make([]iamtypes.Tag, len(in.Tags))
@@ -108,13 +122,13 @@ func LateInitializeRole(in *v1beta1.RoleParameters, role *iamtypes.Role) {
 	if role == nil {
 		return
 	}
-	in.AssumeRolePolicyDocument = awsclients.LateInitializeString(in.AssumeRolePolicyDocument, role.AssumeRolePolicyDocument)
-	in.Description = awsclients.LateInitializeStringPtr(in.Description, role.Description)
-	in.MaxSessionDuration = awsclients.LateInitializeInt32Ptr(in.MaxSessionDuration, role.MaxSessionDuration)
-	in.Path = awsclients.LateInitializeStringPtr(in.Path, role.Path)
+	in.AssumeRolePolicyDocument = pointer.LateInitializeValueFromPtr(in.AssumeRolePolicyDocument, role.AssumeRolePolicyDocument)
+	in.Description = pointer.LateInitialize(in.Description, role.Description)
+	in.MaxSessionDuration = pointer.LateInitialize(in.MaxSessionDuration, role.MaxSessionDuration)
+	in.Path = pointer.LateInitialize(in.Path, role.Path)
 
 	if role.PermissionsBoundary != nil {
-		in.PermissionsBoundary = awsclients.LateInitializeStringPtr(in.PermissionsBoundary, role.PermissionsBoundary.PermissionsBoundaryArn)
+		in.PermissionsBoundary = pointer.LateInitialize(in.PermissionsBoundary, role.PermissionsBoundary.PermissionsBoundaryArn)
 	}
 
 	if in.Tags == nil && role.Tags != nil {
@@ -131,7 +145,7 @@ func CreatePatch(in *iamtypes.Role, target *v1beta1.RoleParameters) (*v1beta1.Ro
 	currentParams := &v1beta1.RoleParameters{}
 	LateInitializeRole(currentParams, in)
 
-	jsonPatch, err := awsclients.CreateJSONPatch(currentParams, target)
+	jsonPatch, err := jsonpatch.CreateJSONPatch(currentParams, target)
 	if err != nil {
 		return nil, err
 	}
@@ -142,58 +156,22 @@ func CreatePatch(in *iamtypes.Role, target *v1beta1.RoleParameters) (*v1beta1.Ro
 	return patch, nil
 }
 
-func isAssumeRolePolicyUpToDate(a, b *string) (bool, error) {
-	if a == nil || b == nil {
-		return a == b, nil
-	}
-
-	jsonA, err := url.QueryUnescape(*a)
-	if err != nil {
-		return false, errors.Wrap(err, errPolicyJSONUnescape)
-	}
-
-	jsonB, err := url.QueryUnescape(*b)
-	if err != nil {
-		return false, errors.Wrap(err, errPolicyJSONUnescape)
-	}
-
-	return awsclients.IsPolicyUpToDate(&jsonA, &jsonB), nil
-}
-
 // IsRoleUpToDate checks whether there is a change in any of the modifiable fields in role.
 func IsRoleUpToDate(in v1beta1.RoleParameters, observed iamtypes.Role) (bool, string, error) {
-	generated, err := copystructure.Copy(&observed)
-	if err != nil {
-		return true, "", errors.Wrap(err, errCheckUpToDate)
-	}
-	desired, ok := generated.(*iamtypes.Role)
-	if !ok {
-		return true, "", errors.New(errCheckUpToDate)
-	}
-
-	if err = GenerateRole(in, desired); err != nil {
+	desired := (&convert.ConverterImpl{}).DeepCopyAWSRole(&observed)
+	if err := GenerateRole(in, desired); err != nil {
 		return false, "", err
 	}
 
-	policyUpToDate, err := isAssumeRolePolicyUpToDate(desired.AssumeRolePolicyDocument, observed.AssumeRolePolicyDocument)
-	if err != nil {
-		return false, "", err
-	}
-
-	diff := cmp.Diff(desired, &observed, cmpopts.IgnoreInterfaces(struct{ resource.AttributeReferencer }{}), cmpopts.IgnoreFields(observed, "AssumeRolePolicyDocument"), cmpopts.IgnoreTypes(document.NoSerde{}), cmpopts.SortSlices(lessTag))
-	if diff == "" && policyUpToDate {
+	diff := cmp.Diff(desired, &observed,
+		cmpopts.IgnoreInterfaces(struct{ resource.AttributeReferencer }{}),
+		cmpopts.IgnoreFields(observed, "CreateDate", "PermissionsBoundary.PermissionsBoundaryType", "RoleLastUsed"),
+		cmpopts.IgnoreTypes(document.NoSerde{}), cmpopts.SortSlices(lessTag))
+	if diff == "" {
 		return true, diff, nil
 	}
 
 	diff = "Found observed difference in IAM role\n" + diff
-
-	// Add extra logging for AssumeRolePolicyDocument because cmp.Diff doesn't show the full difference
-	if !policyUpToDate {
-		diff += "\ndesired assume role policy: "
-		diff += *desired.AssumeRolePolicyDocument
-		diff += "\nobserved assume role policy: "
-		diff += *observed.AssumeRolePolicyDocument
-	}
 	return false, diff, nil
 }
 

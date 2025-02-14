@@ -22,12 +22,6 @@ import (
 	svcsdk "github.com/aws/aws-sdk-go/service/batch"
 	"github.com/aws/aws-sdk-go/service/batch/batchiface"
 	"github.com/aws/smithy-go"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -35,13 +29,20 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/batch/manualv1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/batch"
-
+	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/batch/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -62,19 +63,31 @@ func SetupJobDefinition(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient()}),
+		managed.WithInitializers(&externalNameGenerator{kube: mgr.GetClient()}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.JobDefinitionGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.JobDefinition{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.JobDefinitionGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient()}),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient()), &externalNameGenerator{kube: mgr.GetClient()}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -86,7 +99,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errNotBatchJobDefinition)
 	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
@@ -106,10 +119,10 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	resp, err := e.client.DescribeJobDefinitionsWithContext(ctx, &svcsdk.DescribeJobDefinitionsInput{
 		JobDefinitionName: &cr.Name,
-		Status:            awsclient.String("ACTIVE"), // to not get an older, inactive version/revision before we finish create!
+		Status:            pointer.ToOrNilIfZeroValue("ACTIVE"), // to not get an older, inactive version/revision before we finish create!
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(isErrorNotFound, err), errDescribeJobDefinition)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(isErrorNotFound, err), errDescribeJobDefinition)
 	}
 	if len(resp.JobDefinitions) == 0 {
 		return managed.ExternalObservation{ResourceExists: false}, nil
@@ -122,11 +135,11 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	cr.Status.AtProvider = currentJobDefinition.Status.AtProvider
 
-	switch awsclient.StringValue(cr.Status.AtProvider.Status) {
+	switch pointer.StringValue(cr.Status.AtProvider.Status) {
 	case "ACTIVE":
-		cr.SetConditions(xpv1.Available().WithMessage(awsclient.StringValue(resp.JobDefinitions[0].Status)))
+		cr.SetConditions(xpv1.Available().WithMessage(pointer.StringValue(resp.JobDefinitions[0].Status)))
 	case "INACTIVE":
-		cr.SetConditions(xpv1.Unavailable().WithMessage(awsclient.StringValue(resp.JobDefinitions[0].Status) + " INACTIVE is considered deleted"))
+		cr.SetConditions(xpv1.Unavailable().WithMessage(pointer.StringValue(resp.JobDefinitions[0].Status) + " INACTIVE is considered deleted"))
 		return managed.ExternalObservation{ResourceExists: false}, nil
 		// INACTIVE JobDefinitions are only permanently deleted by AWS after 180 days.
 		// These JDs could only be used to make a revision (copy/clone). Or to edit tags.
@@ -154,7 +167,7 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	cr.Status.SetConditions(xpv1.Creating())
 
 	_, err := e.client.RegisterJobDefinitionWithContext(ctx, generateRegisterJobDefinitionInput(cr))
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errRegisterJobDefinition)
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errRegisterJobDefinition)
 }
 
 func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
@@ -169,29 +182,34 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, svcutils.UpdateTagsForResource(ctx, e.client, cr.Spec.ForProvider.Tags, cr.Status.AtProvider.JobDefinitionArn)
 }
 
-func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*svcapitypes.JobDefinition)
 	if !ok {
-		return errors.New(errNotBatchJobDefinition)
+		return managed.ExternalDelete{}, errors.New(errNotBatchJobDefinition)
 	}
 
-	if cr.Status.AtProvider.Status == awsclient.String("INACTIVE") {
-		return nil
+	if cr.Status.AtProvider.Status == pointer.ToOrNilIfZeroValue("INACTIVE") {
+		return managed.ExternalDelete{}, nil
 	}
 	cr.Status.SetConditions(xpv1.Deleting())
 
 	_, err := e.client.DeregisterJobDefinitionWithContext(ctx, generateDeregisterJobDefinitionInput(cr))
-	return awsclient.Wrap(resource.Ignore(isErrorNotFound, err), errDeregisterJobDefinition)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(isErrorNotFound, err), errDeregisterJobDefinition)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 func (e *external) lateInitialize(spec, current *svcapitypes.JobDefinitionParameters) {
-	// spec.PlatformCapabilities = awsclient.LateInitializeStringPtrSlice(spec.PlatformCapabilities, current.PlatformCapabilities)
-	// spec.PropagateTags = awsclient.LateInitializeBoolPtr(spec.PropagateTags, current.PropagateTags)
+	// spec.PlatformCapabilities = pointer.LateInitializeSlice(spec.PlatformCapabilities, current.PlatformCapabilities)
+	// spec.PropagateTags = pointer.LateInitialize(spec.PropagateTags, current.PropagateTags)
 	// ^ doc hints default value, however these fields (also in AWS Console) stay empty...
 
 	if current.ContainerProperties != nil {
 
-		if cmp.Equal(spec.PlatformCapabilities, []*string{awsclient.String(svcsdk.PlatformCapabilityFargate)}) && spec.ContainerProperties.FargatePlatformConfiguration == nil {
+		if cmp.Equal(spec.PlatformCapabilities, []*string{pointer.ToOrNilIfZeroValue(svcsdk.PlatformCapabilityFargate)}) && spec.ContainerProperties.FargatePlatformConfiguration == nil {
 			spec.ContainerProperties.FargatePlatformConfiguration = &svcapitypes.FargatePlatformConfiguration{PlatformVersion: current.ContainerProperties.FargatePlatformConfiguration.PlatformVersion}
 		}
 	}

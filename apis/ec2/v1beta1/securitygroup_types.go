@@ -17,21 +17,16 @@ limitations under the License.
 package v1beta1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SecurityGroupParameters define the desired state of an AWS VPC Security
 // Group.
 type SecurityGroupParameters struct {
-	// TODO(muvaf): Region is a required field but in order to keep backward compatibility
-	// with old Provider type and not bear the cost of bumping to v1beta2, we're
-	// keeping it optional for now. Reconsider before v1beta2 or v1.
 
 	// Region is the region you'd like your SecurityGroup to be created in.
-	// +optional
-	Region *string `json:"region,omitempty"`
+	Region string `json:"region"`
 
 	// A description of the security group.
 	// +immutable
@@ -253,6 +248,66 @@ type SecurityGroupObservation struct {
 
 	// SecurityGroupID is the ID of the SecurityGroup.
 	SecurityGroupID string `json:"securityGroupID"`
+
+	// IngressRules of the observed SecurityGroup.
+	IngressRules []SecurityGroupRuleObservation `json:"ingressRules,omitempty"`
+
+	// EgressRules of the observed SecurityGroup.
+	EgressRules []SecurityGroupRuleObservation `json:"egressRules,omitempty"`
+}
+
+type SecurityGroupRuleObservation struct {
+	// ID of the security group rule.
+	ID *string `json:"id,omitempty"`
+
+	// CidrIpv4 range.
+	CidrIpv4 *string `json:"cidrIpv4,omitempty"`
+
+	// CidrIpv6 range.
+	CidrIpv6 *string `json:"cidrIpv6,omitempty"`
+
+	// The IP protocol name (tcp, udp, icmp, icmpv6) or number (see Protocol Numbers
+	// (http://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml)). Use
+	// -1 to specify all protocols.
+	IpProtocol *string `json:"ipProtocol,omitempty"`
+
+	// Description of this rule.
+	Description *string `json:"description,omitempty"`
+
+	// The start of port range for the TCP and UDP protocols, or an ICMP/ICMPv6 type. A
+	// value of -1 indicates all ICMP/ICMPv6 types. If you specify all ICMP/ICMPv6
+	// types, you must specify all codes.
+	FromPort *int32 `json:"fromPort,omitempty"`
+
+	// The ID of the prefix list.
+	PrefixListId *string `json:"prefixListId,omitempty"`
+
+	// Describes the security group that is referenced in the rule.
+	ReferencedGroupInfo *ReferencedSecurityGroup `json:"referencedGroupInfo,omitempty"`
+
+	// The end of port range for the TCP and UDP protocols, or an ICMP/ICMPv6 code. A
+	// value of -1 indicates all ICMP/ICMPv6 codes. If you specify all ICMP/ICMPv6
+	// types, you must specify all codes.
+	ToPort *int32 `json:"toPort,omitempty"`
+}
+
+// A ReferencedSecurityGroup describes the security group that is referenced in the security group rule.
+type ReferencedSecurityGroup struct {
+
+	// The ID of the security group.
+	GroupId *string `json:"groupId,omitempty"`
+
+	// The status of a VPC peering connection, if applicable.
+	PeeringStatus *string `json:"peeringStatus,omitempty"`
+
+	// The Amazon Web Services account ID.
+	UserId *string `json:"userId,omitempty"`
+
+	// The ID of the VPC.
+	VpcId *string `json:"vpcId,omitempty"`
+
+	// The ID of the VPC peering connection.
+	VpcPeeringConnectionId *string `json:"vpcPeeringConnectionId,omitempty"`
 }
 
 // A SecurityGroupStatus represents the observed state of a SecurityGroup.

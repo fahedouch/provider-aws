@@ -18,32 +18,32 @@ package role
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	awsiamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
-	"sigs.k8s.io/controller-runtime/pkg/client"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
 	// an arbitrary managed resource
 	unexpectedItem resource.Managed
 	roleName       = "some arbitrary name"
+	arn            = "some arn"
 	description    = "some description"
 	policy         = `{
 		"Version": "2012-10-17",
@@ -76,37 +76,19 @@ func withRoleName(s *string) roleModifier {
 	return func(r *v1beta1.Role) { meta.SetExternalName(r, *s) }
 }
 
+func withArn(s string) roleModifier {
+	return func(r *v1beta1.Role) { r.Status.AtProvider.ARN = s }
+}
+
 func withPolicy() roleModifier {
 	return func(r *v1beta1.Role) {
-		p, err := awsclient.CompactAndEscapeJSON(policy)
-		if err != nil {
-			return
-		}
-		r.Spec.ForProvider.AssumeRolePolicyDocument = p
+		r.Spec.ForProvider.AssumeRolePolicyDocument = url.QueryEscape(policy)
 	}
 }
 
 func withDescription() roleModifier {
 	return func(r *v1beta1.Role) {
 		r.Spec.ForProvider.Description = aws.String(description)
-	}
-}
-
-func withTags(tagMaps ...map[string]string) roleModifier {
-	var tagList []v1beta1.Tag
-	for _, tagMap := range tagMaps {
-		for k, v := range tagMap {
-			tagList = append(tagList, v1beta1.Tag{Key: k, Value: v})
-		}
-	}
-	return func(r *v1beta1.Role) {
-		r.Spec.ForProvider.Tags = tagList
-	}
-}
-
-func withGroupVersionKind() roleModifier {
-	return func(iamRole *v1beta1.Role) {
-		iamRole.TypeMeta.SetGroupVersionKind(v1beta1.RoleGroupVersionKind)
 	}
 }
 
@@ -136,7 +118,9 @@ func TestObserve(t *testing.T) {
 				iam: &fake.MockRoleClient{
 					MockGetRole: func(ctx context.Context, input *awsiam.GetRoleInput, opts []func(*awsiam.Options)) (*awsiam.GetRoleOutput, error) {
 						return &awsiam.GetRoleOutput{
-							Role: &awsiamtypes.Role{},
+							Role: &awsiamtypes.Role{
+								Arn: pointer.ToOrNilIfZeroValue(arn),
+							},
 						}, nil
 					},
 				},
@@ -145,10 +129,14 @@ func TestObserve(t *testing.T) {
 			want: want{
 				cr: role(
 					withRoleName(&roleName),
+					withArn(arn),
 					withConditions(xpv1.Available())),
 				result: managed.ExternalObservation{
 					ResourceExists:   true,
 					ResourceUpToDate: true,
+					ConnectionDetails: map[string][]byte{
+						"arn": []byte(arn),
+					},
 				},
 			},
 		},
@@ -172,7 +160,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  role(withRoleName(&roleName)),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 		"ResourceDoesNotExist": {
@@ -255,7 +243,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  role(withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -333,7 +321,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  role(withDescription()),
-				err: awsclient.Wrap(errBoom, errUpdate),
+				err: errorutils.Wrap(errBoom, errUpdate),
 			},
 		},
 		"ClientUpdatePolicyError": {
@@ -355,7 +343,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  role(withPolicy()),
-				err: awsclient.Wrap(errBoom, errUpdate),
+				err: errorutils.Wrap(errBoom, errUpdate),
 			},
 		},
 	}
@@ -423,7 +411,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  role(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 		"ResourceDoesNotExist": {
@@ -444,7 +432,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.iam}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
@@ -455,101 +443,4 @@ func TestDelete(t *testing.T) {
 		})
 	}
 
-}
-
-func TestInitialize(t *testing.T) {
-	type args struct {
-		cr   resource.Managed
-		kube client.Client
-	}
-	type want struct {
-		cr  *v1beta1.Role
-		err error
-	}
-
-	cases := map[string]struct {
-		args
-		want
-	}{
-		"Unexpected": {
-			args: args{
-				cr:   unexpectedItem,
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				err: errors.New(errUnexpectedObject),
-			},
-		},
-		"Successful": {
-			args: args{
-				cr:   role(withTags(map[string]string{"foo": "bar"})),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: role(withTags(resource.GetExternalTags(role()), map[string]string{"foo": "bar"})),
-			},
-		},
-		"DefaultTags": {
-			args: args{
-				cr:   role(withTags(map[string]string{"foo": "bar"}), withGroupVersionKind()),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: role(withTags(resource.GetExternalTags(role(withGroupVersionKind())), map[string]string{"foo": "bar"}), withGroupVersionKind()),
-			},
-		},
-		"UpdateDefaultTags": {
-			args: args{
-				cr: role(
-					withRoleName(&roleName),
-					withGroupVersionKind(),
-					withTags(map[string]string{resource.ExternalResourceTagKeyKind: "bar"})),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: role(
-					withRoleName(&roleName),
-					withGroupVersionKind(),
-					withTags(resource.GetExternalTags(role(withRoleName(&roleName), withGroupVersionKind())))),
-			},
-		},
-		"NoChange": {
-			args: args{
-				cr: role(
-					withRoleName(&roleName),
-					withGroupVersionKind(),
-					withTags(resource.GetExternalTags(role(withRoleName(&roleName), withGroupVersionKind())))),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: role(
-					withRoleName(&roleName),
-					withGroupVersionKind(),
-					withTags(resource.GetExternalTags(role(withRoleName(&roleName), withGroupVersionKind())))),
-			},
-		},
-		"UpdateFailed": {
-			args: args{
-				cr:   role(),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errBoom)},
-			},
-			want: want{
-				err: errors.Wrap(errBoom, errKubeUpdateFailed),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			e := &tagger{kube: tc.kube}
-			err := e.Initialize(context.Background(), tc.args.cr)
-
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.cr, tc.args.cr, cmpopts.SortSlices(func(a, b v1beta1.Tag) bool { return a.Key > b.Key })); err == nil && diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-		})
-	}
 }

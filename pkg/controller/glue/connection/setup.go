@@ -22,12 +22,6 @@ import (
 	svcsdk "github.com/aws/aws-sdk-go/service/glue"
 	"github.com/aws/aws-sdk-go/service/glue/glueiface"
 	svcsdksts "github.com/aws/aws-sdk-go/service/sts"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -35,12 +29,20 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/glue/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/glue"
+	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/glue/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -72,17 +74,29 @@ func SetupConnection(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.ConnectionGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Connection{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.ConnectionGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type hooks struct {
@@ -91,12 +105,12 @@ type hooks struct {
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Connection, obj *svcsdk.DeleteConnectionInput) (bool, error) {
-	obj.ConnectionName = awsclients.String(meta.GetExternalName(cr))
+	obj.ConnectionName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Connection, obj *svcsdk.GetConnectionInput) error {
-	obj.Name = awsclients.String(meta.GetExternalName(cr))
+	obj.Name = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -112,21 +126,14 @@ func postObserve(ctx context.Context, cr *svcapitypes.Connection, obj *svcsdk.Ge
 	return obs, nil
 }
 
-func (h *hooks) isUpToDate(cr *svcapitypes.Connection, resp *svcsdk.GetConnectionOutput) (bool, error) {
-
-	// no checks needed if user deletes the resource
-	// ensures that an error (e.g. missing ARN) here does not prevent deletion
-	if meta.WasDeleted(cr) {
-		return true, nil
-	}
-
+func (h *hooks) isUpToDate(_ context.Context, cr *svcapitypes.Connection, resp *svcsdk.GetConnectionOutput) (bool, string, error) {
 	currentParams := customGenerateConnection(resp).Spec.ForProvider
 
-	if !cmp.Equal(cr.Spec.ForProvider, currentParams, cmpopts.EquateEmpty(),
+	if diff := cmp.Diff(cr.Spec.ForProvider, currentParams, cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(&xpv1.Reference{}, &xpv1.Selector{}, []xpv1.Reference{}),
-		cmpopts.IgnoreFields(svcapitypes.ConnectionParameters{}, "Region", "Tags", "CatalogID")) {
+		cmpopts.IgnoreFields(svcapitypes.ConnectionParameters{}, "Region", "Tags", "CatalogID")); diff != "" {
 
-		return false, nil
+		return false, diff, nil
 	}
 	// CatalogID is updatable (and is given to UpdateConnectionInput),
 	// however the field seems not to be readable through the API for an isUpToDate-check
@@ -134,19 +141,20 @@ func (h *hooks) isUpToDate(cr *svcapitypes.Connection, resp *svcsdk.GetConnectio
 	// retrieve ARN and check if Tags need update
 	arn, err := h.getARN(cr)
 	if err != nil {
-		return true, err
+		return true, "", err
 	}
-	return svcutils.AreTagsUpToDate(h.client, cr.Spec.ForProvider.Tags, arn)
+	areTagsUpToDate, err := svcutils.AreTagsUpToDate(h.client, cr.Spec.ForProvider.Tags, arn)
+	return areTagsUpToDate, "", err
 }
 
 func preUpdate(_ context.Context, cr *svcapitypes.Connection, obj *svcsdk.UpdateConnectionInput) error {
-	obj.Name = awsclients.String(meta.GetExternalName(cr))
+	obj.Name = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 
 	if cr.Spec.ForProvider.CustomConnectionInput != nil {
 		obj.ConnectionInput = &svcsdk.ConnectionInput{
-			Name:                 awsclients.String(meta.GetExternalName(cr)),
+			Name:                 pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			ConnectionProperties: cr.Spec.ForProvider.CustomConnectionInput.ConnectionProperties,
-			ConnectionType:       awsclients.String(cr.Spec.ForProvider.CustomConnectionInput.ConnectionType),
+			ConnectionType:       pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.CustomConnectionInput.ConnectionType),
 			Description:          cr.Spec.ForProvider.CustomConnectionInput.Description,
 			MatchCriteria:        cr.Spec.ForProvider.CustomConnectionInput.MatchCriteria,
 		}
@@ -183,9 +191,9 @@ func preCreate(_ context.Context, cr *svcapitypes.Connection, obj *svcsdk.Create
 
 	if cr.Spec.ForProvider.CustomConnectionInput != nil {
 		obj.ConnectionInput = &svcsdk.ConnectionInput{
-			Name:                 awsclients.String(meta.GetExternalName(cr)),
+			Name:                 pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			ConnectionProperties: cr.Spec.ForProvider.CustomConnectionInput.ConnectionProperties,
-			ConnectionType:       awsclients.String(cr.Spec.ForProvider.CustomConnectionInput.ConnectionType),
+			ConnectionType:       pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.CustomConnectionInput.ConnectionType),
 			Description:          cr.Spec.ForProvider.CustomConnectionInput.Description,
 			MatchCriteria:        cr.Spec.ForProvider.CustomConnectionInput.MatchCriteria,
 		}
@@ -223,7 +231,7 @@ func (h *hooks) postCreate(ctx context.Context, cr *svcapitypes.Connection, obj 
 		return managed.ExternalCreation{}, err
 	}
 	annotation := map[string]string{
-		annotationARN: awsclients.StringValue(connectionARN),
+		annotationARN: pointer.StringValue(connectionARN),
 	}
 	meta.AddAnnotations(cr, annotation)
 
@@ -243,7 +251,7 @@ func customGenerateConnection(resp *svcsdk.GetConnectionOutput) *svcapitypes.Con
 	}
 
 	if resp.Connection.ConnectionType != nil {
-		cr.Spec.ForProvider.CustomConnectionInput.ConnectionType = awsclients.StringValue(resp.Connection.ConnectionType)
+		cr.Spec.ForProvider.CustomConnectionInput.ConnectionType = pointer.StringValue(resp.Connection.ConnectionType)
 	}
 
 	if resp.Connection.Description != nil {
@@ -315,11 +323,11 @@ func (h *hooks) buildARN(ctx context.Context, cr *svcapitypes.Connection) (*stri
 	var accountID string
 	// when CatalogID is provided, fetching the CallerID is unneeded
 	if cr.Spec.ForProvider.CatalogID != nil {
-		accountID = awsclients.StringValue(cr.Spec.ForProvider.CatalogID)
+		accountID = pointer.StringValue(cr.Spec.ForProvider.CatalogID)
 	} else {
-		sess, err := awsclients.GetConfigV1(ctx, h.kube, cr, cr.Spec.ForProvider.Region)
+		sess, err := connectaws.GetConfigV1(ctx, h.kube, cr, cr.Spec.ForProvider.Region)
 		if err != nil {
-			return nil, awsclients.Wrap(err, errBuildARN)
+			return nil, errorutils.Wrap(err, errBuildARN)
 		}
 
 		stsclient := svcsdksts.New(sess)
@@ -328,7 +336,7 @@ func (h *hooks) buildARN(ctx context.Context, cr *svcapitypes.Connection) (*stri
 		if err != nil {
 			return nil, err
 		}
-		accountID = awsclients.StringValue(callerID.Account)
+		accountID = pointer.StringValue(callerID.Account)
 	}
 	connectionARN := ("arn:aws:glue:" +
 		cr.Spec.ForProvider.Region + ":" +

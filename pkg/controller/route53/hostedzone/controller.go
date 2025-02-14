@@ -18,16 +18,11 @@ package hostedzone
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
+	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -35,12 +30,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	route53v1alpha1 "github.com/crossplane-contrib/provider-aws/apis/route53/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/hostedzone"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -50,6 +51,9 @@ const (
 	errDelete = "failed to delete the Hosted Zone resource"
 	errUpdate = "failed to update the Hosted Zone resource"
 	errGet    = "failed to get the Hosted Zone resource"
+
+	errListTags   = "cannot list tags"
+	errUpdateTags = "cannot update tags"
 )
 
 // SetupHostedZone adds a controller that reconciles Hosted Zones.
@@ -61,20 +65,32 @@ func SetupHostedZone(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: hostedzone.NewClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(
+		mgr, resource.ManagedKind(route53v1alpha1.HostedZoneGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&route53v1alpha1.HostedZone{}).
-		Complete(managed.NewReconciler(
-			mgr, resource.ManagedKind(route53v1alpha1.HostedZoneGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: hostedzone.NewClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithInitializers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -83,7 +99,7 @@ type connector struct {
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, awsclient.GlobalRegion)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, connectaws.GlobalRegion)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +109,9 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 type external struct {
 	kube   client.Client
 	client hostedzone.Client
+
+	tagsToAdd    []route53types.Tag
+	tagsToRemove []string
 }
 
 func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -107,12 +126,27 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		}, nil
 	}
 
+	hostedZoneID := aws.String(hostedzone.GetHostedZoneID(cr))
 	res, err := e.client.GetHostedZone(ctx, &route53.GetHostedZoneInput{
-		Id: aws.String(fmt.Sprintf("%s%s", hostedzone.IDPrefix, meta.GetExternalName(cr))),
+		Id: hostedZoneID,
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(hostedzone.IsNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(hostedzone.IsNotFound, err), errGet)
 	}
+
+	resTags, err := e.client.ListTagsForResource(ctx, &route53.ListTagsForResourceInput{
+		ResourceId:   aws.String(meta.GetExternalName(cr)), // id w/o prefix
+		ResourceType: route53types.TagResourceTypeHostedzone,
+	})
+	if err != nil {
+		return managed.ExternalObservation{}, errorutils.Wrap(err, errListTags)
+	}
+	if resTags.ResourceTagSet == nil {
+		resTags.ResourceTagSet = &route53types.ResourceTagSet{}
+	}
+
+	var areTagsUpToDate bool
+	e.tagsToAdd, e.tagsToRemove, areTagsUpToDate = hostedzone.AreTagsUpToDate(cr.Spec.ForProvider.Tags, resTags.ResourceTagSet.Tags)
 
 	current := cr.Spec.ForProvider.DeepCopy()
 	hostedzone.LateInitialize(&cr.Spec.ForProvider, res)
@@ -121,7 +155,7 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	cr.Status.SetConditions(xpv1.Available())
 	return managed.ExternalObservation{
 		ResourceExists:          true,
-		ResourceUpToDate:        hostedzone.IsUpToDate(cr.Spec.ForProvider, *res.HostedZone),
+		ResourceUpToDate:        hostedzone.IsUpToDate(cr.Spec.ForProvider, *res.HostedZone) && areTagsUpToDate,
 		ResourceLateInitialized: !cmp.Equal(current, &cr.Spec.ForProvider),
 	}, nil
 }
@@ -134,7 +168,7 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	res, err := e.client.CreateHostedZone(ctx, hostedzone.GenerateCreateHostedZoneInput(cr))
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 	id := strings.SplitAfter(aws.ToString(res.HostedZone.Id), hostedzone.IDPrefix)
 	if len(id) < 2 {
@@ -150,24 +184,55 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
 	}
 
+	hostedZoneID := hostedzone.GetHostedZoneID(cr)
 	_, err := e.client.UpdateHostedZoneComment(ctx,
-		hostedzone.GenerateUpdateHostedZoneCommentInput(cr.Spec.ForProvider, fmt.Sprintf("%s%s", hostedzone.IDPrefix, meta.GetExternalName(cr))),
+		hostedzone.GenerateUpdateHostedZoneCommentInput(cr.Spec.ForProvider, hostedZoneID),
 	)
+	if err != nil {
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
+	}
 
-	return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+	// Update tags if necessary
+	if len(e.tagsToAdd) > 0 || len(e.tagsToRemove) > 0 {
+
+		changeTagsInput := &route53.ChangeTagsForResourceInput{
+			ResourceId:   aws.String(meta.GetExternalName(cr)), // id w/o prefix
+			ResourceType: route53types.TagResourceTypeHostedzone,
+		}
+
+		// AWS throws error when provided AddTags or RemoveTagKeys are empty lists
+		if len(e.tagsToAdd) > 0 {
+			changeTagsInput.AddTags = e.tagsToAdd
+		}
+		if len(e.tagsToRemove) > 0 {
+			changeTagsInput.RemoveTagKeys = e.tagsToRemove
+		}
+
+		_, err := e.client.ChangeTagsForResource(ctx, changeTagsInput)
+		if err != nil {
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdateTags)
+		}
+	}
+
+	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*route53v1alpha1.HostedZone)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
 
 	_, err := e.client.DeleteHostedZone(ctx, &route53.DeleteHostedZoneInput{
-		Id: aws.String(fmt.Sprintf("%s%s", hostedzone.IDPrefix, meta.GetExternalName(cr))),
+		Id: aws.String(hostedzone.GetHostedZoneID(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(hostedzone.IsNotFound, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(hostedzone.IsNotFound, err), errDelete)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

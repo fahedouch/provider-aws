@@ -5,9 +5,6 @@ import (
 
 	svcsdk "github.com/aws/aws-sdk-go/service/kms"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/kms/kmsiface"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -15,11 +12,16 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/kms/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/policy"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupKey adds a controller that reconciles Key.
@@ -45,22 +47,34 @@ func SetupKey(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithInitializers(),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.KeyGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Key{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.KeyGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithInitializers(),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Key, obj *svcsdk.DescribeKeyInput) error {
-	obj.KeyId = awsclients.String(meta.GetExternalName(cr))
+	obj.KeyId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -70,7 +84,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Key, obj *svcsdk.DescribeKey
 	}
 
 	// Set Condition
-	switch awsclients.StringValue(obj.KeyMetadata.KeyState) {
+	switch pointer.StringValue(obj.KeyMetadata.KeyState) {
 	case string(svcapitypes.KeyState_Enabled):
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.KeyState_Disabled):
@@ -91,7 +105,7 @@ func postCreate(_ context.Context, cr *svcapitypes.Key, obj *svcsdk.CreateKeyOut
 	if err != nil {
 		return creation, err
 	}
-	meta.SetExternalName(cr, awsclients.StringValue(obj.KeyMetadata.KeyId))
+	meta.SetExternalName(cr, pointer.StringValue(obj.KeyMetadata.KeyId))
 	return managed.ExternalCreation{}, nil
 }
 
@@ -99,43 +113,38 @@ type updater struct {
 	client svcsdkapi.KMSAPI
 }
 
-func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.Key)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
-
+func (u *updater) update(ctx context.Context, cr *svcapitypes.Key) (managed.ExternalUpdate, error) {
 	if cr.Spec.ForProvider.Description != nil {
 		if _, err := u.client.UpdateKeyDescriptionWithContext(ctx, &svcsdk.UpdateKeyDescriptionInput{
-			KeyId:       awsclients.String(meta.GetExternalName(cr)),
+			KeyId:       pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			Description: cr.Spec.ForProvider.Description,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 	}
 
 	// Policy
 	if _, err := u.client.PutKeyPolicyWithContext(ctx, &svcsdk.PutKeyPolicyInput{
-		KeyId:      awsclients.String(meta.GetExternalName(cr)),
-		PolicyName: awsclients.String("default"),
+		KeyId:      pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+		PolicyName: pointer.ToOrNilIfZeroValue("default"),
 		Policy:     cr.Spec.ForProvider.Policy,
 	}); err != nil {
-		return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
-	if awsclients.BoolValue(cr.Spec.ForProvider.EnableKeyRotation) {
+	if pointer.BoolValue(cr.Spec.ForProvider.EnableKeyRotation) {
 		// EnableKeyRotation
 		if _, err := u.client.EnableKeyRotationWithContext(ctx, &svcsdk.EnableKeyRotationInput{
-			KeyId: awsclients.String(meta.GetExternalName(cr)),
+			KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 	} else {
 		// DisableKeyRotation
 		if _, err := u.client.DisableKeyRotationWithContext(ctx, &svcsdk.DisableKeyRotationInput{
-			KeyId: awsclients.String(meta.GetExternalName(cr)),
+			KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 	}
 
@@ -154,35 +163,35 @@ func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.Exte
 
 func (u *updater) updateTags(ctx context.Context, cr *svcapitypes.Key) error {
 	tagsOutput, err := u.client.ListResourceTagsWithContext(ctx, &svcsdk.ListResourceTagsInput{
-		KeyId: awsclients.String(meta.GetExternalName(cr)),
+		KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return awsclients.Wrap(err, errUpdate)
+		return errorutils.Wrap(err, errUpdate)
 	}
 
 	addTags, removeTags := diffTags(cr.Spec.ForProvider.Tags, tagsOutput.Tags)
 
 	if len(addTags) != 0 {
 		if _, err := u.client.TagResourceWithContext(ctx, &svcsdk.TagResourceInput{
-			KeyId: awsclients.String(meta.GetExternalName(cr)),
+			KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			Tags:  addTags,
 		}); err != nil {
-			return awsclients.Wrap(err, "cannot tag Key")
+			return errorutils.Wrap(err, "cannot tag Key")
 		}
 	}
 	if len(removeTags) != 0 {
 		if _, err := u.client.UntagResourceWithContext(ctx, &svcsdk.UntagResourceInput{
-			KeyId:   awsclients.String(meta.GetExternalName(cr)),
+			KeyId:   pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			TagKeys: removeTags,
 		}); err != nil {
-			return awsclients.Wrap(err, "cannot untag Key")
+			return errorutils.Wrap(err, "cannot untag Key")
 		}
 	}
 	return nil
 }
 
 func isUpToDateEnableDisable(cr *svcapitypes.Key) bool {
-	return awsclients.BoolValue(cr.Spec.ForProvider.Enabled) == awsclients.BoolValue(cr.Status.AtProvider.Enabled)
+	return pointer.BoolValue(cr.Spec.ForProvider.Enabled) == pointer.BoolValue(cr.Status.AtProvider.Enabled)
 }
 
 func (u *updater) enableDisableKey(ctx context.Context, cr *svcapitypes.Key) error {
@@ -190,17 +199,17 @@ func (u *updater) enableDisableKey(ctx context.Context, cr *svcapitypes.Key) err
 		return nil
 	}
 
-	if awsclients.BoolValue(cr.Spec.ForProvider.Enabled) {
+	if pointer.BoolValue(cr.Spec.ForProvider.Enabled) {
 		if _, err := u.client.EnableKeyWithContext(ctx, &svcsdk.EnableKeyInput{
-			KeyId: awsclients.String(meta.GetExternalName(cr)),
+			KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		}); err != nil {
-			return awsclients.Wrap(err, "cannot enable Key")
+			return errorutils.Wrap(err, "cannot enable Key")
 		}
 	} else {
 		if _, err := u.client.DisableKeyWithContext(ctx, &svcsdk.DisableKeyInput{
-			KeyId: awsclients.String(meta.GetExternalName(cr)),
+			KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		}); err != nil {
-			return awsclients.Wrap(err, "cannot disable Key")
+			return errorutils.Wrap(err, "cannot disable Key")
 		}
 	}
 	return nil
@@ -211,19 +220,15 @@ type deleter struct {
 }
 
 // schedule for deletion instead of delete
-func (d *deleter) delete(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Key)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (d *deleter) delete(ctx context.Context, cr *svcapitypes.Key) (managed.ExternalDelete, error) {
 	cr.SetConditions(xpv1.Deleting())
 	// special case: if key is scheduled for deletion, abort early and do not schedule for deletion again
 	if cr.Status.AtProvider.DeletionDate != nil {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 
 	req := &svcsdk.ScheduleKeyDeletionInput{
-		KeyId: awsclients.String(meta.GetExternalName(cr)),
+		KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	}
 
 	if cr.Spec.ForProvider.PendingWindowInDays != nil {
@@ -232,7 +237,7 @@ func (d *deleter) delete(ctx context.Context, mg resource.Managed) error {
 
 	_, err := d.client.ScheduleKeyDeletionWithContext(ctx, req)
 
-	return awsclients.Wrap(err, errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(err, errDelete)
 }
 
 type observer struct {
@@ -244,17 +249,17 @@ func (o *observer) lateInitialize(in *svcapitypes.KeyParameters, obj *svcsdk.Des
 	if in.Policy == nil {
 		resPolicy, err := o.client.GetKeyPolicy(&svcsdk.GetKeyPolicyInput{
 			KeyId:      obj.KeyMetadata.KeyId,
-			PolicyName: awsclients.String("default"),
+			PolicyName: pointer.ToOrNilIfZeroValue("default"),
 		})
 
 		if err != nil {
-			return awsclients.Wrap(err, "cannot get key policy")
+			return errorutils.Wrap(err, "cannot get key policy")
 		}
 
-		in.Policy = awsclients.LateInitializeStringPtr(in.Policy, resPolicy.Policy)
+		in.Policy = pointer.LateInitialize(in.Policy, resPolicy.Policy)
 	}
 
-	in.Enabled = awsclients.LateInitializeBoolPtr(in.Enabled, obj.KeyMetadata.Enabled)
+	in.Enabled = pointer.LateInitialize(in.Enabled, obj.KeyMetadata.Enabled)
 
 	if len(in.Tags) == 0 {
 		resTags, err := o.client.ListResourceTags(&svcsdk.ListResourceTagsInput{
@@ -262,7 +267,7 @@ func (o *observer) lateInitialize(in *svcapitypes.KeyParameters, obj *svcsdk.Des
 		})
 
 		if err != nil {
-			return awsclients.Wrap(err, "cannot list tags")
+			return errorutils.Wrap(err, "cannot list tags")
 		}
 
 		if len(resTags.Tags) > 0 {
@@ -278,72 +283,80 @@ func (o *observer) lateInitialize(in *svcapitypes.KeyParameters, obj *svcsdk.Des
 	return nil
 }
 
-func (o *observer) isUpToDate(cr *svcapitypes.Key, obj *svcsdk.DescribeKeyOutput) (bool, error) { // nolint:gocyclo
+func (o *observer) isUpToDate(_ context.Context, cr *svcapitypes.Key, obj *svcsdk.DescribeKeyOutput) (bool, string, error) { //nolint:gocyclo
 	// Description
 	if obj.KeyMetadata.Description != nil &&
 		cr.Spec.ForProvider.Description != nil &&
-		awsclients.StringValue(obj.KeyMetadata.Description) != awsclients.StringValue(cr.Spec.ForProvider.Description) {
-		return false, nil
+		pointer.StringValue(obj.KeyMetadata.Description) != pointer.StringValue(cr.Spec.ForProvider.Description) {
+		return false, "", nil
 	}
 
 	// Enabled
 	if !isUpToDateEnableDisable(cr) {
-		return false, nil
+		return false, "", nil
 	}
 
 	// KeyPolicy
 	resPolicy, err := o.client.GetKeyPolicy(&svcsdk.GetKeyPolicyInput{
-		KeyId:      awsclients.String(meta.GetExternalName(cr)),
-		PolicyName: awsclients.String("default"),
+		KeyId:      pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+		PolicyName: pointer.ToOrNilIfZeroValue("default"),
 	})
 	if err != nil {
-		return false, awsclients.Wrap(err, "cannot get key policy")
+		return false, "", errorutils.Wrap(err, "cannot get key policy")
 	}
-	if awsclients.StringValue(cr.Spec.ForProvider.Policy) != awsclients.StringValue(resPolicy.Policy) {
-		return false, nil
+	specPolicy, err := policy.ParsePolicyStringPtr(cr.Spec.ForProvider.Policy)
+	if err != nil {
+		return false, "", errors.Wrap(err, "cannot parse spec policy")
+	}
+	currentPolicy, err := policy.ParsePolicyStringPtr(resPolicy.Policy)
+	if err != nil {
+		return false, "", errors.Wrap(err, "cannot parse current policy")
+	}
+	if equal, diff := policy.ArePoliciesEqal(specPolicy, currentPolicy); !equal {
+		return false, "spec.forProvider.policy: " + diff, nil
 	}
 
 	// EnableKeyRotation
 	resRotation, err := o.client.GetKeyRotationStatus(&svcsdk.GetKeyRotationStatusInput{
-		KeyId: awsclients.String(meta.GetExternalName(cr)),
+		KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return false, awsclients.Wrap(err, "cannot get key rotation status")
+		return false, "", errorutils.Wrap(err, "cannot get key rotation status")
 	}
-	if awsclients.BoolValue(cr.Spec.ForProvider.EnableKeyRotation) != awsclients.BoolValue(resRotation.KeyRotationEnabled) {
-		return false, nil
+	if pointer.BoolValue(cr.Spec.ForProvider.EnableKeyRotation) != pointer.BoolValue(resRotation.KeyRotationEnabled) {
+		return false, "", nil
 	}
 
 	// Tags
 	resTags, err := o.client.ListResourceTags(&svcsdk.ListResourceTagsInput{
-		KeyId: awsclients.String(meta.GetExternalName(cr)),
+		KeyId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return false, awsclients.Wrap(err, "cannot list tags")
+		return false, "", errorutils.Wrap(err, "cannot list tags")
 	}
 	addTags, removeTags := diffTags(cr.Spec.ForProvider.Tags, resTags.Tags)
-	return len(addTags) == 0 && len(removeTags) == 0, nil
+	return len(addTags) == 0 && len(removeTags) == 0, "", nil
 }
 
 // returns which AWS Tags exist in the resource tags and which are outdated and should be removed
 func diffTags(spec []*svcapitypes.Tag, current []*svcsdk.Tag) (addTags []*svcsdk.Tag, remove []*string) {
 	addMap := make(map[string]string, len(spec))
 	for _, t := range spec {
-		addMap[awsclients.StringValue(t.TagKey)] = awsclients.StringValue(t.TagValue)
+		addMap[pointer.StringValue(t.TagKey)] = pointer.StringValue(t.TagValue)
 	}
 	removeMap := map[string]struct{}{}
 	for _, t := range current {
-		if addMap[awsclients.StringValue(t.TagKey)] == awsclients.StringValue(t.TagValue) {
-			delete(addMap, awsclients.StringValue(t.TagKey))
+		if addMap[pointer.StringValue(t.TagKey)] == pointer.StringValue(t.TagValue) {
+			delete(addMap, pointer.StringValue(t.TagKey))
 			continue
 		}
-		removeMap[awsclients.StringValue(t.TagKey)] = struct{}{}
+		removeMap[pointer.StringValue(t.TagKey)] = struct{}{}
 	}
 	for k, v := range addMap {
-		addTags = append(addTags, &svcsdk.Tag{TagKey: awsclients.String(k), TagValue: awsclients.String(v)})
+		addTags = append(addTags, &svcsdk.Tag{TagKey: pointer.ToOrNilIfZeroValue(k), TagValue: pointer.ToOrNilIfZeroValue(v)})
 	}
 	for k := range removeMap {
-		remove = append(remove, awsclients.String(k))
+		remove = append(remove, pointer.ToOrNilIfZeroValue(k))
 	}
 	return
 }

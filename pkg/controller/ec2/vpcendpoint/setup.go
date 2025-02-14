@@ -2,17 +2,11 @@ package vpcendpoint
 
 import (
 	"context"
-	"sort"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/ec2"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/ec2/ec2iface"
-	"github.com/pkg/errors"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -20,11 +14,16 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ec2/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	legacypolicy "github.com/crossplane-contrib/provider-aws/pkg/utils/policy/old"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupVPCEndpoint adds a controller that reconciles VPCEndpoint.
@@ -37,18 +36,30 @@ func SetupVPCEndpoint(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithInitializers(),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		cpresource.ManagedKind(svcapitypes.VPCEndpointGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(cpresource.DesiredStateChanged()).
 		For(&svcapitypes.VPCEndpoint{}).
-		Complete(managed.NewReconciler(mgr,
-			cpresource.ManagedKind(svcapitypes.VPCEndpointGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func setupExternal(e *external) {
@@ -70,7 +81,7 @@ type custom struct {
 
 func preCreate(_ context.Context, cr *svcapitypes.VPCEndpoint, obj *svcsdk.CreateVpcEndpointInput) error {
 	obj.VpcId = cr.Spec.ForProvider.VPCID
-	obj.ClientToken = awsclients.String(string(cr.UID))
+	obj.ClientToken = pointer.ToOrNilIfZeroValue(string(cr.UID))
 	// Clear SGs, RTs, and Subnets if they're empty
 	if len(cr.Spec.ForProvider.SecurityGroupIDs) == 0 {
 		obj.SecurityGroupIds = nil
@@ -109,15 +120,15 @@ func postObserve(_ context.Context, cr *svcapitypes.VPCEndpoint, resp *svcsdk.De
 	}
 
 	// Load DNS Entry as connection detail
-	if len(resp.VpcEndpoints[0].DnsEntries) != 0 && awsclients.StringValue(resp.VpcEndpoints[0].DnsEntries[0].DnsName) != "" {
+	if len(resp.VpcEndpoints[0].DnsEntries) != 0 && pointer.StringValue(resp.VpcEndpoints[0].DnsEntries[0].DnsName) != "" {
 		obs.ConnectionDetails = managed.ConnectionDetails{
-			xpv1.ResourceCredentialsSecretEndpointKey: []byte(awsclients.StringValue(resp.VpcEndpoints[0].DnsEntries[0].DnsName)),
+			xpv1.ResourceCredentialsSecretEndpointKey: []byte(pointer.StringValue(resp.VpcEndpoints[0].DnsEntries[0].DnsName)),
 		}
 	}
 
 	cr.Status.AtProvider = generateVPCEndpointObservation(resp.VpcEndpoints[0])
 
-	switch awsclients.StringValue(resp.VpcEndpoints[0].State) {
+	switch pointer.StringValue(resp.VpcEndpoints[0].State) {
 	case "available":
 		cr.SetConditions(xpv1.Available())
 	case "pending", "pending-acceptance":
@@ -132,32 +143,32 @@ func postObserve(_ context.Context, cr *svcapitypes.VPCEndpoint, resp *svcsdk.De
 }
 
 // isUpToDate checks for the following mutable fields for the VPCEndpoint in upstream AWS
-func isUpToDate(cr *svcapitypes.VPCEndpoint, obj *svcsdk.DescribeVpcEndpointsOutput) (bool, error) {
+func isUpToDate(_ context.Context, cr *svcapitypes.VPCEndpoint, obj *svcsdk.DescribeVpcEndpointsOutput) (bool, string, error) {
 	// Check subnets
 	if !listCompareStringPtrIsSame(obj.VpcEndpoints[0].SubnetIds, cr.Spec.ForProvider.SubnetIDs) {
-		return false, nil
+		return false, "", nil
 	}
 
 	// Check Route Tables
 	if !listCompareStringPtrIsSame(obj.VpcEndpoints[0].RouteTableIds, cr.Spec.ForProvider.RouteTableIDs) {
-		return false, nil
+		return false, "", nil
 	}
 
 	// Check Security Groups
 	upstreamSGs := obj.VpcEndpoints[0].Groups
 	if len(upstreamSGs) != len(cr.Spec.ForProvider.SecurityGroupIDs) {
-		return false, nil
+		return false, "", nil
 	}
 
 sgCompare:
 	for _, declaredSG := range cr.Spec.ForProvider.SecurityGroupIDs {
 		for _, upstreamSG := range upstreamSGs {
-			if awsclients.StringValue(declaredSG) == awsclients.StringValue(upstreamSG.GroupId) {
+			if pointer.StringValue(declaredSG) == pointer.StringValue(upstreamSG.GroupId) {
 				continue sgCompare
 			}
 		}
 		// declaredSG not found in upstream AWS
-		return false, nil
+		return false, "", nil
 	}
 
 	// Check policyDocument
@@ -168,14 +179,14 @@ sgCompare:
 
 	// If no declared policy, we expect the result to be equivalent to the default policy
 	if aws.StringValue(declaredPolicy) == "" {
-		return awsclients.IsPolicyUpToDate(upstreamPolicy, defaultPolicyEndpoint) || awsclients.IsPolicyUpToDate(upstreamPolicy, defaultPolicyGateway), nil
+		return legacypolicy.IsPolicyUpToDate(upstreamPolicy, defaultPolicyEndpoint) || legacypolicy.IsPolicyUpToDate(upstreamPolicy, defaultPolicyGateway), "", nil
 	}
-	return awsclients.IsPolicyUpToDate(upstreamPolicy, declaredPolicy), nil
+	return legacypolicy.IsPolicyUpToDate(upstreamPolicy, declaredPolicy), "", nil
 }
 
 // preUpdate adds the mutable fields into the update request input
 func (e *custom) preUpdate(ctx context.Context, cr *svcapitypes.VPCEndpoint, obj *svcsdk.ModifyVpcEndpointInput) error {
-	obj.VpcEndpointId = awsclients.String(meta.GetExternalName(cr))
+	obj.VpcEndpointId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 
 	// Add fields to upstream AWS
 	obj.SetAddSecurityGroupIds(cr.Spec.ForProvider.SecurityGroupIDs)
@@ -211,12 +222,7 @@ sgCompare:
 	return nil
 }
 
-func (e *custom) delete(_ context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.VPCEndpoint)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-
+func (e *custom) delete(_ context.Context, cr *svcapitypes.VPCEndpoint) (managed.ExternalDelete, error) {
 	// Generate Deletion Input
 	deleteInput := &svcsdk.DeleteVpcEndpointsInput{}
 	externalName := meta.GetExternalName(cr)
@@ -224,7 +230,7 @@ func (e *custom) delete(_ context.Context, mg cpresource.Managed) error {
 
 	// Delete
 	_, err := e.client.DeleteVpcEndpoints(deleteInput)
-	return err
+	return managed.ExternalDelete{}, err
 }
 
 func postUpdate(_ context.Context, cr *svcapitypes.VPCEndpoint, resp *svcsdk.ModifyVpcEndpointOutput, upd managed.ExternalUpdate, err error) (managed.ExternalUpdate, error) {
@@ -336,7 +342,7 @@ func listCompareStringPtrIsSame(listA, listB []*string) bool {
 compare:
 	for _, elemA := range listA {
 		for _, elemB := range listB {
-			if awsclients.StringValue(elemA) == awsclients.StringValue(elemB) {
+			if pointer.StringValue(elemA) == pointer.StringValue(elemB) {
 				continue compare
 			}
 		}
@@ -344,47 +350,4 @@ compare:
 	}
 
 	return true
-}
-
-const (
-	errKubeUpdateFailed = "cannot update Address custom resource"
-)
-
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mgd cpresource.Managed) error {
-	cr, ok := mgd.(*svcapitypes.VPCEndpoint)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-	var vpcEndpointTags svcapitypes.TagSpecification
-	for _, tagSpecification := range cr.Spec.ForProvider.TagSpecifications {
-		if aws.StringValue(tagSpecification.ResourceType) == "vpc-endpoint" {
-			vpcEndpointTags = *tagSpecification
-		}
-	}
-
-	tagMap := map[string]string{}
-	tagMap["Name"] = cr.Name
-	for _, t := range vpcEndpointTags.Tags {
-		tagMap[aws.StringValue(t.Key)] = aws.StringValue(t.Value)
-	}
-	for k, v := range cpresource.GetExternalTags(mgd) {
-		tagMap[k] = v
-	}
-	vpcEndpointTags.Tags = make([]*svcapitypes.Tag, len(tagMap))
-	vpcEndpointTags.ResourceType = aws.String("vpc-endpoint")
-	i := 0
-	for k, v := range tagMap {
-		vpcEndpointTags.Tags[i] = &svcapitypes.Tag{Key: aws.String(k), Value: aws.String(v)}
-		i++
-	}
-	sort.Slice(vpcEndpointTags.Tags, func(i, j int) bool {
-		return aws.StringValue(vpcEndpointTags.Tags[i].Key) < aws.StringValue(vpcEndpointTags.Tags[j].Key)
-	})
-
-	cr.Spec.ForProvider.TagSpecifications = []*svcapitypes.TagSpecification{&vpcEndpointTags}
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
 }

@@ -48,6 +48,13 @@ type Certificate struct {
 }
 
 // +kubebuilder:skipversion
+type CertificateDetails struct {
+	CAIdentifier *string `json:"cAIdentifier,omitempty"`
+
+	ValidTill *metav1.Time `json:"validTill,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type CloudwatchLogsExportConfiguration struct {
 	DisableLogTypes []*string `json:"disableLogTypes,omitempty"`
 
@@ -138,6 +145,8 @@ type DBCluster_SDK struct {
 
 	BackupRetentionPeriod *int64 `json:"backupRetentionPeriod,omitempty"`
 
+	CloneGroupID *string `json:"cloneGroupID,omitempty"`
+
 	ClusterCreateTime *metav1.Time `json:"clusterCreateTime,omitempty"`
 
 	DBClusterARN *string `json:"dbClusterARN,omitempty"`
@@ -209,6 +218,8 @@ type DBEngineVersion struct {
 
 	ExportableLogTypes []*string `json:"exportableLogTypes,omitempty"`
 
+	SupportsCertificateRotationWithoutRestart *bool `json:"supportsCertificateRotationWithoutRestart,omitempty"`
+
 	SupportsLogExportsToCloudwatchLogs *bool `json:"supportsLogExportsToCloudwatchLogs,omitempty"`
 }
 
@@ -232,6 +243,15 @@ type DBInstance_SDK struct {
 	BackupRetentionPeriod *int64 `json:"backupRetentionPeriod,omitempty"`
 
 	CACertificateIdentifier *string `json:"caCertificateIdentifier,omitempty"`
+	// Returns the details of the DB instance’s server certificate.
+	//
+	// For more information, see Updating Your Amazon DocumentDB TLS Certificates
+	// (https://docs.aws.amazon.com/documentdb/latest/developerguide/ca_cert_rotation.html)
+	// and Encrypting Data in Transit (https://docs.aws.amazon.com/documentdb/latest/developerguide/security.encryption.ssl.html)
+	// in the Amazon DocumentDB Developer Guide.
+	CertificateDetails *CertificateDetails `json:"certificateDetails,omitempty"`
+
+	CopyTagsToSnapshot *bool `json:"copyTagsToSnapshot,omitempty"`
 
 	DBClusterIdentifier *string `json:"dbClusterIdentifier,omitempty"`
 

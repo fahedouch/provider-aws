@@ -20,22 +20,20 @@ import (
 	"context"
 	"testing"
 
-	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	awsiamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -153,7 +151,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  userGroup(withExternalName(groupName + "/" + userName)),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 	}
@@ -228,7 +226,7 @@ func TestCreate(t *testing.T) {
 			want: want{
 				cr: userGroup(withSpecGroupName(groupName),
 					withSpecUserName(userName)),
-				err: awsclient.Wrap(errBoom, errAdd),
+				err: errorutils.Wrap(errBoom, errAdd),
 			},
 		},
 	}
@@ -302,7 +300,7 @@ func TestDelete(t *testing.T) {
 				cr: userGroup(withSpecGroupName(userName),
 					withSpecUserName(userName),
 					withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errRemove),
+				err: errorutils.Wrap(errBoom, errRemove),
 			},
 		},
 		"ResourceDoesNotExist": {
@@ -316,7 +314,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  userGroup(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(&awsiamtypes.NoSuchEntityException{}, errRemove),
+				err: errorutils.Wrap(&awsiamtypes.NoSuchEntityException{}, errRemove),
 			},
 		},
 	}
@@ -324,7 +322,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.iam}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

@@ -22,11 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsacmpca "github.com/aws/aws-sdk-go-v2/service/acmpca"
 	awsacmpcatypes "github.com/aws/aws-sdk-go-v2/service/acmpca/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -34,12 +29,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/acmpca/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/acmpca"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -66,19 +67,31 @@ func SetupCertificateAuthority(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{client: mgr.GetClient(), newClientFn: acmpca.NewClient}),
+		managed.WithConnectionPublishers(),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.CertificateAuthorityGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.CertificateAuthority{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.CertificateAuthorityGroupVersionKind),
-			managed.WithExternalConnecter(&connector{client: mgr.GetClient(), newClientFn: acmpca.NewClient}),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithInitializers(&tagger{kube: mgr.GetClient()}),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -91,7 +104,7 @@ func (conn *connector) Connect(ctx context.Context, mg resource.Managed) (manage
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, conn.client, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, conn.client, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +116,7 @@ type external struct {
 	kube   client.Client
 }
 
-func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) { // nolint:gocyclo
+func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mgd.(*v1beta1.CertificateAuthority)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
@@ -120,7 +133,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	})
 
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errGet)
 	}
 
 	if response.CertificateAuthority == nil {
@@ -147,7 +160,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	})
 
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errListTagsFailed)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errListTagsFailed)
 	}
 
 	return managed.ExternalObservation{
@@ -165,14 +178,14 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 
 	response, err := e.client.CreateCertificateAuthority(ctx, acmpca.GenerateCreateCertificateAuthorityInput(&cr.Spec.ForProvider))
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 	meta.SetExternalName(cr, aws.ToString(response.CertificateAuthorityArn))
 	return managed.ExternalCreation{}, nil
 
 }
 
-func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { // nolint:gocyclo
+func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) {
 
 	cr, ok := mgd.(*v1beta1.CertificateAuthority)
 	if !ok {
@@ -190,7 +203,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			CertificateAuthorityArn: aws.String(meta.GetExternalName(cr)),
 		})
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errListTagsFailed)
+			return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errListTagsFailed)
 		}
 		if len(tags) != len(currentTags.Tags) {
 			_, err := e.client.UntagCertificateAuthority(ctx, &awsacmpca.UntagCertificateAuthorityInput{
@@ -198,7 +211,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 				Tags:                    currentTags.Tags,
 			})
 			if err != nil {
-				return managed.ExternalUpdate{}, awsclient.Wrap(err, errRemoveTagsFailed)
+				return managed.ExternalUpdate{}, errorutils.Wrap(err, errRemoveTagsFailed)
 			}
 		}
 		_, err = e.client.TagCertificateAuthority(ctx, &awsacmpca.TagCertificateAuthorityInput{
@@ -206,7 +219,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			Tags:                    tags,
 		})
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errAddTagsFailed)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errAddTagsFailed)
 		}
 	}
 
@@ -217,13 +230,13 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		Status:                  awsacmpcatypes.CertificateAuthorityStatus(aws.ToString(cr.Spec.ForProvider.Status)),
 	})
 
-	return managed.ExternalUpdate{}, awsclient.Wrap(err, errCertificateAuthority)
+	return managed.ExternalUpdate{}, errorutils.Wrap(err, errCertificateAuthority)
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.CertificateAuthority)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
@@ -233,7 +246,7 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 	})
 
 	if err != nil {
-		return awsclient.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errDelete)
+		return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errDelete)
 	}
 
 	if response != nil {
@@ -244,7 +257,7 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 			})
 
 			if err != nil {
-				return awsclient.Wrap(err, errDelete)
+				return managed.ExternalDelete{}, errorutils.Wrap(err, errDelete)
 			}
 		}
 	}
@@ -254,35 +267,10 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 		PermanentDeletionTimeInDays: cr.Spec.ForProvider.PermanentDeletionTimeInDays,
 	})
 
-	return awsclient.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(acmpca.IsErrorNotFound, err), errDelete)
 }
 
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mgd resource.Managed) error {
-	cr, ok := mgd.(*v1beta1.CertificateAuthority)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-	added := false
-	tagMap := map[string]string{}
-	for _, t := range cr.Spec.ForProvider.Tags {
-		tagMap[t.Key] = t.Value
-	}
-	for k, v := range resource.GetExternalTags(mgd) {
-		if p, ok := tagMap[k]; !ok || v != p {
-			cr.Spec.ForProvider.Tags = append(cr.Spec.ForProvider.Tags, v1beta1.Tag{Key: k, Value: v})
-			added = true
-		}
-	}
-	if !added {
-		return nil
-	}
-	err := t.kube.Update(ctx, cr)
-	if err != nil {
-		return errors.Wrap(err, errKubeUpdateFailed)
-	}
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
 	return nil
 }

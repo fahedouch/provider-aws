@@ -3,10 +3,9 @@ package taskdefinition
 import (
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/ecs"
+	"github.com/google/go-cmp/cmp"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ecs/v1alpha1"
 )
@@ -210,7 +209,7 @@ func TestConvertVolumes(t *testing.T) {
 	for name, tc := range cases {
 
 		t.Run(name, func(t *testing.T) {
-			got := generateVolumes(tc.cr)
+			got := GenerateVolumes(tc.cr)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("%s\nExample(...): -want, +got:\n%s", tc.reason, diff)
 			}

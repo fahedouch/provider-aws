@@ -32,7 +32,9 @@ type UserParameters struct {
 
 	ConsoleAccess *bool `json:"consoleAccess,omitempty"`
 
-	Groups               []*string `json:"groups,omitempty"`
+	Groups []*string `json:"groups,omitempty"`
+
+	ReplicationUser      *bool `json:"replicationUser,omitempty"`
 	CustomUserParameters `json:",inline"`
 }
 
@@ -44,6 +46,7 @@ type UserSpec struct {
 
 // UserObservation defines the observed state of User
 type UserObservation struct {
+	CustomUserObservation `json:",inline"`
 }
 
 // UserStatus defines the observed state of User.
@@ -58,6 +61,7 @@ type UserStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

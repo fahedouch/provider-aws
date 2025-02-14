@@ -22,19 +22,17 @@ import (
 
 	awseks "github.com/aws/aws-sdk-go-v2/service/eks"
 	awsekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/pkg/test"
-
 	"github.com/crossplane-contrib/provider-aws/apis/eks/manualv1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/eks"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/eks/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -196,7 +194,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  nodeGroup(),
-				err: awsclient.Wrap(errBoom, errDescribeFailed),
+				err: errorutils.Wrap(errBoom, errDescribeFailed),
 			},
 		},
 		"NotFound": {
@@ -331,7 +329,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  nodeGroup(withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreateFailed),
+				err: errorutils.Wrap(errBoom, errCreateFailed),
 			},
 		},
 	}
@@ -464,7 +462,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  nodeGroup(),
-				err: awsclient.Wrap(errBoom, errDescribeFailed),
+				err: errorutils.Wrap(errBoom, errDescribeFailed),
 			},
 		},
 		"FailedUpdateConfig": {
@@ -483,7 +481,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  nodeGroup(),
-				err: awsclient.Wrap(errBoom, errUpdateConfigFailed),
+				err: errorutils.Wrap(errBoom, errUpdateConfigFailed),
 			},
 		},
 		"FailedUpdateVersion": {
@@ -502,7 +500,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  nodeGroup(withVersion(&version)),
-				err: awsclient.Wrap(errBoom, errUpdateVersionFailed),
+				err: errorutils.Wrap(errBoom, errUpdateVersionFailed),
 			},
 		},
 		"FailedRemoveTags": {
@@ -523,7 +521,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  nodeGroup(),
-				err: awsclient.Wrap(errBoom, errAddTagsFailed),
+				err: errorutils.Wrap(errBoom, errAddTagsFailed),
 			},
 		},
 		"FailedAddTags": {
@@ -542,7 +540,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  nodeGroup(withTags(map[string]string{"foo": "bar"})),
-				err: awsclient.Wrap(errBoom, errAddTagsFailed),
+				err: errorutils.Wrap(errBoom, errAddTagsFailed),
 			},
 		},
 	}
@@ -621,7 +619,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  nodeGroup(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDeleteFailed),
+				err: errorutils.Wrap(errBoom, errDeleteFailed),
 			},
 		},
 	}
@@ -629,57 +627,12 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{kube: tc.kube, client: tc.eks}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestInitialize(t *testing.T) {
-	type want struct {
-		cr  *manualv1alpha1.NodeGroup
-		err error
-	}
-
-	cases := map[string]struct {
-		args
-		want
-	}{
-		"Successful": {
-			args: args{
-				cr:   nodeGroup(withTags(map[string]string{"foo": "bar"})),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: nodeGroup(withTags(resource.GetExternalTags(nodeGroup()), (map[string]string{"foo": "bar"}))),
-			},
-		},
-		"UpdateFailed": {
-			args: args{
-				cr:   nodeGroup(),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errBoom)},
-			},
-			want: want{
-				err: errors.Wrap(errBoom, errKubeUpdateFailed),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			e := &tagger{kube: tc.kube}
-			err := e.Initialize(context.Background(), tc.args.cr)
-
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.cr, tc.args.cr); err == nil && diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

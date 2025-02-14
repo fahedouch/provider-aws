@@ -22,11 +22,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -34,12 +29,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -64,21 +65,33 @@ func SetupInternetGateway(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewInternetGatewayClient}),
+		managed.WithCreationGracePeriod(3 * time.Minute),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithInitializers(),
+		managed.WithConnectionPublishers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.InternetGatewayGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.InternetGateway{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.InternetGatewayGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewInternetGatewayClient}),
-			managed.WithCreationGracePeriod(3*time.Minute),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithInitializers(),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -91,7 +104,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, aws.ToString(cr.Spec.ForProvider.Region))
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, aws.ToString(cr.Spec.ForProvider.Region))
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +132,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		InternetGatewayIds: []string{meta.GetExternalName(cr)},
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(ec2.IsInternetGatewayNotFoundErr, err), errDescribe)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(ec2.IsInternetGatewayNotFoundErr, err), errDescribe)
 	}
 
 	// in a successful response, there should be one and only one object
@@ -156,7 +169,7 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 
 	ig, err := e.client.CreateInternetGateway(ctx, &awsec2.CreateInternetGatewayInput{})
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	meta.SetExternalName(cr, aws.ToString(ig.InternetGateway.InternetGatewayId))
@@ -174,9 +187,9 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 	if len(cr.Spec.ForProvider.Tags) > 0 {
 		if _, err := e.client.CreateTags(ctx, &awsec2.CreateTagsInput{
 			Resources: []string{meta.GetExternalName(cr)},
-			Tags:      v1beta1.GenerateEC2Tags(cr.Spec.ForProvider.Tags),
+			Tags:      ec2.GenerateEC2TagsV1Beta1(cr.Spec.ForProvider.Tags),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errCreateTags)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errCreateTags)
 		}
 	}
 
@@ -184,7 +197,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		InternetGatewayIds: []string{meta.GetExternalName(cr)},
 	})
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(ec2.IsInternetGatewayNotFoundErr, err), errDescribe)
+		return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(ec2.IsInternetGatewayNotFoundErr, err), errDescribe)
 	}
 
 	if len(response.InternetGateways) != 1 {
@@ -205,7 +218,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			InternetGatewayId: aws.String(meta.GetExternalName(cr)),
 			VpcId:             observed.Attachments[0].VpcId,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errDetach)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errDetach)
 		}
 	}
 
@@ -215,13 +228,13 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		VpcId:             cr.Spec.ForProvider.VPCID,
 	})
 
-	return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(ec2.IsInternetGatewayAlreadyAttached, err), errUpdate)
+	return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(ec2.IsInternetGatewayAlreadyAttached, err), errUpdate)
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.InternetGateway)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
@@ -236,7 +249,7 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 		if resource.Ignore(ec2.IsInternetGatewayNotFoundErr, err) == nil {
 			continue
 		}
-		return awsclient.Wrap(err, errDetach)
+		return managed.ExternalDelete{}, errorutils.Wrap(err, errDetach)
 	}
 
 	// now delete the IG
@@ -244,5 +257,10 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 		InternetGatewayId: aws.String(meta.GetExternalName(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(ec2.IsInternetGatewayNotFoundErr, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(ec2.IsInternetGatewayNotFoundErr, err), errDelete)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

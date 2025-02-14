@@ -54,6 +54,9 @@ type CustomBrokerParameters struct {
 	CustomUsers []*CustomUser `json:"users,omitempty"`
 }
 
+// CustomBrokerObservation includes the custom status fields of Broker.
+type CustomBrokerObservation struct{}
+
 // CustomUser contains the fields for Users with PasswordSecretRef
 type CustomUser struct {
 	ConsoleAccess *bool `json:"consoleAccess,omitempty"`
@@ -81,3 +84,24 @@ type CustomUserParameters struct {
 
 	PasswordSecretRef xpv1.SecretKeySelector `json:"passwordSecretRef,omitempty"`
 }
+
+// CustomUserObservation includes the custom status fields of User.
+type CustomUserObservation struct{}
+
+// CustomConfigurationParameters contains the additional fields for CustomConfigurationParameters
+type CustomConfigurationParameters struct {
+	Data        *string `json:"data,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
+// CustomConfigurationObservation includes the custom status fields of Configuration.
+type CustomConfigurationObservation struct{}
+
+const (
+	// LatestUnsanitizedConfiguration is the key in the annotations map of a
+	// Configuration resource to track the latest unsanitized version
+	// and stop the update loop if the external update result always results in
+	// sanitization of the desired configuration.spec.data
+	// the latest desired config is stored as
+	LatestUnsanitizedConfiguration = "crossplane.io/latest-unsanitized-desired"
+)

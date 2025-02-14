@@ -51,6 +51,8 @@ type ConnectionObservation struct {
 	LastUpdatedBy *string `json:"lastUpdatedBy,omitempty"`
 	// The last time that this connection definition was updated.
 	LastUpdatedTime *metav1.Time `json:"lastUpdatedTime,omitempty"`
+
+	CustomConnectionObservation `json:",inline"`
 }
 
 // ConnectionStatus defines the observed state of Connection.
@@ -65,6 +67,7 @@ type ConnectionStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

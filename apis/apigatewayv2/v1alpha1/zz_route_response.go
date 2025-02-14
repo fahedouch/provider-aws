@@ -50,6 +50,8 @@ type RouteResponseSpec struct {
 // RouteResponseObservation defines the observed state of RouteResponse
 type RouteResponseObservation struct {
 	RouteResponseID *string `json:"routeResponseID,omitempty"`
+
+	CustomRouteResponseObservation `json:",inline"`
 }
 
 // RouteResponseStatus defines the observed state of RouteResponse.
@@ -64,6 +66,7 @@ type RouteResponseStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

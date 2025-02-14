@@ -21,11 +21,6 @@ import (
 
 	svcsdk "github.com/aws/aws-sdk-go/service/elasticache"
 	"github.com/aws/aws-sdk-go/service/elasticache/elasticacheiface"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	v1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -33,11 +28,16 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/elasticache/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupCacheParameterGroup adds a controller that reconciles a CacheParameterGroup.
@@ -50,17 +50,29 @@ func SetupCacheParameterGroup(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.CacheParameterGroupGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		For(&svcapitypes.CacheParameterGroup{}).
 		WithOptions(o.ForControllerRuntime()).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.CacheParameterGroupGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		WithEventFilter(resource.DesiredStateChanged()).
+		Complete(r)
 }
 
 func setupExternal(e *external) {
@@ -80,7 +92,7 @@ type hooks struct {
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.CacheParameterGroup, obj *svcsdk.DescribeCacheParameterGroupsInput) error {
-	obj.CacheParameterGroupName = awsclient.String(meta.GetExternalName(cr))
+	obj.CacheParameterGroupName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -93,11 +105,9 @@ func postObserve(_ context.Context, cr *svcapitypes.CacheParameterGroup, resp *s
 	return obs, nil
 }
 
-func (e *hooks) isUpToDate(cr *svcapitypes.CacheParameterGroup, resp *svcsdk.DescribeCacheParameterGroupsOutput) (bool, error) {
-	ctx := context.TODO()
-
+func (e *hooks) isUpToDate(ctx context.Context, cr *svcapitypes.CacheParameterGroup, resp *svcsdk.DescribeCacheParameterGroupsOutput) (bool, string, error) {
 	input := &svcsdk.DescribeCacheParametersInput{
-		CacheParameterGroupName: awsclient.String(meta.GetExternalName(cr)),
+		CacheParameterGroupName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	}
 	var results []*svcsdk.Parameter
 	err := e.client.DescribeCacheParametersPagesWithContext(ctx, input, func(page *svcsdk.DescribeCacheParametersOutput, lastPage bool) bool {
@@ -105,12 +115,12 @@ func (e *hooks) isUpToDate(cr *svcapitypes.CacheParameterGroup, resp *svcsdk.Des
 		return !lastPage
 	})
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	var observed []svcapitypes.ParameterNameValue
 	for _, v := range results {
-		if svcapitypes.SourceType(awsclient.StringValue(v.Source)) == svcapitypes.SourceType_user {
+		if svcapitypes.SourceType(pointer.StringValue(v.Source)) == svcapitypes.SourceType_user {
 			observed = append(observed, svcapitypes.ParameterNameValue{
 				ParameterName:  v.ParameterName,
 				ParameterValue: v.ParameterValue,
@@ -119,15 +129,14 @@ func (e *hooks) isUpToDate(cr *svcapitypes.CacheParameterGroup, resp *svcsdk.Des
 	}
 
 	diff := cmp.Diff(observed, cr.Spec.ForProvider.ParameterNameValues, cmpopts.SortSlices(func(a, b svcapitypes.ParameterNameValue) bool {
-		return awsclient.StringValue(a.ParameterName) < awsclient.StringValue(b.ParameterName)
+		return pointer.StringValue(a.ParameterName) < pointer.StringValue(b.ParameterName)
 	}))
 
-	// TODO: We should be able to return the diff to crossplane-runtime here
-	return diff == "", nil
+	return diff == "", diff, nil
 }
 
 func preUpdate(ctx context.Context, cr *svcapitypes.CacheParameterGroup, obj *svcsdk.ModifyCacheParameterGroupInput) error {
-	obj.CacheParameterGroupName = awsclient.String(meta.GetExternalName(cr))
+	obj.CacheParameterGroupName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.ParameterNameValues = make([]*svcsdk.ParameterNameValue, len(cr.Spec.ForProvider.ParameterNameValues))
 
 	for i, v := range cr.Spec.ForProvider.ParameterNameValues {
@@ -150,11 +159,11 @@ func (e *hooks) postUpdate(ctx context.Context, cr *svcapitypes.CacheParameterGr
 }
 
 func preCreate(ctx context.Context, cr *svcapitypes.CacheParameterGroup, obj *svcsdk.CreateCacheParameterGroupInput) error {
-	obj.CacheParameterGroupName = awsclient.String(meta.GetExternalName(cr))
+	obj.CacheParameterGroupName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.CacheParameterGroup, obj *svcsdk.DeleteCacheParameterGroupInput) (bool, error) {
-	obj.CacheParameterGroupName = awsclient.String(meta.GetExternalName(cr))
+	obj.CacheParameterGroupName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }

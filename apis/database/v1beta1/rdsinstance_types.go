@@ -17,9 +17,8 @@ limitations under the License.
 package v1beta1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SQL database engines.
@@ -73,7 +72,7 @@ type CloudwatchLogsExportConfiguration struct {
 	// EnableLogTypes is the list of log types to enable.
 	// +immutable
 	EnableLogTypes []string `json:"enableLogTypes,omitempty"`
-}
+} // TODO: remove deprecated field + code. Mapping to EnableCloudwatchLogsExports while in deprecation.
 
 // ScalingConfiguration contains the scaling configuration of an Aurora Serverless DB cluster.
 // For more information, see Using Amazon Aurora Serverless (http://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html)
@@ -277,8 +276,9 @@ type RDSInstanceParameters struct {
 	// Default: A random, system-chosen Availability Zone in the endpoint's AWS
 	// Region.
 	// Example: us-east-1d
-	// Constraint: The AvailabilityZone parameter can't be specified if the MultiAZ
-	// parameter is set to true. The specified Availability Zone must be in the
+	// Constraint: The AvailabilityZone parameter is ignored if the MultiAZ
+	// is set to true.
+	// The specified Availability Zone must be in the
 	// same AWS Region as the current endpoint.
 	// +immutable
 	// +optional
@@ -413,9 +413,8 @@ type RDSInstanceParameters struct {
 	// Logs. The values in the list depend on the DB engine being used. For more
 	// information, see Publishing Database Logs to Amazon CloudWatch Logs  (http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_LogAccess.html#USER_LogAccess.Procedural.UploadtoCloudWatch)
 	// in the Amazon Relational Database Service User Guide.
-	// +immutable
 	// +optional
-	EnableCloudwatchLogsExports []string `json:"enableCloudwatchLogsExports,omitempty"`
+	EnableCloudwatchLogsExports []string `json:"enableCloudwatchLogsExports"`
 
 	// EnableIAMDatabaseAuthentication should be true to enable mapping of AWS Identity and Access Management (IAM) accounts
 	// to database accounts, and otherwise false.
@@ -481,6 +480,9 @@ type RDSInstanceParameters struct {
 	// See Supported PostgreSQL Database Versions (http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.DBVersions)
 	// in the Amazon RDS User Guide.
 	// +optional
+	//
+	// Note: Downgrades are not allowed by AWS and attempts to set a lower version
+	// will be ignored.
 	EngineVersion *string `json:"engineVersion,omitempty"`
 
 	// RestoreFrom specifies the details of the backup to restore when creating a new RDS instance. (If the RDS instance already exists, this property will be ignored.)
@@ -489,13 +491,18 @@ type RDSInstanceParameters struct {
 
 	// IOPS is the amount of Provisioned IOPS (input/output operations per second) to be
 	// initially allocated for the DB instance. For information about valid IOPS
-	// values, see see Amazon RDS Provisioned IOPS Storage to Improve Performance
+	// values, see Amazon RDS Provisioned IOPS Storage to Improve Performance
 	// (http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#USER_PIOPS)
 	// in the Amazon RDS User Guide.
 	// Constraints: Must be a multiple between 1 and 50 of the storage amount for
 	// the DB instance. Must also be an integer multiple of 1000. For example, if
 	// the size of your DB instance is 500 GiB, then your IOPS value can be 2000,
 	// 3000, 4000, or 5000.
+	//
+	// For valid IOPS values on DB instances with storage type "gp3",
+	// see https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage.
+	//
+	// Note: controller considers 0 and null as equivalent
 	// +optional
 	IOPS *int `json:"iops,omitempty"`
 
@@ -524,35 +531,15 @@ type RDSInstanceParameters struct {
 	// Amazon Aurora
 	// Not applicable. The name for the master user is managed by the DB cluster.
 	// For more information, see CreateDBCluster.
-	// MariaDB
+	//
 	// Constraints:
-	//    * Required for MariaDB.
+	//
 	//    * Must be 1 to 16 letters or numbers.
-	//    * Cannot be a reserved word for the chosen database engine.
-	// Microsoft SQL Server
-	// Constraints:
-	//    * Required for SQL Server.
-	//    * Must be 1 to 128 letters or numbers.
-	//    * The first character must be a letter.
-	//    * Cannot be a reserved word for the chosen database engine.
-	// MySQL
-	// Constraints:
-	//    * Required for MySQL.
-	//    * Must be 1 to 16 letters or numbers.
+	//
 	//    * First character must be a letter.
-	//    * Cannot be a reserved word for the chosen database engine.
-	// Oracle
-	// Constraints:
-	//    * Required for Oracle.
-	//    * Must be 1 to 30 letters or numbers.
-	//    * First character must be a letter.
-	//    * Cannot be a reserved word for the chosen database engine.
-	// PostgreSQL
-	// Constraints:
-	//    * Required for PostgreSQL.
-	//    * Must be 1 to 63 letters or numbers.
-	//    * First character must be a letter.
-	//    * Cannot be a reserved word for the chosen database engine.
+	//
+	//    * Can't be a reserved word for the chosen database engine.
+	//
 	// +immutable
 	// +optional
 	MasterUsername *string `json:"masterUsername,omitempty"`
@@ -731,6 +718,16 @@ type RDSInstanceParameters struct {
 	// +optional
 	StorageEncrypted *bool `json:"storageEncrypted,omitempty"`
 
+	// The storage throughput value for the DB instance.
+	//
+	// This setting applies only to the gp3 storage type.
+	//
+	// This setting doesn't apply to Amazon Aurora or RDS Custom DB instances.
+	//
+	// Note: controller considers 0 and null as equivalent
+	// +optional
+	StorageThroughput *int `json:"storageThroughput,omitempty"`
+
 	// StorageType specifies the storage type to be associated with the DB instance.
 	// Valid values: standard | gp2 | io1
 	// If you specify io1, you must also include a value for the IOPS parameter.
@@ -810,11 +807,13 @@ type RDSInstanceParameters struct {
 	// +optional
 	ApplyModificationsImmediately *bool `json:"applyModificationsImmediately,omitempty"`
 
+	// Deprecated: This field will be removed. Use `enableCloudwatchLogsExports` instead.
 	// CloudwatchLogsExportConfiguration is the configuration setting for the log types to be enabled for export to CloudWatch
 	// Logs for a specific DB instance.
 	// +immutable
 	// +optional
 	CloudwatchLogsExportConfiguration *CloudwatchLogsExportConfiguration `json:"cloudwatchLogsExportConfiguration,omitempty"`
+	// TODO: remove deprecated field + code. Mapping to EnableCloudwatchLogsExports while in deprecation.
 
 	// DBParameterGroupName is the name of the DB parameter group to associate with this DB instance. If
 	// this argument is omitted, the default DBParameterGroup for the specified
@@ -1105,6 +1104,10 @@ type PendingModifiedValues struct {
 	// class of the DB instance.
 	ProcessorFeatures []ProcessorFeature `json:"processorFeatures,omitempty"`
 
+	// StorageThroughput indicates the new storage throughput value for the DB instance
+	// that will be applied or is currently being applied.
+	StorageThroughput int `json:"storageThroughput,omitempty"`
+
 	// StorageType specifies the storage type to be associated with the DB instance.
 	StorageType string `json:"storageType,omitempty"`
 }
@@ -1183,8 +1186,18 @@ type RDSInstanceObservation struct {
 	// InstanceCreateTime provides the date and time the DB instance was created.
 	InstanceCreateTime *metav1.Time `json:"instanceCreateTime,omitempty"`
 
+	// A list of log types that this DB instance is configured to export to CloudWatch
+	// Logs. Log types vary by DB engine. For information about the log types for each
+	// DB engine, see Amazon RDS Database Log Files
+	// (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_LogAccess.html) in
+	// the Amazon RDS User Guide.
+	EnabledCloudwatchLogsExports []string `json:"enabledCloudwatchLogsExports,omitempty"`
+
 	// Endpoint specifies the connection endpoint.
 	Endpoint Endpoint `json:"endpoint,omitempty"`
+
+	// Indicates the database engine version.
+	EngineVersion *string `json:"engineVersion,omitempty"`
 
 	// EnhancedMonitoringResourceArn is the Amazon Resource Name (ARN) of the
 	// Amazon CloudWatch Logs log stream that receives the Enhanced Monitoring
@@ -1248,7 +1261,7 @@ type RDSInstanceStatus struct {
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="STATE",type="string",JSONPath=".status.atProvider.dbInstanceStatus"
 // +kubebuilder:printcolumn:name="ENGINE",type="string",JSONPath=".spec.forProvider.engine"
-// +kubebuilder:printcolumn:name="VERSION",type="string",JSONPath=".spec.forProvider.engineVersion"
+// +kubebuilder:printcolumn:name="VERSION",type="string",JSONPath=".status.atProvider.engineVersion"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

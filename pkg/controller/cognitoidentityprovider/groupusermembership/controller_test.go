@@ -22,22 +22,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crossplane-contrib/provider-aws/apis/cognitoidentityprovider/manualv1alpha1"
-
 	awscognitoidentityprovider "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	awscognitoidentityprovidertypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/apis/cognitoidentityprovider/manualv1alpha1"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/cognitoidentityprovider"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/cognitoidentityprovider/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -171,7 +169,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  userGroup(withExternalName(groupName, Username, userPoolID)),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 	}
@@ -248,7 +246,7 @@ func TestCreate(t *testing.T) {
 			want: want{
 				cr: userGroup(withSpecGroupName(groupName),
 					withSpecUsername(Username)),
-				err: awsclient.Wrap(errBoom, errAdd),
+				err: errorutils.Wrap(errBoom, errAdd),
 			},
 		},
 	}
@@ -324,7 +322,7 @@ func TestDelete(t *testing.T) {
 				cr: userGroup(withSpecGroupName(Username),
 					withSpecUsername(Username),
 					withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errRemove),
+				err: errorutils.Wrap(errBoom, errRemove),
 			},
 		},
 		"ResourceNotFoundException": {
@@ -338,7 +336,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  userGroup(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(&awscognitoidentityprovidertypes.ResourceNotFoundException{}, errRemove),
+				err: errorutils.Wrap(&awscognitoidentityprovidertypes.ResourceNotFoundException{}, errRemove),
 			},
 		},
 		"UserNotFoundException": {
@@ -352,7 +350,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  userGroup(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(&awscognitoidentityprovidertypes.UserNotFoundException{}, errRemove),
+				err: errorutils.Wrap(&awscognitoidentityprovidertypes.UserNotFoundException{}, errRemove),
 			},
 		},
 	}
@@ -360,7 +358,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.cognitoidentityprovider}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

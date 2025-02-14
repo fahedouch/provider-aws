@@ -18,14 +18,30 @@ limitations under the License.
 
 package v1alpha1
 
+type ExecutionRedriveFilter string
+
+const (
+	ExecutionRedriveFilter_REDRIVEN     ExecutionRedriveFilter = "REDRIVEN"
+	ExecutionRedriveFilter_NOT_REDRIVEN ExecutionRedriveFilter = "NOT_REDRIVEN"
+)
+
+type ExecutionRedriveStatus string
+
+const (
+	ExecutionRedriveStatus_REDRIVABLE            ExecutionRedriveStatus = "REDRIVABLE"
+	ExecutionRedriveStatus_NOT_REDRIVABLE        ExecutionRedriveStatus = "NOT_REDRIVABLE"
+	ExecutionRedriveStatus_REDRIVABLE_BY_MAP_RUN ExecutionRedriveStatus = "REDRIVABLE_BY_MAP_RUN"
+)
+
 type ExecutionStatus string
 
 const (
-	ExecutionStatus_RUNNING   ExecutionStatus = "RUNNING"
-	ExecutionStatus_SUCCEEDED ExecutionStatus = "SUCCEEDED"
-	ExecutionStatus_FAILED    ExecutionStatus = "FAILED"
-	ExecutionStatus_TIMED_OUT ExecutionStatus = "TIMED_OUT"
-	ExecutionStatus_ABORTED   ExecutionStatus = "ABORTED"
+	ExecutionStatus_RUNNING         ExecutionStatus = "RUNNING"
+	ExecutionStatus_SUCCEEDED       ExecutionStatus = "SUCCEEDED"
+	ExecutionStatus_FAILED          ExecutionStatus = "FAILED"
+	ExecutionStatus_TIMED_OUT       ExecutionStatus = "TIMED_OUT"
+	ExecutionStatus_ABORTED         ExecutionStatus = "ABORTED"
+	ExecutionStatus_PENDING_REDRIVE ExecutionStatus = "PENDING_REDRIVE"
 )
 
 type HistoryEventType string
@@ -86,6 +102,12 @@ const (
 	HistoryEventType_WaitStateAborted             HistoryEventType = "WaitStateAborted"
 	HistoryEventType_WaitStateEntered             HistoryEventType = "WaitStateEntered"
 	HistoryEventType_WaitStateExited              HistoryEventType = "WaitStateExited"
+	HistoryEventType_MapRunAborted                HistoryEventType = "MapRunAborted"
+	HistoryEventType_MapRunFailed                 HistoryEventType = "MapRunFailed"
+	HistoryEventType_MapRunStarted                HistoryEventType = "MapRunStarted"
+	HistoryEventType_MapRunSucceeded              HistoryEventType = "MapRunSucceeded"
+	HistoryEventType_ExecutionRedriven            HistoryEventType = "ExecutionRedriven"
+	HistoryEventType_MapRunRedriven               HistoryEventType = "MapRunRedriven"
 )
 
 type LogLevel string
@@ -95,6 +117,15 @@ const (
 	LogLevel_ERROR LogLevel = "ERROR"
 	LogLevel_FATAL LogLevel = "FATAL"
 	LogLevel_OFF   LogLevel = "OFF"
+)
+
+type MapRunStatus string
+
+const (
+	MapRunStatus_RUNNING   MapRunStatus = "RUNNING"
+	MapRunStatus_SUCCEEDED MapRunStatus = "SUCCEEDED"
+	MapRunStatus_FAILED    MapRunStatus = "FAILED"
+	MapRunStatus_ABORTED   MapRunStatus = "ABORTED"
 )
 
 type StateMachineStatus_SDK string
@@ -117,4 +148,13 @@ const (
 	SyncExecutionStatus_SUCCEEDED SyncExecutionStatus = "SUCCEEDED"
 	SyncExecutionStatus_FAILED    SyncExecutionStatus = "FAILED"
 	SyncExecutionStatus_TIMED_OUT SyncExecutionStatus = "TIMED_OUT"
+)
+
+type ValidationExceptionReason string
+
+const (
+	ValidationExceptionReason_API_DOES_NOT_SUPPORT_LABELED_ARNS ValidationExceptionReason = "API_DOES_NOT_SUPPORT_LABELED_ARNS"
+	ValidationExceptionReason_MISSING_REQUIRED_PARAMETER        ValidationExceptionReason = "MISSING_REQUIRED_PARAMETER"
+	ValidationExceptionReason_CANNOT_UPDATE_COMPLETED_MAP_RUN   ValidationExceptionReason = "CANNOT_UPDATE_COMPLETED_MAP_RUN"
+	ValidationExceptionReason_INVALID_ROUTING_CONFIGURATION     ValidationExceptionReason = "INVALID_ROUTING_CONFIGURATION"
 )

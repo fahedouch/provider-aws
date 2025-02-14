@@ -18,29 +18,24 @@ package certificateauthority
 
 import (
 	"context"
-
 	"testing"
-
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/crossplane-contrib/provider-aws/apis/acmpca/v1beta1"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsacmpca "github.com/aws/aws-sdk-go-v2/service/acmpca"
 	awsacmpcatypes "github.com/aws/aws-sdk-go-v2/service/acmpca/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	"k8s.io/utils/ptr"
 
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/apis/acmpca/v1beta1"
 	acmpca "github.com/crossplane-contrib/provider-aws/pkg/clients/acmpca"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/acmpca/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -63,10 +58,6 @@ var (
 	title                      = "someTitle"
 
 	errBoom = errors.New("boom")
-
-	sortTags = cmpopts.SortSlices(func(a, b v1beta1.Tag) bool {
-		return a.Key > b.Key
-	})
 )
 
 type args struct {
@@ -89,7 +80,7 @@ func withCertificateAuthorityArn() certificateAuthorityModifier {
 
 func withCertificateAuthorityType() certificateAuthorityModifier {
 	return func(r *v1beta1.CertificateAuthority) {
-		r.Spec.ForProvider.Type = awsacmpcatypes.CertificateAuthorityTypeRoot
+		r.Spec.ForProvider.Type = string(awsacmpcatypes.CertificateAuthorityTypeRoot)
 		r.Status.AtProvider.CertificateAuthorityARN = certificateAuthorityArn
 		meta.SetExternalName(r, certificateAuthorityArn)
 	}
@@ -108,24 +99,6 @@ func withCertificateAuthorityStatus() certificateAuthorityModifier {
 		r.Spec.ForProvider.Status = &status
 		r.Status.AtProvider.CertificateAuthorityARN = certificateAuthorityArn
 		meta.SetExternalName(r, certificateAuthorityArn)
-	}
-}
-
-func withTags(tagMaps ...map[string]string) certificateAuthorityModifier {
-	var tagList []v1beta1.Tag
-	for _, tagMap := range tagMaps {
-		for k, v := range tagMap {
-			tagList = append(tagList, v1beta1.Tag{Key: k, Value: v})
-		}
-	}
-	return func(r *v1beta1.CertificateAuthority) {
-		r.Spec.ForProvider.Tags = tagList
-	}
-}
-
-func withGroupVersionKind() certificateAuthorityModifier {
-	return func(r *v1beta1.CertificateAuthority) {
-		r.TypeMeta.SetGroupVersionKind(v1beta1.CertificateAuthorityGroupVersionKind)
 	}
 }
 
@@ -161,7 +134,7 @@ func TestObserve(t *testing.T) {
 								Status: awsacmpcatypes.CertificateAuthorityStatusActive,
 								RevocationConfiguration: &awsacmpcatypes.RevocationConfiguration{
 									CrlConfiguration: &awsacmpcatypes.CrlConfiguration{
-										Enabled: false,
+										Enabled: ptr.To(false),
 									},
 								},
 								CertificateAuthorityConfiguration: &awsacmpcatypes.CertificateAuthorityConfiguration{
@@ -222,7 +195,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  certificateAuthority(withCertificateAuthorityArn()),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 	}
@@ -305,7 +278,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  certificateAuthority(),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -358,7 +331,7 @@ func TestUpdate(t *testing.T) {
 								Status: awsacmpcatypes.CertificateAuthorityStatusActive,
 								RevocationConfiguration: &awsacmpcatypes.RevocationConfiguration{
 									CrlConfiguration: &awsacmpcatypes.CrlConfiguration{
-										Enabled: false,
+										Enabled: ptr.To(false),
 									},
 								},
 							},
@@ -427,7 +400,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  certificateAuthority(withCertificateAuthorityStatus()),
-				err: awsclient.Wrap(errBoom, errCertificateAuthority),
+				err: errorutils.Wrap(errBoom, errCertificateAuthority),
 			},
 		},
 	}
@@ -519,7 +492,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  certificateAuthority(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 		"ResourceDoesNotExist": {
@@ -539,7 +512,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  certificateAuthority(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(&awsacmpcatypes.ResourceNotFoundException{}, errDelete),
+				err: errorutils.Wrap(&awsacmpcatypes.ResourceNotFoundException{}, errDelete),
 			},
 		},
 	}
@@ -547,78 +520,12 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.acmpca}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestInitialize(t *testing.T) {
-	type args struct {
-		cr   resource.Managed
-		kube client.Client
-	}
-	type want struct {
-		cr  *v1beta1.CertificateAuthority
-		err error
-	}
-
-	cases := map[string]struct {
-		args
-		want
-	}{
-		"InvalidInput": {
-			args: args{
-				cr: unexpectedItem,
-			},
-			want: want{
-				err: errors.New(errUnexpectedObject),
-			},
-		},
-		"Successful": {
-			args: args{
-				cr:   certificateAuthority(withTags(map[string]string{"foo": "bar"})),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: certificateAuthority(withTags(resource.GetExternalTags(certificateAuthority()), map[string]string{"foo": "bar"})),
-			},
-		},
-		"Check Tag values": {
-			args: args{
-				cr:   certificateAuthority(withTags(map[string]string{"foo": "bar"}), withGroupVersionKind()),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: certificateAuthority(withTags(resource.GetExternalTags(certificateAuthority(withGroupVersionKind())), map[string]string{"foo": "bar"}), withGroupVersionKind()),
-			},
-		},
-		"UpdateFailed": {
-			args: args{
-				cr:   certificateAuthority(),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errBoom)},
-			},
-			want: want{
-				err: errors.Wrap(errBoom, errKubeUpdateFailed),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			e := &tagger{kube: tc.kube}
-			err := e.Initialize(context.Background(), tc.args.cr)
-
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.cr, tc.args.cr, sortTags); err == nil && diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

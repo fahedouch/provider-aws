@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ecs/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.Service)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.Service) (managed.TypedExternalClient[*svcapitypes.Service], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.Service)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.Service) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,30 +74,30 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeServicesWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateService(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.Service)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.Service) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateServiceInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -112,7 +105,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateServiceWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.Service.CapacityProviderStrategy != nil {
@@ -151,15 +144,34 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	if resp.Service.DeploymentConfiguration != nil {
 		f4 := &svcapitypes.DeploymentConfiguration{}
+		if resp.Service.DeploymentConfiguration.Alarms != nil {
+			f4f0 := &svcapitypes.DeploymentAlarms{}
+			if resp.Service.DeploymentConfiguration.Alarms.AlarmNames != nil {
+				f4f0f0 := []*string{}
+				for _, f4f0f0iter := range resp.Service.DeploymentConfiguration.Alarms.AlarmNames {
+					var f4f0f0elem string
+					f4f0f0elem = *f4f0f0iter
+					f4f0f0 = append(f4f0f0, &f4f0f0elem)
+				}
+				f4f0.AlarmNames = f4f0f0
+			}
+			if resp.Service.DeploymentConfiguration.Alarms.Enable != nil {
+				f4f0.Enable = resp.Service.DeploymentConfiguration.Alarms.Enable
+			}
+			if resp.Service.DeploymentConfiguration.Alarms.Rollback != nil {
+				f4f0.Rollback = resp.Service.DeploymentConfiguration.Alarms.Rollback
+			}
+			f4.Alarms = f4f0
+		}
 		if resp.Service.DeploymentConfiguration.DeploymentCircuitBreaker != nil {
-			f4f0 := &svcapitypes.DeploymentCircuitBreaker{}
+			f4f1 := &svcapitypes.DeploymentCircuitBreaker{}
 			if resp.Service.DeploymentConfiguration.DeploymentCircuitBreaker.Enable != nil {
-				f4f0.Enable = resp.Service.DeploymentConfiguration.DeploymentCircuitBreaker.Enable
+				f4f1.Enable = resp.Service.DeploymentConfiguration.DeploymentCircuitBreaker.Enable
 			}
 			if resp.Service.DeploymentConfiguration.DeploymentCircuitBreaker.Rollback != nil {
-				f4f0.Rollback = resp.Service.DeploymentConfiguration.DeploymentCircuitBreaker.Rollback
+				f4f1.Rollback = resp.Service.DeploymentConfiguration.DeploymentCircuitBreaker.Rollback
 			}
-			f4.DeploymentCircuitBreaker = f4f0
+			f4.DeploymentCircuitBreaker = f4f1
 		}
 		if resp.Service.DeploymentConfiguration.MaximumPercent != nil {
 			f4.MaximumPercent = resp.Service.DeploymentConfiguration.MaximumPercent
@@ -241,7 +253,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 						}
 						f6elemf6f0.Subnets = f6elemf6f0f2
 					}
-					f6elemf6.AWSvpcConfiguration = f6elemf6f0
+					f6elemf6.AWSVPCConfiguration = f6elemf6f0
 				}
 				f6elem.NetworkConfiguration = f6elemf6
 			}
@@ -262,6 +274,91 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 			}
 			if f6iter.RunningCount != nil {
 				f6elem.RunningCount = f6iter.RunningCount
+			}
+			if f6iter.ServiceConnectConfiguration != nil {
+				f6elemf13 := &svcapitypes.ServiceConnectConfiguration{}
+				if f6iter.ServiceConnectConfiguration.Enabled != nil {
+					f6elemf13.Enabled = f6iter.ServiceConnectConfiguration.Enabled
+				}
+				if f6iter.ServiceConnectConfiguration.LogConfiguration != nil {
+					f6elemf13f1 := &svcapitypes.LogConfiguration{}
+					if f6iter.ServiceConnectConfiguration.LogConfiguration.LogDriver != nil {
+						f6elemf13f1.LogDriver = f6iter.ServiceConnectConfiguration.LogConfiguration.LogDriver
+					}
+					if f6iter.ServiceConnectConfiguration.LogConfiguration.Options != nil {
+						f6elemf13f1f1 := map[string]*string{}
+						for f6elemf13f1f1key, f6elemf13f1f1valiter := range f6iter.ServiceConnectConfiguration.LogConfiguration.Options {
+							var f6elemf13f1f1val string
+							f6elemf13f1f1val = *f6elemf13f1f1valiter
+							f6elemf13f1f1[f6elemf13f1f1key] = &f6elemf13f1f1val
+						}
+						f6elemf13f1.Options = f6elemf13f1f1
+					}
+					if f6iter.ServiceConnectConfiguration.LogConfiguration.SecretOptions != nil {
+						f6elemf13f1f2 := []*svcapitypes.Secret{}
+						for _, f6elemf13f1f2iter := range f6iter.ServiceConnectConfiguration.LogConfiguration.SecretOptions {
+							f6elemf13f1f2elem := &svcapitypes.Secret{}
+							if f6elemf13f1f2iter.Name != nil {
+								f6elemf13f1f2elem.Name = f6elemf13f1f2iter.Name
+							}
+							if f6elemf13f1f2iter.ValueFrom != nil {
+								f6elemf13f1f2elem.ValueFrom = f6elemf13f1f2iter.ValueFrom
+							}
+							f6elemf13f1f2 = append(f6elemf13f1f2, f6elemf13f1f2elem)
+						}
+						f6elemf13f1.SecretOptions = f6elemf13f1f2
+					}
+					f6elemf13.LogConfiguration = f6elemf13f1
+				}
+				if f6iter.ServiceConnectConfiguration.Namespace != nil {
+					f6elemf13.Namespace = f6iter.ServiceConnectConfiguration.Namespace
+				}
+				if f6iter.ServiceConnectConfiguration.Services != nil {
+					f6elemf13f3 := []*svcapitypes.ServiceConnectService{}
+					for _, f6elemf13f3iter := range f6iter.ServiceConnectConfiguration.Services {
+						f6elemf13f3elem := &svcapitypes.ServiceConnectService{}
+						if f6elemf13f3iter.ClientAliases != nil {
+							f6elemf13f3elemf0 := []*svcapitypes.ServiceConnectClientAlias{}
+							for _, f6elemf13f3elemf0iter := range f6elemf13f3iter.ClientAliases {
+								f6elemf13f3elemf0elem := &svcapitypes.ServiceConnectClientAlias{}
+								if f6elemf13f3elemf0iter.DnsName != nil {
+									f6elemf13f3elemf0elem.DNSName = f6elemf13f3elemf0iter.DnsName
+								}
+								if f6elemf13f3elemf0iter.Port != nil {
+									f6elemf13f3elemf0elem.Port = f6elemf13f3elemf0iter.Port
+								}
+								f6elemf13f3elemf0 = append(f6elemf13f3elemf0, f6elemf13f3elemf0elem)
+							}
+							f6elemf13f3elem.ClientAliases = f6elemf13f3elemf0
+						}
+						if f6elemf13f3iter.DiscoveryName != nil {
+							f6elemf13f3elem.DiscoveryName = f6elemf13f3iter.DiscoveryName
+						}
+						if f6elemf13f3iter.IngressPortOverride != nil {
+							f6elemf13f3elem.IngressPortOverride = f6elemf13f3iter.IngressPortOverride
+						}
+						if f6elemf13f3iter.PortName != nil {
+							f6elemf13f3elem.PortName = f6elemf13f3iter.PortName
+						}
+						f6elemf13f3 = append(f6elemf13f3, f6elemf13f3elem)
+					}
+					f6elemf13.Services = f6elemf13f3
+				}
+				f6elem.ServiceConnectConfiguration = f6elemf13
+			}
+			if f6iter.ServiceConnectResources != nil {
+				f6elemf14 := []*svcapitypes.ServiceConnectServiceResource{}
+				for _, f6elemf14iter := range f6iter.ServiceConnectResources {
+					f6elemf14elem := &svcapitypes.ServiceConnectServiceResource{}
+					if f6elemf14iter.DiscoveryArn != nil {
+						f6elemf14elem.DiscoveryARN = f6elemf14iter.DiscoveryArn
+					}
+					if f6elemf14iter.DiscoveryName != nil {
+						f6elemf14elem.DiscoveryName = f6elemf14iter.DiscoveryName
+					}
+					f6elemf14 = append(f6elemf14, f6elemf14elem)
+				}
+				f6elem.ServiceConnectResources = f6elemf14
 			}
 			if f6iter.Status != nil {
 				f6elem.Status = f6iter.Status
@@ -369,7 +466,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 				}
 				f14f0.Subnets = f14f0f2
 			}
-			f14.AWSvpcConfiguration = f14f0
+			f14.AWSVPCConfiguration = f14f0
 		}
 		cr.Status.AtProvider.NetworkConfiguration = f14
 	} else {
@@ -584,7 +681,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 						}
 						f30elemf8f0.Subnets = f30elemf8f0f2
 					}
-					f30elemf8.AWSvpcConfiguration = f30elemf8f0
+					f30elemf8.AWSVPCConfiguration = f30elemf8f0
 				}
 				f30elem.NetworkConfiguration = f30elemf8
 			}
@@ -678,35 +775,32 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.Service)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Update(ctx context.Context, cr *svcapitypes.Service) (managed.ExternalUpdate, error) {
 	input := GenerateUpdateServiceInput(cr)
 	if err := e.preUpdate(ctx, cr, input); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.UpdateServiceWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Service)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.Service) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteServiceInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteServiceWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -738,11 +832,11 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.Service, *svcsdk.DescribeServicesInput) error
 	postObserve    func(context.Context, *svcapitypes.Service, *svcsdk.DescribeServicesOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.ServiceParameters, *svcsdk.DescribeServicesOutput) error
-	isUpToDate     func(*svcapitypes.Service, *svcsdk.DescribeServicesOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.Service, *svcsdk.DescribeServicesOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.Service, *svcsdk.CreateServiceInput) error
 	postCreate     func(context.Context, *svcapitypes.Service, *svcsdk.CreateServiceOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.Service, *svcsdk.DeleteServiceInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.Service, *svcsdk.DeleteServiceOutput, error) error
+	postDelete     func(context.Context, *svcapitypes.Service, *svcsdk.DeleteServiceOutput, error) (managed.ExternalDelete, error)
 	preUpdate      func(context.Context, *svcapitypes.Service, *svcsdk.UpdateServiceInput) error
 	postUpdate     func(context.Context, *svcapitypes.Service, *svcsdk.UpdateServiceOutput, managed.ExternalUpdate, error) (managed.ExternalUpdate, error)
 }
@@ -757,8 +851,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.Service, _ *svcsdk.Describ
 func nopLateInitialize(*svcapitypes.ServiceParameters, *svcsdk.DescribeServicesOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.Service, *svcsdk.DescribeServicesOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.Service, *svcsdk.DescribeServicesOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.Service, *svcsdk.CreateServiceInput) error {
@@ -770,8 +864,8 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.Service, _ *svcsdk.CreateSe
 func nopPreDelete(context.Context, *svcapitypes.Service, *svcsdk.DeleteServiceInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.Service, _ *svcsdk.DeleteServiceOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.Service, _ *svcsdk.DeleteServiceOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
 func nopPreUpdate(context.Context, *svcapitypes.Service, *svcsdk.UpdateServiceInput) error {
 	return nil

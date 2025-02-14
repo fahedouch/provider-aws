@@ -17,20 +17,19 @@ limitations under the License.
 package cacheparametergroup
 
 import (
+	"context"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/request"
 	svcsdk "github.com/aws/aws-sdk-go/service/elasticache"
 	"github.com/aws/aws-sdk-go/service/elasticache/elasticacheiface"
-
+	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/elasticache/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -55,15 +54,15 @@ func withExternalName(value string) cacheParameterGroupModifier {
 
 func withCacheParameterGroupName(value string) cacheParameterGroupModifier {
 	return func(o *svcapitypes.CacheParameterGroup) {
-		o.Status.AtProvider.CacheParameterGroupName = awsclient.String(value)
+		o.Status.AtProvider.CacheParameterGroupName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withParameter(k, v string) cacheParameterGroupModifier {
 	return func(o *svcapitypes.CacheParameterGroup) {
 		o.Spec.ForProvider.ParameterNameValues = append(o.Spec.ForProvider.ParameterNameValues, svcapitypes.ParameterNameValue{
-			ParameterName:  awsclient.String(k),
-			ParameterValue: awsclient.String(v),
+			ParameterName:  pointer.ToOrNilIfZeroValue(k),
+			ParameterValue: pointer.ToOrNilIfZeroValue(v),
 		})
 	}
 }
@@ -102,24 +101,24 @@ func TestIsUpToDate(t *testing.T) {
 						cb(&svcsdk.DescribeCacheParametersOutput{
 							Parameters: []*svcsdk.Parameter{
 								{
-									Source:         awsclient.String(svcsdk.SourceTypeUser),
-									ParameterName:  awsclient.String("c"),
-									ParameterValue: awsclient.String("val3"),
+									Source:         pointer.ToOrNilIfZeroValue(svcsdk.SourceTypeUser),
+									ParameterName:  pointer.ToOrNilIfZeroValue("c"),
+									ParameterValue: pointer.ToOrNilIfZeroValue("val3"),
 								},
 								{
-									Source:         awsclient.String(svcsdk.SourceTypeUser),
-									ParameterName:  awsclient.String("a"),
-									ParameterValue: awsclient.String("val1"),
+									Source:         pointer.ToOrNilIfZeroValue(svcsdk.SourceTypeUser),
+									ParameterName:  pointer.ToOrNilIfZeroValue("a"),
+									ParameterValue: pointer.ToOrNilIfZeroValue("val1"),
 								},
 								{
-									Source:         awsclient.String(svcsdk.SourceTypeUser),
-									ParameterName:  awsclient.String("b"),
-									ParameterValue: awsclient.String("val2"),
+									Source:         pointer.ToOrNilIfZeroValue(svcsdk.SourceTypeUser),
+									ParameterName:  pointer.ToOrNilIfZeroValue("b"),
+									ParameterValue: pointer.ToOrNilIfZeroValue("val2"),
 								},
 								{
-									Source:         awsclient.String(svcsdk.SourceTypeCacheParameterGroup),
-									ParameterName:  awsclient.String("as-default"),
-									ParameterValue: awsclient.String("untouched"),
+									Source:         pointer.ToOrNilIfZeroValue(svcsdk.SourceTypeCacheParameterGroup),
+									ParameterName:  pointer.ToOrNilIfZeroValue("as-default"),
+									ParameterValue: pointer.ToOrNilIfZeroValue("untouched"),
 								},
 							},
 						}, true)
@@ -145,14 +144,14 @@ func TestIsUpToDate(t *testing.T) {
 						cb(&svcsdk.DescribeCacheParametersOutput{
 							Parameters: []*svcsdk.Parameter{
 								{
-									Source:         awsclient.String(svcsdk.SourceTypeUser),
-									ParameterName:  awsclient.String("a"),
-									ParameterValue: awsclient.String("valx"),
+									Source:         pointer.ToOrNilIfZeroValue(svcsdk.SourceTypeUser),
+									ParameterName:  pointer.ToOrNilIfZeroValue("a"),
+									ParameterValue: pointer.ToOrNilIfZeroValue("valx"),
 								},
 								{
-									Source:         awsclient.String(svcsdk.SourceTypeUser),
-									ParameterName:  awsclient.String("b"),
-									ParameterValue: awsclient.String("val2"),
+									Source:         pointer.ToOrNilIfZeroValue(svcsdk.SourceTypeUser),
+									ParameterName:  pointer.ToOrNilIfZeroValue("b"),
+									ParameterValue: pointer.ToOrNilIfZeroValue("val2"),
 								},
 							},
 						}, true)
@@ -176,7 +175,7 @@ func TestIsUpToDate(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			opts := []option{setupExternal}
 			e := newExternal(nil, tc.args.elasticache, opts)
-			upToDate, err := e.isUpToDate(tc.args.cr, tc.args.resp)
+			upToDate, _, err := e.isUpToDate(context.Background(), tc.args.cr, tc.args.resp)
 
 			if diff := cmp.Diff(tc.want.wantErr, err, cmpopts.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/opensearchservice/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.Domain)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.Domain) (managed.TypedExternalClient[*svcapitypes.Domain], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.Domain)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.Domain) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,30 +74,30 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeDomainWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateDomain(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.Domain)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.Domain) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateDomainInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -112,7 +105,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateDomainWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.DomainStatus.ARN != nil {
@@ -179,6 +172,9 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	if resp.DomainStatus.AutoTuneOptions != nil {
 		f4 := &svcapitypes.AutoTuneOptionsInput{}
+		if resp.DomainStatus.AutoTuneOptions.UseOffPeakWindow != nil {
+			f4.UseOffPeakWindow = resp.DomainStatus.AutoTuneOptions.UseOffPeakWindow
+		}
 		cr.Spec.ForProvider.AutoTuneOptions = f4
 	} else {
 		cr.Spec.ForProvider.AutoTuneOptions = nil
@@ -219,6 +215,9 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		if resp.DomainStatus.ClusterConfig.InstanceType != nil {
 			f6.InstanceType = resp.DomainStatus.ClusterConfig.InstanceType
 		}
+		if resp.DomainStatus.ClusterConfig.MultiAZWithStandbyEnabled != nil {
+			f6.MultiAZWithStandbyEnabled = resp.DomainStatus.ClusterConfig.MultiAZWithStandbyEnabled
+		}
 		if resp.DomainStatus.ClusterConfig.WarmCount != nil {
 			f6.WarmCount = resp.DomainStatus.ClusterConfig.WarmCount
 		}
@@ -229,11 +228,11 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 			f6.WarmType = resp.DomainStatus.ClusterConfig.WarmType
 		}
 		if resp.DomainStatus.ClusterConfig.ZoneAwarenessConfig != nil {
-			f6f9 := &svcapitypes.ZoneAwarenessConfig{}
+			f6f10 := &svcapitypes.ZoneAwarenessConfig{}
 			if resp.DomainStatus.ClusterConfig.ZoneAwarenessConfig.AvailabilityZoneCount != nil {
-				f6f9.AvailabilityZoneCount = resp.DomainStatus.ClusterConfig.ZoneAwarenessConfig.AvailabilityZoneCount
+				f6f10.AvailabilityZoneCount = resp.DomainStatus.ClusterConfig.ZoneAwarenessConfig.AvailabilityZoneCount
 			}
-			f6.ZoneAwarenessConfig = f6f9
+			f6.ZoneAwarenessConfig = f6f10
 		}
 		if resp.DomainStatus.ClusterConfig.ZoneAwarenessEnabled != nil {
 			f6.ZoneAwarenessEnabled = resp.DomainStatus.ClusterConfig.ZoneAwarenessEnabled
@@ -297,9 +296,9 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.DomainID = nil
 	}
 	if resp.DomainStatus.DomainName != nil {
-		cr.Spec.ForProvider.Name = resp.DomainStatus.DomainName
+		cr.Status.AtProvider.DomainName = resp.DomainStatus.DomainName
 	} else {
-		cr.Spec.ForProvider.Name = nil
+		cr.Status.AtProvider.DomainName = nil
 	}
 	if resp.DomainStatus.EBSOptions != nil {
 		f13 := &svcapitypes.EBSOptions{}
@@ -308,6 +307,9 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		}
 		if resp.DomainStatus.EBSOptions.Iops != nil {
 			f13.IOPS = resp.DomainStatus.EBSOptions.Iops
+		}
+		if resp.DomainStatus.EBSOptions.Throughput != nil {
+			f13.Throughput = resp.DomainStatus.EBSOptions.Throughput
 		}
 		if resp.DomainStatus.EBSOptions.VolumeSize != nil {
 			f13.VolumeSize = resp.DomainStatus.EBSOptions.VolumeSize
@@ -336,14 +338,19 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Status.AtProvider.Endpoint = nil
 	}
+	if resp.DomainStatus.EndpointV2 != nil {
+		cr.Status.AtProvider.EndpointV2 = resp.DomainStatus.EndpointV2
+	} else {
+		cr.Status.AtProvider.EndpointV2 = nil
+	}
 	if resp.DomainStatus.Endpoints != nil {
-		f16 := map[string]*string{}
-		for f16key, f16valiter := range resp.DomainStatus.Endpoints {
-			var f16val string
-			f16val = *f16valiter
-			f16[f16key] = &f16val
+		f17 := map[string]*string{}
+		for f17key, f17valiter := range resp.DomainStatus.Endpoints {
+			var f17val string
+			f17val = *f17valiter
+			f17[f17key] = &f17val
 		}
-		cr.Status.AtProvider.Endpoints = f16
+		cr.Status.AtProvider.Endpoints = f17
 	} else {
 		cr.Status.AtProvider.Endpoints = nil
 	}
@@ -352,30 +359,58 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Spec.ForProvider.EngineVersion = nil
 	}
+	if resp.DomainStatus.IPAddressType != nil {
+		cr.Spec.ForProvider.IPAddressType = resp.DomainStatus.IPAddressType
+	} else {
+		cr.Spec.ForProvider.IPAddressType = nil
+	}
 	if resp.DomainStatus.LogPublishingOptions != nil {
-		f18 := map[string]*svcapitypes.LogPublishingOption{}
-		for f18key, f18valiter := range resp.DomainStatus.LogPublishingOptions {
-			f18val := &svcapitypes.LogPublishingOption{}
-			if f18valiter.CloudWatchLogsLogGroupArn != nil {
-				f18val.CloudWatchLogsLogGroupARN = f18valiter.CloudWatchLogsLogGroupArn
+		f20 := map[string]*svcapitypes.LogPublishingOption{}
+		for f20key, f20valiter := range resp.DomainStatus.LogPublishingOptions {
+			f20val := &svcapitypes.LogPublishingOption{}
+			if f20valiter.CloudWatchLogsLogGroupArn != nil {
+				f20val.CloudWatchLogsLogGroupARN = f20valiter.CloudWatchLogsLogGroupArn
 			}
-			if f18valiter.Enabled != nil {
-				f18val.Enabled = f18valiter.Enabled
+			if f20valiter.Enabled != nil {
+				f20val.Enabled = f20valiter.Enabled
 			}
-			f18[f18key] = f18val
+			f20[f20key] = f20val
 		}
-		cr.Spec.ForProvider.LogPublishingOptions = f18
+		cr.Spec.ForProvider.LogPublishingOptions = f20
 	} else {
 		cr.Spec.ForProvider.LogPublishingOptions = nil
 	}
 	if resp.DomainStatus.NodeToNodeEncryptionOptions != nil {
-		f19 := &svcapitypes.NodeToNodeEncryptionOptions{}
+		f21 := &svcapitypes.NodeToNodeEncryptionOptions{}
 		if resp.DomainStatus.NodeToNodeEncryptionOptions.Enabled != nil {
-			f19.Enabled = resp.DomainStatus.NodeToNodeEncryptionOptions.Enabled
+			f21.Enabled = resp.DomainStatus.NodeToNodeEncryptionOptions.Enabled
 		}
-		cr.Spec.ForProvider.NodeToNodeEncryptionOptions = f19
+		cr.Spec.ForProvider.NodeToNodeEncryptionOptions = f21
 	} else {
 		cr.Spec.ForProvider.NodeToNodeEncryptionOptions = nil
+	}
+	if resp.DomainStatus.OffPeakWindowOptions != nil {
+		f22 := &svcapitypes.OffPeakWindowOptions{}
+		if resp.DomainStatus.OffPeakWindowOptions.Enabled != nil {
+			f22.Enabled = resp.DomainStatus.OffPeakWindowOptions.Enabled
+		}
+		if resp.DomainStatus.OffPeakWindowOptions.OffPeakWindow != nil {
+			f22f1 := &svcapitypes.OffPeakWindow{}
+			if resp.DomainStatus.OffPeakWindowOptions.OffPeakWindow.WindowStartTime != nil {
+				f22f1f0 := &svcapitypes.WindowStartTime{}
+				if resp.DomainStatus.OffPeakWindowOptions.OffPeakWindow.WindowStartTime.Hours != nil {
+					f22f1f0.Hours = resp.DomainStatus.OffPeakWindowOptions.OffPeakWindow.WindowStartTime.Hours
+				}
+				if resp.DomainStatus.OffPeakWindowOptions.OffPeakWindow.WindowStartTime.Minutes != nil {
+					f22f1f0.Minutes = resp.DomainStatus.OffPeakWindowOptions.OffPeakWindow.WindowStartTime.Minutes
+				}
+				f22f1.WindowStartTime = f22f1f0
+			}
+			f22.OffPeakWindow = f22f1
+		}
+		cr.Spec.ForProvider.OffPeakWindowOptions = f22
+	} else {
+		cr.Spec.ForProvider.OffPeakWindowOptions = nil
 	}
 	if resp.DomainStatus.Processing != nil {
 		cr.Status.AtProvider.Processing = resp.DomainStatus.Processing
@@ -383,43 +418,52 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.Processing = nil
 	}
 	if resp.DomainStatus.ServiceSoftwareOptions != nil {
-		f21 := &svcapitypes.ServiceSoftwareOptions{}
+		f24 := &svcapitypes.ServiceSoftwareOptions{}
 		if resp.DomainStatus.ServiceSoftwareOptions.AutomatedUpdateDate != nil {
-			f21.AutomatedUpdateDate = &metav1.Time{*resp.DomainStatus.ServiceSoftwareOptions.AutomatedUpdateDate}
+			f24.AutomatedUpdateDate = &metav1.Time{*resp.DomainStatus.ServiceSoftwareOptions.AutomatedUpdateDate}
 		}
 		if resp.DomainStatus.ServiceSoftwareOptions.Cancellable != nil {
-			f21.Cancellable = resp.DomainStatus.ServiceSoftwareOptions.Cancellable
+			f24.Cancellable = resp.DomainStatus.ServiceSoftwareOptions.Cancellable
 		}
 		if resp.DomainStatus.ServiceSoftwareOptions.CurrentVersion != nil {
-			f21.CurrentVersion = resp.DomainStatus.ServiceSoftwareOptions.CurrentVersion
+			f24.CurrentVersion = resp.DomainStatus.ServiceSoftwareOptions.CurrentVersion
 		}
 		if resp.DomainStatus.ServiceSoftwareOptions.Description != nil {
-			f21.Description = resp.DomainStatus.ServiceSoftwareOptions.Description
+			f24.Description = resp.DomainStatus.ServiceSoftwareOptions.Description
 		}
 		if resp.DomainStatus.ServiceSoftwareOptions.NewVersion != nil {
-			f21.NewVersion = resp.DomainStatus.ServiceSoftwareOptions.NewVersion
+			f24.NewVersion = resp.DomainStatus.ServiceSoftwareOptions.NewVersion
 		}
 		if resp.DomainStatus.ServiceSoftwareOptions.OptionalDeployment != nil {
-			f21.OptionalDeployment = resp.DomainStatus.ServiceSoftwareOptions.OptionalDeployment
+			f24.OptionalDeployment = resp.DomainStatus.ServiceSoftwareOptions.OptionalDeployment
 		}
 		if resp.DomainStatus.ServiceSoftwareOptions.UpdateAvailable != nil {
-			f21.UpdateAvailable = resp.DomainStatus.ServiceSoftwareOptions.UpdateAvailable
+			f24.UpdateAvailable = resp.DomainStatus.ServiceSoftwareOptions.UpdateAvailable
 		}
 		if resp.DomainStatus.ServiceSoftwareOptions.UpdateStatus != nil {
-			f21.UpdateStatus = resp.DomainStatus.ServiceSoftwareOptions.UpdateStatus
+			f24.UpdateStatus = resp.DomainStatus.ServiceSoftwareOptions.UpdateStatus
 		}
-		cr.Status.AtProvider.ServiceSoftwareOptions = f21
+		cr.Status.AtProvider.ServiceSoftwareOptions = f24
 	} else {
 		cr.Status.AtProvider.ServiceSoftwareOptions = nil
 	}
 	if resp.DomainStatus.SnapshotOptions != nil {
-		f22 := &svcapitypes.SnapshotOptions{}
+		f25 := &svcapitypes.SnapshotOptions{}
 		if resp.DomainStatus.SnapshotOptions.AutomatedSnapshotStartHour != nil {
-			f22.AutomatedSnapshotStartHour = resp.DomainStatus.SnapshotOptions.AutomatedSnapshotStartHour
+			f25.AutomatedSnapshotStartHour = resp.DomainStatus.SnapshotOptions.AutomatedSnapshotStartHour
 		}
-		cr.Status.AtProvider.SnapshotOptions = f22
+		cr.Status.AtProvider.SnapshotOptions = f25
 	} else {
 		cr.Status.AtProvider.SnapshotOptions = nil
+	}
+	if resp.DomainStatus.SoftwareUpdateOptions != nil {
+		f26 := &svcapitypes.SoftwareUpdateOptions{}
+		if resp.DomainStatus.SoftwareUpdateOptions.AutoSoftwareUpdateEnabled != nil {
+			f26.AutoSoftwareUpdateEnabled = resp.DomainStatus.SoftwareUpdateOptions.AutoSoftwareUpdateEnabled
+		}
+		cr.Spec.ForProvider.SoftwareUpdateOptions = f26
+	} else {
+		cr.Spec.ForProvider.SoftwareUpdateOptions = nil
 	}
 	if resp.DomainStatus.UpgradeProcessing != nil {
 		cr.Status.AtProvider.UpgradeProcessing = resp.DomainStatus.UpgradeProcessing
@@ -427,38 +471,38 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.UpgradeProcessing = nil
 	}
 	if resp.DomainStatus.VPCOptions != nil {
-		f24 := &svcapitypes.VPCDerivedInfo{}
+		f28 := &svcapitypes.VPCDerivedInfo{}
 		if resp.DomainStatus.VPCOptions.AvailabilityZones != nil {
-			f24f0 := []*string{}
-			for _, f24f0iter := range resp.DomainStatus.VPCOptions.AvailabilityZones {
-				var f24f0elem string
-				f24f0elem = *f24f0iter
-				f24f0 = append(f24f0, &f24f0elem)
+			f28f0 := []*string{}
+			for _, f28f0iter := range resp.DomainStatus.VPCOptions.AvailabilityZones {
+				var f28f0elem string
+				f28f0elem = *f28f0iter
+				f28f0 = append(f28f0, &f28f0elem)
 			}
-			f24.AvailabilityZones = f24f0
+			f28.AvailabilityZones = f28f0
 		}
 		if resp.DomainStatus.VPCOptions.SecurityGroupIds != nil {
-			f24f1 := []*string{}
-			for _, f24f1iter := range resp.DomainStatus.VPCOptions.SecurityGroupIds {
-				var f24f1elem string
-				f24f1elem = *f24f1iter
-				f24f1 = append(f24f1, &f24f1elem)
+			f28f1 := []*string{}
+			for _, f28f1iter := range resp.DomainStatus.VPCOptions.SecurityGroupIds {
+				var f28f1elem string
+				f28f1elem = *f28f1iter
+				f28f1 = append(f28f1, &f28f1elem)
 			}
-			f24.SecurityGroupIDs = f24f1
+			f28.SecurityGroupIDs = f28f1
 		}
 		if resp.DomainStatus.VPCOptions.SubnetIds != nil {
-			f24f2 := []*string{}
-			for _, f24f2iter := range resp.DomainStatus.VPCOptions.SubnetIds {
-				var f24f2elem string
-				f24f2elem = *f24f2iter
-				f24f2 = append(f24f2, &f24f2elem)
+			f28f2 := []*string{}
+			for _, f28f2iter := range resp.DomainStatus.VPCOptions.SubnetIds {
+				var f28f2elem string
+				f28f2elem = *f28f2iter
+				f28f2 = append(f28f2, &f28f2elem)
 			}
-			f24.SubnetIDs = f24f2
+			f28.SubnetIDs = f28f2
 		}
 		if resp.DomainStatus.VPCOptions.VPCId != nil {
-			f24.VPCID = resp.DomainStatus.VPCOptions.VPCId
+			f28.VPCID = resp.DomainStatus.VPCOptions.VPCId
 		}
-		cr.Status.AtProvider.VPCOptions = f24
+		cr.Status.AtProvider.VPCOptions = f28
 	} else {
 		cr.Status.AtProvider.VPCOptions = nil
 	}
@@ -466,27 +510,28 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	return e.update(ctx, mg)
+func (e *external) Update(ctx context.Context, cr *svcapitypes.Domain) (managed.ExternalUpdate, error) {
+	return e.update(ctx, cr)
 
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Domain)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.Domain) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteDomainInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteDomainWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -517,12 +562,12 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.Domain, *svcsdk.DescribeDomainInput) error
 	postObserve    func(context.Context, *svcapitypes.Domain, *svcsdk.DescribeDomainOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.DomainParameters, *svcsdk.DescribeDomainOutput) error
-	isUpToDate     func(*svcapitypes.Domain, *svcsdk.DescribeDomainOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.Domain, *svcsdk.DescribeDomainOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.Domain, *svcsdk.CreateDomainInput) error
 	postCreate     func(context.Context, *svcapitypes.Domain, *svcsdk.CreateDomainOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.Domain, *svcsdk.DeleteDomainInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.Domain, *svcsdk.DeleteDomainOutput, error) error
-	update         func(context.Context, cpresource.Managed) (managed.ExternalUpdate, error)
+	postDelete     func(context.Context, *svcapitypes.Domain, *svcsdk.DeleteDomainOutput, error) (managed.ExternalDelete, error)
+	update         func(context.Context, *svcapitypes.Domain) (managed.ExternalUpdate, error)
 }
 
 func nopPreObserve(context.Context, *svcapitypes.Domain, *svcsdk.DescribeDomainInput) error {
@@ -535,8 +580,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.Domain, _ *svcsdk.Describe
 func nopLateInitialize(*svcapitypes.DomainParameters, *svcsdk.DescribeDomainOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.Domain, *svcsdk.DescribeDomainOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.Domain, *svcsdk.DescribeDomainOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.Domain, *svcsdk.CreateDomainInput) error {
@@ -548,9 +593,9 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.Domain, _ *svcsdk.CreateDom
 func nopPreDelete(context.Context, *svcapitypes.Domain, *svcsdk.DeleteDomainInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.Domain, _ *svcsdk.DeleteDomainOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.Domain, _ *svcsdk.DeleteDomainOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
-func nopUpdate(context.Context, cpresource.Managed) (managed.ExternalUpdate, error) {
+func nopUpdate(context.Context, *svcapitypes.Domain) (managed.ExternalUpdate, error) {
 	return managed.ExternalUpdate{}, nil
 }

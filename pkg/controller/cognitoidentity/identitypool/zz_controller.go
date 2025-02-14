@@ -34,7 +34,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cognitoidentity/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -57,7 +58,7 @@ func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
@@ -80,7 +81,7 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeIdentityPoolWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
@@ -111,7 +112,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateIdentityPoolWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.AllowClassicFlow != nil {
@@ -216,25 +217,30 @@ func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.E
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.UpdateIdentityPoolWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg cpresource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*svcapitypes.IdentityPool)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteIdentityPoolInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteIdentityPoolWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -270,7 +276,7 @@ type external struct {
 	preCreate      func(context.Context, *svcapitypes.IdentityPool, *svcsdk.CreateIdentityPoolInput) error
 	postCreate     func(context.Context, *svcapitypes.IdentityPool, *svcsdk.IdentityPool, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.IdentityPool, *svcsdk.DeleteIdentityPoolInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.IdentityPool, *svcsdk.DeleteIdentityPoolOutput, error) error
+	postDelete     func(context.Context, *svcapitypes.IdentityPool, *svcsdk.DeleteIdentityPoolOutput, error) (managed.ExternalDelete, error)
 	preUpdate      func(context.Context, *svcapitypes.IdentityPool, *svcsdk.IdentityPool) error
 	postUpdate     func(context.Context, *svcapitypes.IdentityPool, *svcsdk.IdentityPool, managed.ExternalUpdate, error) (managed.ExternalUpdate, error)
 }
@@ -298,8 +304,8 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.IdentityPool, _ *svcsdk.Ide
 func nopPreDelete(context.Context, *svcapitypes.IdentityPool, *svcsdk.DeleteIdentityPoolInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.IdentityPool, _ *svcsdk.DeleteIdentityPoolOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.IdentityPool, _ *svcsdk.DeleteIdentityPoolOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
 func nopPreUpdate(context.Context, *svcapitypes.IdentityPool, *svcsdk.IdentityPool) error {
 	return nil

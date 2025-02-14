@@ -17,21 +17,21 @@ import (
 	"context"
 	"strings"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/controller"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	svcsdk "github.com/aws/aws-sdk-go/service/kafka"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
+	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/kafka/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupConfiguration adds a controller that reconciles Configuration.
@@ -53,21 +53,33 @@ func SetupConfiguration(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.ConfigurationGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Configuration{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.ConfigurationGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.Configuration, obj *svcsdk.CreateConfigurationInput) error {
-	obj.Name = awsclients.String(meta.GetExternalName(cr))
+	obj.Name = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	serverProperties := strings.Join(cr.Spec.ForProvider.Properties, "\n")
 	obj.ServerProperties = []byte(serverProperties)
 	return nil
@@ -77,12 +89,12 @@ func postCreate(_ context.Context, cr *svcapitypes.Configuration, obj *svcsdk.Cr
 	if err != nil {
 		return managed.ExternalCreation{}, err
 	}
-	meta.SetExternalName(cr, awsclients.StringValue(obj.Arn))
-	return managed.ExternalCreation{ExternalNameAssigned: true}, nil
+	meta.SetExternalName(cr, pointer.StringValue(obj.Arn))
+	return managed.ExternalCreation{}, nil
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Configuration, obj *svcsdk.DescribeConfigurationInput) error {
-	obj.Arn = awsclients.String(meta.GetExternalName(cr))
+	obj.Arn = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -91,7 +103,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Configuration, obj *svcsdk.D
 		return managed.ExternalObservation{}, err
 	}
 
-	switch awsclients.StringValue(obj.State) {
+	switch pointer.StringValue(obj.State) {
 	case string(svcapitypes.ConfigurationState_ACTIVE):
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.ConfigurationState_DELETING):
@@ -102,19 +114,19 @@ func postObserve(_ context.Context, cr *svcapitypes.Configuration, obj *svcsdk.D
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Configuration, obj *svcsdk.DeleteConfigurationInput) (bool, error) {
-	obj.Arn = awsclients.String(meta.GetExternalName(cr))
+	obj.Arn = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
-func postDelete(_ context.Context, cr *svcapitypes.Configuration, obj *svcsdk.DeleteConfigurationOutput, err error) error {
+func postDelete(_ context.Context, cr *svcapitypes.Configuration, obj *svcsdk.DeleteConfigurationOutput, err error) (managed.ExternalDelete, error) {
 	if err != nil {
 		if strings.Contains(err.Error(), svcsdk.ErrCodeBadRequestException) {
 			// skip: failed to delete Configuration: BadRequestException:
 			// This operation is only valid for resources that are in one of
 			// the following states :[ACTIVE, DELETE_FAILED]
-			return nil
+			return managed.ExternalDelete{}, nil
 		}
-		return err
+		return managed.ExternalDelete{}, err
 	}
-	return err
+	return managed.ExternalDelete{}, err
 }

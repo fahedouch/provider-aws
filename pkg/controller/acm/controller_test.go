@@ -23,19 +23,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsacm "github.com/aws/aws-sdk-go-v2/service/acm"
 	awsacmtype "github.com/aws/aws-sdk-go-v2/service/acm/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
 
 	"github.com/crossplane-contrib/provider-aws/apis/acm/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/acm"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/acm/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -174,7 +173,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  certificate(withCertificateArn()),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 		"ResourceDoesNotExist": {
@@ -265,7 +264,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  certificate(),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -362,7 +361,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  certificate(withCertificateTransparencyLoggingPreference()),
-				err: awsclient.Wrap(errBoom, errUpdate),
+				err: errorutils.Wrap(errBoom, errUpdate),
 			},
 		},
 		"ClientUpdateTagsError": {
@@ -388,7 +387,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  certificate(withTags()),
-				err: awsclient.Wrap(errBoom, errAddTagsFailed),
+				err: errorutils.Wrap(errBoom, errAddTagsFailed),
 			},
 		},
 	}
@@ -455,7 +454,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  certificate(),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 		"ResourceDoesNotExist": {
@@ -476,7 +475,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.acm}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

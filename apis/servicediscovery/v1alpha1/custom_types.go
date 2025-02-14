@@ -3,8 +3,7 @@ package v1alpha1
 import (
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
-
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"k8s.io/utils/ptr"
 )
 
 // AnnotationKeyOperationID is the key in the annotations map of a
@@ -12,7 +11,27 @@ import (
 const AnnotationKeyOperationID = CRDGroup + "/operation-id"
 
 // CustomServiceParameters are custom parameters for Services.
-type CustomServiceParameters struct{}
+type CustomServiceParameters struct {
+
+	// +optional
+	// +crossplane:generate:reference:type=github.com/crossplane-contrib/provider-aws/apis/servicediscovery/v1alpha1.PrivateDNSNamespace
+	// +crossplane:generate:reference:refFieldName=ServiceNameRef
+	// +crossplane:generate:reference:selectorFieldName=ServiceNameSelector
+	ServiceName *string `json:"serviceName,omitempty"`
+
+	// ServiceNameRef is a reference to a service used to set
+	// the ServiceName.
+	// +optional
+	ServiceNameRef *xpv1.Reference `json:"serviceNameRef,omitempty"`
+
+	// ServiceNameSelector selects references to service used
+	// to set the ServiceName.
+	// +optional
+	ServiceNameSelector *xpv1.Selector `json:"serviceNameSelector,omitempty"`
+}
+
+// CustomServiceObservation includes the custom status fields of Services.
+type CustomServiceObservation struct{}
 
 // CustomPrivateDNSNamespaceParameters are custom parameters for PrivateDNSNamespaces.
 type CustomPrivateDNSNamespaceParameters struct {
@@ -28,11 +47,20 @@ type CustomPrivateDNSNamespaceParameters struct {
 	VPCSelector *xpv1.Selector `json:"vpcSelector,omitempty"`
 }
 
+// CustomPrivateDNSNamespaceObservation includes the custom status fields of PrivateDNSNamespaces.
+type CustomPrivateDNSNamespaceObservation struct{}
+
 // CustomHTTPNamespaceParameters are custom parameters for HTTPNamespaces.
 type CustomHTTPNamespaceParameters struct{}
 
+// CustomHTTPNamespaceObservation includes the custom status fields of HTTPNamespaces.
+type CustomHTTPNamespaceObservation struct{}
+
 // CustomPublicDNSNamespaceParameters are custom parameters for PublicDNSNamespaces.
 type CustomPublicDNSNamespaceParameters struct{}
+
+// CustomPublicDNSNamespaceObservation includes the custom status fields of PublicDNSNamespaces.
+type CustomPublicDNSNamespaceObservation struct{}
 
 // GetOperationID returns the last operation id.
 func (in *HTTPNamespace) GetOperationID() *string {
@@ -44,7 +72,7 @@ func (in *HTTPNamespace) GetOperationID() *string {
 
 // SetOperationID sets the last operation id.
 func (in *HTTPNamespace) SetOperationID(id *string) {
-	meta.AddAnnotations(in, map[string]string{AnnotationKeyOperationID: aws.StringValue(id)})
+	meta.AddAnnotations(in, map[string]string{AnnotationKeyOperationID: ptr.Deref(id, "")})
 }
 
 // GetDescription returns the description.
@@ -72,7 +100,7 @@ func (in *PrivateDNSNamespace) GetOperationID() *string {
 
 // SetOperationID sets the last operation id.
 func (in *PrivateDNSNamespace) SetOperationID(id *string) {
-	meta.AddAnnotations(in, map[string]string{AnnotationKeyOperationID: aws.StringValue(id)})
+	meta.AddAnnotations(in, map[string]string{AnnotationKeyOperationID: ptr.Deref(id, "")})
 }
 
 // GetDescription returns the description.
@@ -103,7 +131,7 @@ func (in *PublicDNSNamespace) GetOperationID() *string {
 
 // SetOperationID sets the last operation id.
 func (in *PublicDNSNamespace) SetOperationID(id *string) {
-	meta.AddAnnotations(in, map[string]string{AnnotationKeyOperationID: aws.StringValue(id)})
+	meta.AddAnnotations(in, map[string]string{AnnotationKeyOperationID: ptr.Deref(id, "")})
 }
 
 // GetDescription returns the description.

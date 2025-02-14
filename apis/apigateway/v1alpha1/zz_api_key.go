@@ -29,8 +29,8 @@ type APIKeyParameters struct {
 	// Region is which region the APIKey will be created.
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
-	// An AWS Marketplace customer identifier , when integrating with the AWS SaaS
-	// Marketplace.
+	// An Amazon Web Services Marketplace customer identifier, when integrating
+	// with the Amazon Web Services SaaS Marketplace.
 	CustomerID *string `json:"customerID,omitempty"`
 	// The description of the ApiKey.
 	Description *string `json:"description,omitempty"`
@@ -67,6 +67,8 @@ type APIKeyObservation struct {
 	LastUpdatedDate *metav1.Time `json:"lastUpdatedDate,omitempty"`
 	// A list of Stage resources that are associated with the ApiKey resource.
 	StageKeys []*string `json:"stageKeys,omitempty"`
+
+	CustomAPIKeyObservation `json:",inline"`
 }
 
 // APIKeyStatus defines the observed state of APIKey.
@@ -81,6 +83,7 @@ type APIKeyStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

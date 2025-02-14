@@ -41,6 +41,16 @@ type DBInstanceParameters struct {
 	//
 	// Example: us-east-1d
 	AvailabilityZone *string `json:"availabilityZone,omitempty"`
+	// The CA certificate identifier to use for the DB instance's server certificate.
+	//
+	// For more information, see Updating Your Amazon DocumentDB TLS Certificates
+	// (https://docs.aws.amazon.com/documentdb/latest/developerguide/ca_cert_rotation.html)
+	// and Encrypting Data in Transit (https://docs.aws.amazon.com/documentdb/latest/developerguide/security.encryption.ssl.html)
+	// in the Amazon DocumentDB Developer Guide.
+	CACertificateIdentifier *string `json:"caCertificateIdentifier,omitempty"`
+	// A value that indicates whether to copy tags from the DB instance to snapshots
+	// of the DB instance. By default, tags are not copied.
+	CopyTagsToSnapshot *bool `json:"copyTagsToSnapshot,omitempty"`
 	// The compute and memory capacity of the instance; for example, db.r5.large.
 	// +kubebuilder:validation:Required
 	DBInstanceClass *string `json:"dbInstanceClass"`
@@ -99,8 +109,8 @@ type DBInstanceSpec struct {
 type DBInstanceObservation struct {
 	// Specifies the number of days for which automatic snapshots are retained.
 	BackupRetentionPeriod *int64 `json:"backupRetentionPeriod,omitempty"`
-	// The identifier of the CA certificate for this DB instance.
-	CACertificateIdentifier *string `json:"caCertificateIdentifier,omitempty"`
+	// The details of the DB instance's server certificate.
+	CertificateDetails *CertificateDetails `json:"certificateDetails,omitempty"`
 	// Contains the name of the cluster that the instance is a member of if the
 	// instance is a member of a cluster.
 	DBClusterIdentifier *string `json:"dbClusterIdentifier,omitempty"`
@@ -149,6 +159,8 @@ type DBInstanceObservation struct {
 	// Provides a list of VPC security group elements that the instance belongs
 	// to.
 	VPCSecurityGroups []*VPCSecurityGroupMembership `json:"vpcSecurityGroups,omitempty"`
+
+	CustomDBInstanceObservation `json:",inline"`
 }
 
 // DBInstanceStatus defines the observed state of DBInstance.
@@ -163,6 +175,7 @@ type DBInstanceStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

@@ -31,7 +31,7 @@ type DocumentationVersionParameters struct {
 	Region string `json:"region"`
 	// A description about the new documentation snapshot.
 	Description *string `json:"description,omitempty"`
-	// [Required] The version identifier of the new snapshot.
+	// The version identifier of the new snapshot.
 	// +kubebuilder:validation:Required
 	DocumentationVersion *string `json:"documentationVersion"`
 	// The stage name to be associated with the new documentation snapshot.
@@ -51,6 +51,8 @@ type DocumentationVersionObservation struct {
 	CreatedDate *metav1.Time `json:"createdDate,omitempty"`
 	// The version identifier of the API documentation snapshot.
 	Version *string `json:"version,omitempty"`
+
+	CustomDocumentationVersionObservation `json:",inline"`
 }
 
 // DocumentationVersionStatus defines the observed state of DocumentationVersion.
@@ -65,6 +67,7 @@ type DocumentationVersionStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

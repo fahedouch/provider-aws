@@ -31,7 +31,9 @@ type DatabaseParameters struct {
 	Region string `json:"region"`
 	// The ID of the Data Catalog in which to create the database. If none is provided,
 	// the Amazon Web Services account ID is used by default.
-	CatalogID                *string `json:"catalogID,omitempty"`
+	CatalogID *string `json:"catalogID,omitempty"`
+	// The tags you assign to the database.
+	Tags                     map[string]*string `json:"tags,omitempty"`
 	CustomDatabaseParameters `json:",inline"`
 }
 
@@ -45,6 +47,8 @@ type DatabaseSpec struct {
 type DatabaseObservation struct {
 	// The time at which the metadata database was created in the catalog.
 	CreateTime *metav1.Time `json:"createTime,omitempty"`
+
+	CustomDatabaseObservation `json:",inline"`
 }
 
 // DatabaseStatus defines the observed state of Database.
@@ -59,6 +63,7 @@ type DatabaseStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

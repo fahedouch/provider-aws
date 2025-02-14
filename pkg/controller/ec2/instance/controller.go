@@ -18,16 +18,10 @@ package instance
 
 import (
 	"context"
-	"sort"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -35,12 +29,21 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ec2/manualv1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -65,20 +68,32 @@ func SetupInstance(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewInstanceClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.InstanceGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Instance{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.InstanceGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewInstanceClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -91,7 +106,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, awsclient.StringValue(cr.Spec.ForProvider.Region))
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, pointer.StringValue(cr.Spec.ForProvider.Region))
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +118,7 @@ type external struct {
 	client ec2.InstanceClient
 }
 
-func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) { // nolint:gocyclo
+func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) { //nolint:gocyclo
 	cr, ok := mgd.(*svcapitypes.Instance)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
@@ -115,81 +130,14 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		}, nil
 	}
 
-	response, err := e.client.DescribeInstances(ctx,
-		&awsec2.DescribeInstancesInput{
-			InstanceIds: []string{meta.GetExternalName(cr)},
-		})
-
-	// deleted instances that have not yet been cleaned up from the cluster return a
-	// 200 OK with a nil response.Reservations slice
-	if err == nil && len(response.Reservations) == 0 {
-		return managed.ExternalObservation{}, nil
+	instancePtr, o, err := e.describeInstance(ctx, meta.GetExternalName(cr))
+	if err != nil || instancePtr == nil {
+		return managed.ExternalObservation{}, err
 	}
-
-	if err != nil {
-		return managed.ExternalObservation{},
-			awsclient.Wrap(resource.Ignore(ec2.IsInstanceNotFoundErr, err), errDescribe)
-	}
-
-	// in a successful response, there should be one and only one object
-	if len(response.Reservations[0].Instances) != 1 {
-		return managed.ExternalObservation{}, errors.New(errMultipleItems)
-	}
-
-	observed := response.Reservations[0].Instances[0]
+	observed := *instancePtr
 
 	// update the CRD spec for any new values from provider
 	current := cr.Spec.ForProvider.DeepCopy()
-
-	o := awsec2.DescribeInstanceAttributeOutput{}
-
-	for _, input := range []types.InstanceAttributeName{
-		types.InstanceAttributeNameDisableApiTermination,
-		types.InstanceAttributeNameEbsOptimized,
-		types.InstanceAttributeNameInstanceInitiatedShutdownBehavior,
-		types.InstanceAttributeNameInstanceType,
-		types.InstanceAttributeNameKernel,
-		types.InstanceAttributeNameRamdisk,
-		types.InstanceAttributeNameUserData,
-	} {
-		r, err := e.client.DescribeInstanceAttribute(ctx, &awsec2.DescribeInstanceAttributeInput{
-			InstanceId: aws.String(meta.GetExternalName(cr)),
-			Attribute:  input,
-		})
-
-		if err != nil {
-			return managed.ExternalObservation{}, awsclient.Wrap(err, errDescribe)
-		}
-
-		if r.DisableApiTermination != nil {
-			o.DisableApiTermination = r.DisableApiTermination
-		}
-
-		if r.EbsOptimized != nil {
-			o.EbsOptimized = r.EbsOptimized
-		}
-
-		if r.InstanceInitiatedShutdownBehavior != nil {
-			o.InstanceInitiatedShutdownBehavior = r.InstanceInitiatedShutdownBehavior
-		}
-
-		if r.InstanceType != nil {
-			o.InstanceType = r.InstanceType
-		}
-
-		if r.KernelId != nil {
-			o.KernelId = r.KernelId
-		}
-
-		if r.RamdiskId != nil {
-			o.RamdiskId = r.RamdiskId
-		}
-
-		if r.UserData != nil {
-			o.UserData = r.UserData
-		}
-	}
-
 	ec2.LateInitializeInstance(&cr.Spec.ForProvider, &observed, &o)
 
 	if !cmp.Equal(current, &cr.Spec.ForProvider) {
@@ -198,7 +146,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		}
 	}
 
-	observation := ec2.GenerateInstanceObservation(observed)
+	observation := ec2.GenerateInstanceObservation(observed, &o)
 	condition := ec2.GenerateInstanceCondition(observation)
 
 	switch condition {
@@ -227,6 +175,81 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	}, nil
 }
 
+func (e *external) describeInstance(ctx context.Context, instanceId string) (
+	*types.Instance,
+	awsec2.DescribeInstanceAttributeOutput,
+	error,
+) {
+	eg := errgroup.Group{}
+
+	var describeOutput *awsec2.DescribeInstancesOutput
+	var describeError error
+	eg.Go(func() error {
+		describeOutput, describeError = e.client.DescribeInstances(ctx, &awsec2.DescribeInstancesInput{
+			InstanceIds: []string{instanceId},
+		})
+		return nil
+	})
+
+	attrs := awsec2.DescribeInstanceAttributeOutput{}
+	descAttr := func(attr types.InstanceAttributeName) (*awsec2.DescribeInstanceAttributeOutput, error) {
+		return e.client.DescribeInstanceAttribute(ctx, &awsec2.DescribeInstanceAttributeInput{
+			InstanceId: &instanceId,
+			Attribute:  attr,
+		})
+	}
+
+	eg.Go(func() error {
+		if res, err := descAttr(types.InstanceAttributeNameDisableApiTermination); err != nil {
+			return errorutils.Wrap(err, "fetching DisableApiTermination")
+		} else {
+			attrs.DisableApiTermination = res.DisableApiTermination
+			return nil
+		}
+	})
+
+	eg.Go(func() error {
+		if res, err := descAttr(types.InstanceAttributeNameInstanceInitiatedShutdownBehavior); err != nil {
+			return errorutils.Wrap(err, "fetching InstanceInitiatedShutdownBehavior")
+		} else {
+			attrs.InstanceInitiatedShutdownBehavior = res.InstanceInitiatedShutdownBehavior
+			return nil
+		}
+	})
+
+	eg.Go(func() error {
+		if res, err := descAttr(types.InstanceAttributeNameUserData); err != nil {
+			return errorutils.Wrap(err, "fetching UserData")
+		} else {
+			attrs.UserData = res.UserData
+			return nil
+		}
+	})
+
+	attrsErr := eg.Wait()
+
+	if describeError != nil {
+		return nil, attrs,
+			errorutils.Wrap(resource.Ignore(ec2.IsInstanceNotFoundErr, describeError), errDescribe)
+	}
+
+	// deleted instances that have not yet been cleaned up from the cluster return a
+	// 200 OK with a nil response.Reservations slice
+	if len(describeOutput.Reservations) == 0 {
+		return nil, attrs, nil
+	}
+
+	// in a successful response, there should be one and only one object
+	if len(describeOutput.Reservations[0].Instances) != 1 {
+		return nil, attrs, errors.New(errMultipleItems)
+	}
+
+	if attrsErr != nil {
+		return nil, attrs, errorutils.Wrap(attrsErr, errDescribe)
+	}
+	return &describeOutput.Reservations[0].Instances[0], attrs, nil
+}
+
 func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.ExternalCreation, error) {
 	cr, ok := mgd.(*svcapitypes.Instance)
 	if !ok {
@@ -237,30 +260,30 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 		ec2.GenerateEC2RunInstancesInput(mgd.GetName(), &cr.Spec.ForProvider),
 	)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	instance := result.Instances[0]
 
 	if _, err := e.client.CreateTags(ctx, &awsec2.CreateTagsInput{
-		Resources: []string{awsclient.StringValue(instance.InstanceId)},
-		Tags:      svcapitypes.GenerateEC2Tags(cr.Spec.ForProvider.Tags),
+		Resources: []string{pointer.StringValue(instance.InstanceId)},
+		Tags:      ec2.GenerateEC2TagsManualV1alpha1(cr.Spec.ForProvider.Tags),
 	}); err != nil {
-		return managed.ExternalCreation{ExternalNameAssigned: false}, awsclient.Wrap(err, errCreateTags)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreateTags)
 	}
 
-	meta.SetExternalName(cr, awsclient.StringValue(instance.InstanceId))
+	meta.SetExternalName(cr, pointer.StringValue(instance.InstanceId))
 
-	return managed.ExternalCreation{ExternalNameAssigned: true}, nil
+	return managed.ExternalCreation{}, nil
 }
 
-func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { // nolint:gocyclo
+func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { //nolint:gocyclo
 	cr, ok := mgd.(*svcapitypes.Instance)
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
 	}
 
-	if cr.Spec.ForProvider.DisableAPITermination != nil {
+	if !ptr.Equal(cr.Spec.ForProvider.DisableAPITermination, cr.Status.AtProvider.DisableAPITermination) {
 		modifyInput := &awsec2.ModifyInstanceAttributeInput{
 			InstanceId: aws.String(meta.GetExternalName(cr)),
 			DisableApiTermination: &types.AttributeBooleanValue{
@@ -270,11 +293,11 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		_, err := e.client.ModifyInstanceAttribute(ctx, modifyInput)
 
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errModifyInstanceAttributes)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errModifyInstanceAttributes)
 		}
 	}
 
-	if cr.Spec.ForProvider.InstanceInitiatedShutdownBehavior != "" {
+	if cr.Spec.ForProvider.InstanceInitiatedShutdownBehavior != pointer.StringValue(cr.Status.AtProvider.InstanceInitiatedShutdownBehavior) {
 		modifyInput := &awsec2.ModifyInstanceAttributeInput{
 			InstanceId: aws.String(meta.GetExternalName(cr)),
 			InstanceInitiatedShutdownBehavior: &types.AttributeValue{
@@ -284,11 +307,11 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		_, err := e.client.ModifyInstanceAttribute(ctx, modifyInput)
 
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errModifyInstanceAttributes)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errModifyInstanceAttributes)
 		}
 	}
 
-	if cr.Spec.ForProvider.KernelID != nil {
+	if !ptr.Equal(cr.Spec.ForProvider.KernelID, cr.Status.AtProvider.KernelID) {
 		modifyInput := &awsec2.ModifyInstanceAttributeInput{
 			InstanceId: aws.String(meta.GetExternalName(cr)),
 			Kernel: &types.AttributeValue{
@@ -298,11 +321,11 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		_, err := e.client.ModifyInstanceAttribute(ctx, modifyInput)
 
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errModifyInstanceAttributes)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errModifyInstanceAttributes)
 		}
 	}
 
-	if cr.Spec.ForProvider.RAMDiskID != nil {
+	if !ptr.Equal(cr.Spec.ForProvider.RAMDiskID, cr.Status.AtProvider.RAMDiskID) {
 		modifyInput := &awsec2.ModifyInstanceAttributeInput{
 			InstanceId: aws.String(meta.GetExternalName(cr)),
 			Ramdisk: &types.AttributeValue{
@@ -312,11 +335,11 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		_, err := e.client.ModifyInstanceAttribute(ctx, modifyInput)
 
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errModifyInstanceAttributes)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errModifyInstanceAttributes)
 		}
 	}
 
-	if cr.Spec.ForProvider.UserData != nil {
+	if !ptr.Equal(cr.Spec.ForProvider.UserData, cr.Status.AtProvider.UserData) {
 		modifyInput := &awsec2.ModifyInstanceAttributeInput{
 			InstanceId: aws.String(meta.GetExternalName(cr)),
 			UserData: &types.BlobAttributeValue{
@@ -326,22 +349,22 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		_, err := e.client.ModifyInstanceAttribute(ctx, modifyInput)
 
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errModifyInstanceAttributes)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errModifyInstanceAttributes)
 		}
 	}
 
 	_, err := e.client.CreateTags(ctx, &awsec2.CreateTagsInput{
 		Resources: []string{meta.GetExternalName(cr)},
-		Tags:      svcapitypes.GenerateEC2Tags(cr.Spec.ForProvider.Tags),
+		Tags:      ec2.GenerateEC2TagsManualV1alpha1(cr.Spec.ForProvider.Tags),
 	})
 
-	return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+	return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*svcapitypes.Instance)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
@@ -350,33 +373,10 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 		InstanceIds: []string{meta.GetExternalName(cr)},
 	})
 
-	return awsclient.Wrap(resource.Ignore(ec2.IsInstanceNotFoundErr, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(ec2.IsInstanceNotFoundErr, err), errDelete)
 }
 
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mgd resource.Managed) error {
-	cr, ok := mgd.(*svcapitypes.Instance)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-	tagMap := map[string]string{}
-	for _, t := range cr.Spec.ForProvider.Tags {
-		tagMap[t.Key] = t.Value
-	}
-	for k, v := range resource.GetExternalTags(mgd) {
-		tagMap[k] = v
-	}
-	cr.Spec.ForProvider.Tags = make([]svcapitypes.Tag, len(tagMap))
-	i := 0
-	for k, v := range tagMap {
-		cr.Spec.ForProvider.Tags[i] = svcapitypes.Tag{Key: k, Value: v}
-		i++
-	}
-	sort.Slice(cr.Spec.ForProvider.Tags, func(i, j int) bool {
-		return cr.Spec.ForProvider.Tags[i].Key < cr.Spec.ForProvider.Tags[j].Key
-	})
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

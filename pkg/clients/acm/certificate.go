@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 
-	"github.com/crossplane-contrib/provider-aws/apis/acm/v1beta1"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/acm"
 	"github.com/aws/aws-sdk-go-v2/service/acm/types"
 	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/apis/acm/v1beta1"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // Client defines the CertificateManager operations
@@ -62,6 +61,8 @@ func GenerateCreateCertificateInput(p v1beta1.CertificateParameters) *acm.Reques
 		}
 	}
 
+	m.KeyAlgorithm = types.KeyAlgorithm(pointer.StringValue(p.KeyAlgorithm))
+
 	m.Tags = make([]types.Tag, len(p.Tags))
 	for i, val := range p.Tags {
 		m.Tags[i] = types.Tag{
@@ -100,8 +101,8 @@ func GenerateCertificateStatus(certificate types.CertificateDetail) v1beta1.Cert
 
 // LateInitializeCertificate fills the empty fields in *v1beta1.CertificateParameters with
 // the values seen in iam.Certificate.
-func LateInitializeCertificate(in *v1beta1.CertificateParameters, certificate *types.CertificateDetail) { // nolint:gocyclo
-	in.CertificateAuthorityARN = awsclients.LateInitializeStringPtr(in.CertificateAuthorityARN, certificate.CertificateAuthorityArn)
+func LateInitializeCertificate(in *v1beta1.CertificateParameters, certificate *types.CertificateDetail) {
+	in.CertificateAuthorityARN = pointer.LateInitialize(in.CertificateAuthorityARN, certificate.CertificateAuthorityArn)
 	if in.Options == nil && certificate.Options != nil {
 		in.Options = &v1beta1.CertificateOptions{
 			CertificateTransparencyLoggingPreference: string(certificate.Options.CertificateTransparencyLoggingPreference),
@@ -119,15 +120,15 @@ func LateInitializeCertificate(in *v1beta1.CertificateParameters, certificate *t
 		in.DomainValidationOptions = make([]*v1beta1.DomainValidationOption, len(certificate.DomainValidationOptions))
 		for i, val := range certificate.DomainValidationOptions {
 			in.DomainValidationOptions[i] = &v1beta1.DomainValidationOption{
-				DomainName:       awsclients.StringValue(val.DomainName),
-				ValidationDomain: awsclients.StringValue(val.ValidationDomain),
+				DomainName:       pointer.StringValue(val.DomainName),
+				ValidationDomain: pointer.StringValue(val.ValidationDomain),
 			}
 		}
 	}
 }
 
 // IsCertificateUpToDate checks whether there is a change in any of the modifiable fields.
-func IsCertificateUpToDate(p v1beta1.CertificateParameters, cd types.CertificateDetail, tags []types.Tag) bool { // nolint:gocyclo
+func IsCertificateUpToDate(p v1beta1.CertificateParameters, cd types.CertificateDetail, tags []types.Tag) bool {
 	if (p.Options != nil && cd.Options == nil) || (p.Options == nil && cd.Options != nil) {
 		return false
 	}

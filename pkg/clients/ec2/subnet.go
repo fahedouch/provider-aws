@@ -10,7 +10,7 @@ import (
 	"github.com/aws/smithy-go"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -56,24 +56,24 @@ func GenerateSubnetObservation(subnet ec2types.Subnet) v1beta1.SubnetObservation
 
 // LateInitializeSubnet fills the empty fields in *v1beta1.SubnetParameters with
 // the values seen in ec2types.Subnet.
-func LateInitializeSubnet(in *v1beta1.SubnetParameters, s *ec2types.Subnet) { // nolint:gocyclo
+func LateInitializeSubnet(in *v1beta1.SubnetParameters, s *ec2types.Subnet) {
 	if s == nil {
 		return
 	}
 
-	in.AssignIPv6AddressOnCreation = awsclients.LateInitializeBoolPtr(in.AssignIPv6AddressOnCreation, s.AssignIpv6AddressOnCreation)
-	in.AvailabilityZone = awsclients.LateInitializeStringPtr(in.AvailabilityZone, s.AvailabilityZone)
-	in.AvailabilityZoneID = awsclients.LateInitializeStringPtr(in.AvailabilityZoneID, s.AvailabilityZoneId)
-	in.CIDRBlock = awsclients.LateInitializeString(in.CIDRBlock, s.CidrBlock)
-	in.MapPublicIPOnLaunch = awsclients.LateInitializeBoolPtr(in.MapPublicIPOnLaunch, s.MapPublicIpOnLaunch)
-	in.VPCID = awsclients.LateInitializeStringPtr(in.VPCID, s.VpcId)
+	in.AssignIPv6AddressOnCreation = pointer.LateInitialize(in.AssignIPv6AddressOnCreation, s.AssignIpv6AddressOnCreation)
+	in.AvailabilityZone = pointer.LateInitialize(in.AvailabilityZone, s.AvailabilityZone)
+	in.AvailabilityZoneID = pointer.LateInitialize(in.AvailabilityZoneID, s.AvailabilityZoneId)
+	in.CIDRBlock = pointer.LateInitializeValueFromPtr(in.CIDRBlock, s.CidrBlock)
+	in.MapPublicIPOnLaunch = pointer.LateInitialize(in.MapPublicIPOnLaunch, s.MapPublicIpOnLaunch)
+	in.VPCID = pointer.LateInitialize(in.VPCID, s.VpcId)
 
-	if s.Ipv6CidrBlockAssociationSet != nil && len(s.Ipv6CidrBlockAssociationSet) > 0 {
-		in.IPv6CIDRBlock = awsclients.LateInitializeStringPtr(in.IPv6CIDRBlock, s.Ipv6CidrBlockAssociationSet[0].Ipv6CidrBlock)
+	if len(s.Ipv6CidrBlockAssociationSet) > 0 {
+		in.IPv6CIDRBlock = pointer.LateInitialize(in.IPv6CIDRBlock, s.Ipv6CidrBlockAssociationSet[0].Ipv6CidrBlock)
 	}
 
 	if len(in.Tags) == 0 && len(s.Tags) != 0 {
-		in.Tags = v1beta1.BuildFromEC2Tags(s.Tags)
+		in.Tags = BuildFromEC2TagsV1Beta1(s.Tags)
 	}
 }
 
@@ -85,5 +85,5 @@ func IsSubnetUpToDate(p v1beta1.SubnetParameters, s ec2types.Subnet) bool {
 	if aws.ToBool(p.AssignIPv6AddressOnCreation) != aws.ToBool(s.AssignIpv6AddressOnCreation) {
 		return false
 	}
-	return v1beta1.CompareTags(p.Tags, s.Tags)
+	return CompareTags(p.Tags, s.Tags)
 }

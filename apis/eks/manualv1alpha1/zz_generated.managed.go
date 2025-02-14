@@ -30,17 +30,14 @@ func (mg *FargateProfile) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this FargateProfile.
+func (mg *FargateProfile) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this FargateProfile.
 func (mg *FargateProfile) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this FargateProfile.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *FargateProfile) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this FargateProfile.
@@ -63,17 +60,14 @@ func (mg *FargateProfile) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this FargateProfile.
+func (mg *FargateProfile) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this FargateProfile.
 func (mg *FargateProfile) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this FargateProfile.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *FargateProfile) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this FargateProfile.
@@ -96,17 +90,14 @@ func (mg *IdentityProviderConfig) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this IdentityProviderConfig.
+func (mg *IdentityProviderConfig) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this IdentityProviderConfig.
 func (mg *IdentityProviderConfig) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this IdentityProviderConfig.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *IdentityProviderConfig) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this IdentityProviderConfig.
@@ -129,17 +120,14 @@ func (mg *IdentityProviderConfig) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this IdentityProviderConfig.
+func (mg *IdentityProviderConfig) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this IdentityProviderConfig.
 func (mg *IdentityProviderConfig) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this IdentityProviderConfig.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *IdentityProviderConfig) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this IdentityProviderConfig.
@@ -162,17 +150,14 @@ func (mg *NodeGroup) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this NodeGroup.
+func (mg *NodeGroup) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this NodeGroup.
 func (mg *NodeGroup) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this NodeGroup.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *NodeGroup) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this NodeGroup.
@@ -195,17 +180,14 @@ func (mg *NodeGroup) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this NodeGroup.
+func (mg *NodeGroup) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this NodeGroup.
 func (mg *NodeGroup) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this NodeGroup.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *NodeGroup) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this NodeGroup.

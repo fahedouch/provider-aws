@@ -452,7 +452,7 @@ func TestIsUpToDate(t *testing.T) {
 				},
 			}
 			// Act
-			result, err := h.isUpToDate(tc.args.cr, tc.args.resp)
+			result, _, err := h.isUpToDate(context.Background(), tc.args.cr, tc.args.resp)
 
 			// Assert
 			if diff := cmp.Diff(tc.want.result, result, test.EquateConditions()); diff != "" {
@@ -571,10 +571,8 @@ func TestPostCreate(t *testing.T) {
 					}),
 					withExternalName(testString1),
 				),
-				result: managed.ExternalCreation{
-					ExternalNameAssigned: true,
-				},
-				err: nil,
+				result: managed.ExternalCreation{},
+				err:    nil,
 			},
 		},
 		"FailedCreation": {

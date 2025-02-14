@@ -52,9 +52,15 @@ type ExecutionListItem struct {
 
 	Name *string `json:"name,omitempty"`
 
+	RedriveDate *metav1.Time `json:"redriveDate,omitempty"`
+
 	StartDate *metav1.Time `json:"startDate,omitempty"`
 
+	StateMachineAliasARN *string `json:"stateMachineAliasARN,omitempty"`
+
 	StateMachineARN *string `json:"stateMachineARN,omitempty"`
+
+	StateMachineVersionARN *string `json:"stateMachineVersionARN,omitempty"`
 
 	StopDate *metav1.Time `json:"stopDate,omitempty"`
 }
@@ -62,6 +68,10 @@ type ExecutionListItem struct {
 // +kubebuilder:skipversion
 type ExecutionStartedEventDetails struct {
 	RoleARN *string `json:"roleARN,omitempty"`
+
+	StateMachineAliasARN *string `json:"stateMachineAliasARN,omitempty"`
+
+	StateMachineVersionARN *string `json:"stateMachineVersionARN,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -94,6 +104,22 @@ type MapIterationEventDetails struct {
 }
 
 // +kubebuilder:skipversion
+type MapRunListItem struct {
+	ExecutionARN *string `json:"executionARN,omitempty"`
+
+	StartDate *metav1.Time `json:"startDate,omitempty"`
+
+	StateMachineARN *string `json:"stateMachineARN,omitempty"`
+
+	StopDate *metav1.Time `json:"stopDate,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type RoutingConfigurationListItem struct {
+	StateMachineVersionARN *string `json:"stateMachineVersionARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type StateEnteredEventDetails struct {
 	Name *string `json:"name,omitempty"`
 }
@@ -101,6 +127,11 @@ type StateEnteredEventDetails struct {
 // +kubebuilder:skipversion
 type StateExitedEventDetails struct {
 	Name *string `json:"name,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type StateMachineAliasListItem struct {
+	CreationDate *metav1.Time `json:"creationDate,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -112,6 +143,11 @@ type StateMachineListItem struct {
 	StateMachineARN *string `json:"stateMachineARN,omitempty"`
 
 	Type *string `json:"type_,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type StateMachineVersionListItem struct {
+	CreationDate *metav1.Time `json:"creationDate,omitempty"`
 }
 
 // +kubebuilder:skipversion

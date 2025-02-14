@@ -3,17 +3,14 @@ package acm
 import (
 	"testing"
 
-	"github.com/crossplane-contrib/provider-aws/apis/acm/v1beta1"
-
-	"github.com/aws/smithy-go/document"
-
-	"github.com/google/go-cmp/cmp/cmpopts"
-
 	"github.com/aws/aws-sdk-go-v2/service/acm"
 	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
+	"github.com/aws/smithy-go/document"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/apis/acm/v1beta1"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
@@ -32,7 +29,7 @@ func TestGenerateCreateCertificateInput(t *testing.T) {
 		"FilledInput": {
 			in: v1beta1.CertificateParameters{
 				DomainName:              domainName,
-				CertificateAuthorityARN: aws.String(certificateAuthorityArn),
+				CertificateAuthorityARN: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 				Options: &v1beta1.CertificateOptions{
 					CertificateTransparencyLoggingPreference: certificateTransparencyLoggingPreference,
 				},
@@ -43,13 +40,13 @@ func TestGenerateCreateCertificateInput(t *testing.T) {
 				}},
 			},
 			out: acm.RequestCertificateInput{
-				DomainName:              aws.String(domainName),
-				CertificateAuthorityArn: aws.String(certificateAuthorityArn),
+				DomainName:              pointer.ToOrNilIfZeroValue(domainName),
+				CertificateAuthorityArn: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 				Options:                 &acmtypes.CertificateOptions{CertificateTransparencyLoggingPreference: acmtypes.CertificateTransparencyLoggingPreferenceDisabled},
 				ValidationMethod:        acmtypes.ValidationMethodDns,
 				Tags: []acmtypes.Tag{{
-					Key:   aws.String("key1"),
-					Value: aws.String("value1"),
+					Key:   pointer.ToOrNilIfZeroValue("key1"),
+					Value: pointer.ToOrNilIfZeroValue("value1"),
 				}},
 			},
 		},
@@ -80,20 +77,20 @@ func TestLateInitializeCertificate(t *testing.T) {
 			args: args{
 				spec: &v1beta1.CertificateParameters{
 					DomainName:              domainName,
-					CertificateAuthorityARN: aws.String(certificateAuthorityArn),
+					CertificateAuthorityARN: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 					Options: &v1beta1.CertificateOptions{
 						CertificateTransparencyLoggingPreference: certificateTransparencyLoggingPreference,
 					},
 				},
 				in: &acmtypes.CertificateDetail{
-					DomainName:              aws.String(domainName),
-					CertificateAuthorityArn: aws.String(certificateAuthorityArn),
+					DomainName:              pointer.ToOrNilIfZeroValue(domainName),
+					CertificateAuthorityArn: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 					Options:                 &acmtypes.CertificateOptions{CertificateTransparencyLoggingPreference: acmtypes.CertificateTransparencyLoggingPreferenceDisabled},
 				},
 			},
 			want: &v1beta1.CertificateParameters{
 				DomainName:              domainName,
-				CertificateAuthorityARN: aws.String(certificateAuthorityArn),
+				CertificateAuthorityARN: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 				Options: &v1beta1.CertificateOptions{
 					CertificateTransparencyLoggingPreference: certificateTransparencyLoggingPreference,
 				},
@@ -103,20 +100,20 @@ func TestLateInitializeCertificate(t *testing.T) {
 			args: args{
 				spec: &v1beta1.CertificateParameters{
 					DomainName:              domainName,
-					CertificateAuthorityARN: aws.String(certificateAuthorityArn),
+					CertificateAuthorityARN: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 					Options: &v1beta1.CertificateOptions{
 						CertificateTransparencyLoggingPreference: certificateTransparencyLoggingPreference,
 					},
 				},
 				in: &acmtypes.CertificateDetail{
-					DomainName:              aws.String(domainName),
-					CertificateAuthorityArn: aws.String(certificateAuthorityArn),
+					DomainName:              pointer.ToOrNilIfZeroValue(domainName),
+					CertificateAuthorityArn: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 					Options:                 &acmtypes.CertificateOptions{CertificateTransparencyLoggingPreference: acmtypes.CertificateTransparencyLoggingPreferenceDisabled},
 				},
 			},
 			want: &v1beta1.CertificateParameters{
 				DomainName:              domainName,
-				CertificateAuthorityARN: aws.String(certificateAuthorityArn),
+				CertificateAuthorityARN: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 				Options: &v1beta1.CertificateOptions{
 					CertificateTransparencyLoggingPreference: certificateTransparencyLoggingPreference,
 				},
@@ -126,17 +123,17 @@ func TestLateInitializeCertificate(t *testing.T) {
 			args: args{
 				spec: &v1beta1.CertificateParameters{
 					DomainName:              domainName,
-					CertificateAuthorityARN: aws.String(certificateAuthorityArn),
+					CertificateAuthorityARN: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 				},
 				in: &acmtypes.CertificateDetail{
-					DomainName:              aws.String(domainName),
-					CertificateAuthorityArn: aws.String(certificateAuthorityArn),
+					DomainName:              pointer.ToOrNilIfZeroValue(domainName),
+					CertificateAuthorityArn: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 					Options:                 &acmtypes.CertificateOptions{CertificateTransparencyLoggingPreference: acmtypes.CertificateTransparencyLoggingPreferenceDisabled},
 				},
 			},
 			want: &v1beta1.CertificateParameters{
 				DomainName:              domainName,
-				CertificateAuthorityARN: aws.String(certificateAuthorityArn),
+				CertificateAuthorityARN: pointer.ToOrNilIfZeroValue(certificateAuthorityArn),
 				Options: &v1beta1.CertificateOptions{
 					CertificateTransparencyLoggingPreference: certificateTransparencyLoggingPreference,
 				},
@@ -165,7 +162,7 @@ func TestGenerateCertificateStatus(t *testing.T) {
 	}{
 		"AllFilled": {
 			in: acmtypes.CertificateDetail{
-				CertificateArn:     aws.String(certificateArn),
+				CertificateArn:     pointer.ToOrNilIfZeroValue(certificateArn),
 				RenewalEligibility: acmtypes.RenewalEligibilityEligible,
 			},
 			out: v1beta1.CertificateExternalStatus{
@@ -185,7 +182,7 @@ func TestGenerateCertificateStatus(t *testing.T) {
 		},
 		"DomainValidationOptionsResourceRecord": {
 			in: acmtypes.CertificateDetail{
-				CertificateArn:     aws.String(certificateArn),
+				CertificateArn:     pointer.ToOrNilIfZeroValue(certificateArn),
 				RenewalEligibility: acmtypes.RenewalEligibilityIneligible,
 				Type:               acmtypes.CertificateTypeAmazonIssued,
 				Status:             acmtypes.CertificateStatusPendingValidation,
@@ -251,8 +248,8 @@ func TestIsCertificateUpToDate(t *testing.T) {
 					}},
 				},
 				tags: []acmtypes.Tag{{
-					Key:   aws.String("key1"),
-					Value: aws.String("value1"),
+					Key:   pointer.ToOrNilIfZeroValue("key1"),
+					Value: pointer.ToOrNilIfZeroValue("value1"),
 				}},
 			},
 			want: true,
@@ -272,8 +269,8 @@ func TestIsCertificateUpToDate(t *testing.T) {
 					}},
 				},
 				tags: []acmtypes.Tag{{
-					Key:   aws.String("key1"),
-					Value: aws.String("value1"),
+					Key:   pointer.ToOrNilIfZeroValue("key1"),
+					Value: pointer.ToOrNilIfZeroValue("value1"),
 				}},
 			},
 			want: false,
@@ -293,8 +290,8 @@ func TestIsCertificateUpToDate(t *testing.T) {
 					}},
 				},
 				tags: []acmtypes.Tag{{
-					Key:   aws.String("key2"),
-					Value: aws.String("value2"),
+					Key:   pointer.ToOrNilIfZeroValue("key2"),
+					Value: pointer.ToOrNilIfZeroValue("value2"),
 				}},
 			},
 			want: false,

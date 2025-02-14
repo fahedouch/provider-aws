@@ -29,7 +29,8 @@ type VolumeParameters struct {
 	// Region is which region the Volume will be created.
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
-	// The Availability Zone in which to create the volume.
+	// The ID of the Availability Zone in which to create the volume. For example,
+	// us-east-1a.
 	// +kubebuilder:validation:Required
 	AvailabilityZone *string `json:"availabilityZone"`
 	// Indicates whether the volume should be encrypted. The effect of setting the
@@ -109,6 +110,9 @@ type VolumeParameters struct {
 	//
 	//    * Magnetic: standard
 	//
+	// Throughput Optimized HDD (st1) and Cold HDD (sc1) volumes can't be used as
+	// boot volumes.
+	//
 	// For more information, see Amazon EBS volume types (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSVolumeTypes.html)
 	// in the Amazon Elastic Compute Cloud User Guide.
 	//
@@ -134,12 +138,16 @@ type VolumeObservation struct {
 	// The Amazon Resource Name (ARN) of the Key Management Service (KMS) KMS key
 	// that was used to protect the volume encryption key for the volume.
 	KMSKeyID *string `json:"kmsKeyID,omitempty"`
+	// Reserved for future use.
+	SSEType *string `json:"sseType,omitempty"`
 	// The volume state.
 	State *string `json:"state,omitempty"`
 	// Any tags assigned to the volume.
 	Tags []*Tag `json:"tags,omitempty"`
 	// The ID of the volume.
 	VolumeID *string `json:"volumeID,omitempty"`
+
+	CustomVolumeObservation `json:",inline"`
 }
 
 // VolumeStatus defines the observed state of Volume.
@@ -154,6 +162,7 @@ type VolumeStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

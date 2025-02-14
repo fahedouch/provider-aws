@@ -23,9 +23,13 @@ import (
 
 // CustomDBParameterGroupParameters are custom parameters for DBParameterGroup
 type CustomDBParameterGroupParameters struct {
-	// A list of parameters to associate with this DB parameter group
+	// A list of parameters to associate with this DB parameter group.
+	// The fields ApplyMethod, ParameterName and ParameterValue are required
+	// for every parameter.
+	// Note: AWS actually only modifies the ApplyMethod of a parameter,
+	// if the ParameterValue changes too.
 	// +optional
-	Parameters []Parameter `json:"parameters,omitempty"`
+	Parameters []CustomParameter `json:"parameters,omitempty"`
 
 	// The DB parameter group family name. A DB parameter group can be associated
 	// with one and only one DB parameter group family, and can be applied only
@@ -91,11 +95,18 @@ type CustomDBParameterGroupParameters struct {
 	DBParameterGroupFamilySelector *DBParameterGroupFamilyNameSelector `json:"dbParameterGroupFamilySelector,omitempty"`
 }
 
+// CustomDBParameterGroupObservation includes the custom status fields of DBParameterGroup.
+type CustomDBParameterGroupObservation struct{}
+
 // CustomDBClusterParameterGroupParameters are custom parameters for DBClusterParameterGroup
 type CustomDBClusterParameterGroupParameters struct {
-	// A list of parameters to associate with this DB cluster parameter group
+	// A list of parameters to associate with this DB cluster parameter group.
+	// The fields ApplyMethod, ParameterName and ParameterValue are required
+	// for every parameter.
+	// Note: AWS actually only modifies the ApplyMethod of a parameter,
+	// if the ParameterValue changes too.
 	// +optional
-	Parameters []Parameter `json:"parameters,omitempty"`
+	Parameters []CustomParameter `json:"parameters,omitempty"`
 
 	// The DB cluster parameter group family name. A DB cluster parameter group
 	// can be associated with one and only one DB cluster parameter group family,
@@ -147,6 +158,9 @@ type CustomDBClusterParameterGroupParameters struct {
 	DBParameterGroupFamilySelector *DBParameterGroupFamilyNameSelector `json:"dbParameterGroupFamilySelector,omitempty"`
 }
 
+// CustomDBClusterParameterGroupObservation includes the custom status fields of DBClusterParameterGroup.
+type CustomDBClusterParameterGroupObservation struct{}
+
 // DBParameterGroupFamilyNameSelector allows determining the family name from the
 // database engine and engine version.
 type DBParameterGroupFamilyNameSelector struct {
@@ -172,6 +186,60 @@ type CustomDBClusterParameters struct {
 	// +optional
 	AutogeneratePassword bool `json:"autogeneratePassword,omitempty"`
 
+	// The version number of the database engine to use.
+	//
+	// To list all of the available engine versions for MySQL 5.6-compatible Aurora,
+	// use the following command:
+	//
+	// aws rds describe-db-engine-versions --engine aurora --query "DBEngineVersions[].EngineVersion"
+	//
+	// To list all of the available engine versions for MySQL 5.7-compatible and
+	// MySQL 8.0-compatible Aurora, use the following command:
+	//
+	// aws rds describe-db-engine-versions --engine aurora-mysql --query "DBEngineVersions[].EngineVersion"
+	//
+	// To list all of the available engine versions for Aurora PostgreSQL, use the
+	// following command:
+	//
+	// aws rds describe-db-engine-versions --engine aurora-postgresql --query "DBEngineVersions[].EngineVersion"
+	//
+	// To list all of the available engine versions for RDS for MySQL, use the following
+	// command:
+	//
+	// aws rds describe-db-engine-versions --engine mysql --query "DBEngineVersions[].EngineVersion"
+	//
+	// To list all of the available engine versions for RDS for PostgreSQL, use
+	// the following command:
+	//
+	// aws rds describe-db-engine-versions --engine postgres --query "DBEngineVersions[].EngineVersion"
+	//
+	// Aurora MySQL
+	//
+	// For information, see MySQL on Amazon RDS Versions (https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Updates.html)
+	// in the Amazon Aurora User Guide.
+	//
+	// Aurora PostgreSQL
+	//
+	// For information, see Amazon Aurora PostgreSQL releases and engine versions
+	// (https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Updates.20180305.html)
+	// in the Amazon Aurora User Guide.
+	//
+	// MySQL
+	//
+	// For information, see MySQL on Amazon RDS Versions (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_MySQL.html#MySQL.Concepts.VersionMgmt)
+	// in the Amazon RDS User Guide.
+	//
+	// PostgreSQL
+	//
+	// For information, see Amazon RDS for PostgreSQL versions and extensions (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts)
+	// in the Amazon RDS User Guide.
+	//
+	// Note: Downgrades are not allowed by AWS and attempts to set a lower version
+	// will be ignored.
+	//
+	// Valid for: Aurora DB clusters and Multi-AZ DB clusters
+	EngineVersion *string `json:"engineVersion,omitempty"`
+
 	// DomainIAMRoleNameRef is a reference to an IAMRole used to set
 	// DomainIAMRoleName.
 	// +optional
@@ -193,8 +261,14 @@ type CustomDBClusterParameters struct {
 	// The password for the master database user. This password can contain any
 	// printable ASCII character except "/", """, or "@".
 	//
-	// Constraints: Must contain from 8 to 41 characters. Required.
-	MasterUserPasswordSecretRef *xpv1.SecretKeySelector `json:"masterUserPasswordSecretRef"`
+	// This parameter will be required in the following scenarios:
+	// - The first cluster for a global Aurora cluster
+	// - Any cluster as long as it doesn't belong to a global Aurora cluster
+	//
+	// This parameter is required for creation of a primary cluster. However, it is not required when attaching a secondary regional cluster to an existing global cluster.
+	//
+	// Constraints: Must contain from 8 to 41 characters.
+	MasterUserPasswordSecretRef *xpv1.SecretKeySelector `json:"masterUserPasswordSecretRef,omitempty"`
 
 	// A list of VPC security groups that the DB cluster will belong to.
 	//
@@ -282,6 +356,9 @@ type CustomDBClusterParameters struct {
 	// +optional
 	RestoreFrom *RestoreDBClusterBackupConfiguration `json:"restoreFrom,omitempty"`
 }
+
+// CustomDBClusterObservation includes the custom status fields of DBCluster.
+type CustomDBClusterObservation struct{}
 
 // S3RestoreBackupConfiguration defines the details of the S3 backup to restore from.
 type S3RestoreBackupConfiguration struct {
@@ -443,6 +520,9 @@ type CustomGlobalClusterParameters struct {
 	SourceDBClusterIdentifierSelector *xpv1.Selector `json:"sourceDBClusterIdentifierSelector,omitempty"`
 }
 
+// CustomGlobalClusterObservation includes the custom status fields of GlobalCluster.
+type CustomGlobalClusterObservation struct{}
+
 // CustomDBInstanceParameters are custom parameters for the DBInstance
 type CustomDBInstanceParameters struct {
 	// AutogeneratePassword indicates whether the controller should generate
@@ -492,6 +572,61 @@ type CustomDBInstanceParameters struct {
 	// +optional
 	// +immutable
 	DomainIAMRoleNameSelector *xpv1.Selector `json:"domainIAMRoleNameSelector,omitempty"`
+
+	// The version number of the database engine to use.
+	//
+	// For a list of valid engine versions, use the DescribeDBEngineVersions operation.
+	//
+	// The following are the database engines and links to information about the
+	// major and minor versions that are available with Amazon RDS. Not every database
+	// engine is available for every Amazon Web Services Region.
+	//
+	// Amazon Aurora
+	//
+	// Not applicable. The version number of the database engine to be used by the
+	// DB instance is managed by the DB cluster.
+	//
+	// Amazon RDS Custom for Oracle
+	//
+	// A custom engine version (CEV) that you have previously created. This setting
+	// is required for RDS Custom for Oracle. The CEV name has the following format:
+	// 19.customized_string. A valid CEV name is 19.my_cev1. For more information,
+	// see Creating an RDS Custom for Oracle DB instance (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/custom-creating.html#custom-creating.create)
+	// in the Amazon RDS User Guide.
+	//
+	// Amazon RDS Custom for SQL Server
+	//
+	// See RDS Custom for SQL Server general requirements (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/custom-reqs-limits-MS.html)
+	// in the Amazon RDS User Guide.
+	//
+	// MariaDB
+	//
+	// For information, see MariaDB on Amazon RDS Versions (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_MariaDB.html#MariaDB.Concepts.VersionMgmt)
+	// in the Amazon RDS User Guide.
+	//
+	// Microsoft SQL Server
+	//
+	// For information, see Microsoft SQL Server Versions on Amazon RDS (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_SQLServer.html#SQLServer.Concepts.General.VersionSupport)
+	// in the Amazon RDS User Guide.
+	//
+	// MySQL
+	//
+	// For information, see MySQL on Amazon RDS Versions (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_MySQL.html#MySQL.Concepts.VersionMgmt)
+	// in the Amazon RDS User Guide.
+	//
+	// Oracle
+	//
+	// For information, see Oracle Database Engine Release Notes (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Appendix.Oracle.PatchComposition.html)
+	// in the Amazon RDS User Guide.
+	//
+	// PostgreSQL
+	//
+	// For information, see Amazon RDS for PostgreSQL versions and extensions (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts)
+	// in the Amazon RDS User Guide.
+	//
+	// Note: Downgrades are not allowed by AWS and attempts to set a lower version
+	// will be ignored.
+	EngineVersion *string `json:"engineVersion,omitempty"`
 
 	// The DB instance snapshot identifier of the new DB instance snapshot created
 	// when SkipFinalSnapshot is disabled.
@@ -608,6 +743,9 @@ type CustomDBInstanceParameters struct {
 	DeleteAutomatedBackups *bool `json:"deleteAutomatedBackups,omitempty"`
 }
 
+// CustomDBInstanceObservation includes the custom status fields of DBInstance.
+type CustomDBInstanceObservation struct{}
+
 // CustomDBInstanceRoleAssociationParameters are custom parameters for the DBInstanceRoleAssociation
 type CustomDBInstanceRoleAssociationParameters struct {
 	// The name of the DB instance to associate the IAM role with.
@@ -641,4 +779,61 @@ type CustomDBInstanceRoleAssociationParameters struct {
 	// set RoleARN.
 	// +optional
 	RoleARNSelector *xpv1.Selector `json:"roleArnSelector,omitempty"`
+}
+
+// CustomDBInstanceRoleAssociationObservation includes the custom status fields of DBInstanceRoleAssociation.
+type CustomDBInstanceRoleAssociationObservation struct{}
+
+// CustomOptionGroupParameters are custom parameters for the OptionGroup
+type CustomOptionGroupParameters struct {
+	// Option in this list are added to the option group or, if already present,
+	// the specified configuration is used to update the existing configuration.
+	Option []*CustomOptionConfiguration `json:"option,omitempty"`
+
+	// A value that indicates whether to apply the change immediately or during
+	// the next maintenance window for each instance associated with the option
+	// group.
+	ApplyImmediately *bool `json:"applyImmediately,omitempty"`
+}
+
+// CustomOptionGroupObservation includes the custom status fields of OptionGroup.
+type CustomOptionGroupObservation struct{}
+
+// CustomOptionConfiguration are custom parameters for the OptionConfiguration
+type CustomOptionConfiguration struct {
+	DBSecurityGroupMemberships []*string `json:"dbSecurityGroupMemberships,omitempty"`
+
+	OptionName *string `json:"optionName,omitempty"`
+
+	OptionSettings []*CustomOptionGroupOptionSetting `json:"optionSettings,omitempty"`
+
+	OptionVersion *string `json:"optionVersion,omitempty"`
+
+	Port *int64 `json:"port,omitempty"`
+
+	VPCSecurityGroupMemberships []*string `json:"vpcSecurityGroupMemberships,omitempty"`
+}
+
+// CustomOptionGroupOptionSetting are custom parameters for the OptionGroupOptionSetting
+type CustomOptionGroupOptionSetting struct {
+	Name *string `json:"name,omitempty"`
+
+	Value *string `json:"value,omitempty"`
+}
+
+// CustomParameter are custom parameters for the Parameter
+type CustomParameter struct {
+	// The apply method of the parameter.
+	// AWS actually only modifies to value set here, if the parameter value changes too.
+	// +kubebuilder:validation:Enum=immediate;pending-reboot
+	// +kubebuilder:validation:Required
+	ApplyMethod *string `json:"applyMethod"`
+
+	// The name of the parameter.
+	// +kubebuilder:validation:Required
+	ParameterName *string `json:"parameterName"`
+
+	// The value of the parameter.
+	// +kubebuilder:validation:Required
+	ParameterValue *string `json:"parameterValue"`
 }

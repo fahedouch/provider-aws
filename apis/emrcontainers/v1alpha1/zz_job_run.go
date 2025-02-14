@@ -32,14 +32,17 @@ type JobRunParameters struct {
 
 	ConfigurationOverrides *string `json:"configurationOverrides,omitempty"`
 	// The execution role ARN for the job run.
-	// +kubebuilder:validation:Required
-	ExecutionRoleARN *string `json:"executionRoleARN"`
+	ExecutionRoleARN *string `json:"executionRoleARN,omitempty"`
 	// The job driver for the job run.
-	// +kubebuilder:validation:Required
-	JobDriver *JobDriver `json:"jobDriver"`
+	JobDriver *JobDriver `json:"jobDriver,omitempty"`
+	// The job template ID to be used to start the job run.
+	JobTemplateID *string `json:"jobTemplateID,omitempty"`
+	// The values of job template parameters to start a job run.
+	JobTemplateParameters map[string]*string `json:"jobTemplateParameters,omitempty"`
 	// The Amazon EMR release version to use for the job run.
-	// +kubebuilder:validation:Required
-	ReleaseLabel *string `json:"releaseLabel"`
+	ReleaseLabel *string `json:"releaseLabel,omitempty"`
+	// The retry policy configuration for the job run.
+	RetryPolicyConfiguration *RetryPolicyConfiguration `json:"retryPolicyConfiguration,omitempty"`
 	// The tags assigned to job runs.
 	Tags                   map[string]*string `json:"tags,omitempty"`
 	CustomJobRunParameters `json:",inline"`
@@ -67,6 +70,8 @@ type JobRunObservation struct {
 	StateDetails *string `json:"stateDetails,omitempty"`
 	// This output displays the virtual cluster ID for which the job run was submitted.
 	VirtualClusterID *string `json:"virtualClusterID,omitempty"`
+
+	CustomJobRunObservation `json:",inline"`
 }
 
 // JobRunStatus defines the observed state of JobRun.
@@ -81,6 +86,7 @@ type JobRunStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

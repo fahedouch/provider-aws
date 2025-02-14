@@ -22,12 +22,6 @@ import (
 	svcsdk "github.com/aws/aws-sdk-go/service/batch"
 	"github.com/aws/aws-sdk-go/service/batch/batchiface"
 	"github.com/aws/smithy-go"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -35,13 +29,20 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/batch/manualv1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/batch"
-
+	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/batch/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -61,18 +62,30 @@ func SetupJob(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient()}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.JobGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Job{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.JobGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient()}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -84,7 +97,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errNotBatchJob)
 	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
@@ -108,10 +121,10 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	resp, err := e.client.DescribeJobsWithContext(ctx, &svcsdk.DescribeJobsInput{
-		Jobs: []*string{awsclient.String(meta.GetExternalName(cr))},
+		Jobs: []*string{pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))},
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(isErrorNotFound, err), errDescribeJob)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(isErrorNotFound, err), errDescribeJob)
 	}
 	if len(resp.Jobs) == 0 {
 		return managed.ExternalObservation{ResourceExists: false}, nil
@@ -127,14 +140,14 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	// Only consider a finished Job as deleted, when the user requested the deletion
 	if meta.WasDeleted(cr) {
 		// (unfinished Jobs are moved to Failed-status by AWS after deletion/termination-request completed)
-		switch awsclient.StringValue(cr.Status.AtProvider.Status) {
+		switch pointer.StringValue(cr.Status.AtProvider.Status) {
 		case svcsdk.JobStatusFailed,
 			svcsdk.JobStatusSucceeded:
 			return managed.ExternalObservation{ResourceExists: false}, nil
 		}
 	}
 
-	cr.SetConditions(xpv1.Available().WithMessage(awsclient.StringValue(cr.Status.AtProvider.Status)))
+	cr.SetConditions(xpv1.Available().WithMessage(pointer.StringValue(cr.Status.AtProvider.Status)))
 
 	return managed.ExternalObservation{
 		ResourceExists:          true,
@@ -158,9 +171,9 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	resp, err := e.client.SubmitJobWithContext(ctx, generateSubmitJobInput(cr))
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errSubmitJob)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errSubmitJob)
 	}
-	meta.SetExternalName(cr, awsclient.StringValue(resp.JobId))
+	meta.SetExternalName(cr, pointer.StringValue(resp.JobId))
 	return managed.ExternalCreation{}, nil
 }
 
@@ -174,19 +187,19 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, svcutils.UpdateTagsForResource(ctx, e.client, cr.Spec.ForProvider.Tags, cr.Status.AtProvider.JobArn)
 }
 
-func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*svcapitypes.Job)
 	if !ok {
-		return errors.New(errNotBatchJob)
+		return managed.ExternalDelete{}, errors.New(errNotBatchJob)
 	}
 
 	// no check possible for a "deleting"-like status at Provider -> many delete-requests
 
 	cr.Status.SetConditions(xpv1.Deleting())
 	// No terminate-request needed, when Job is already finished
-	if cr.Status.AtProvider.Status == awsclient.String(svcsdk.JobStatusFailed) ||
-		cr.Status.AtProvider.Status == awsclient.String(svcsdk.JobStatusSucceeded) {
-		return nil
+	if cr.Status.AtProvider.Status == pointer.ToOrNilIfZeroValue(svcsdk.JobStatusFailed) ||
+		cr.Status.AtProvider.Status == pointer.ToOrNilIfZeroValue(svcsdk.JobStatusSucceeded) {
+		return managed.ExternalDelete{}, nil
 	}
 
 	// terminate includes cancel (seems no need to differentiate)
@@ -195,11 +208,11 @@ func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
 	// e.g. when Job is PENDING bc it's dependend on another Job to finish,
 	// termination seems to not get through until dependend Job is fisnished ... (-> tested on AWS Console)
 
-	_, err := e.client.TerminateJobWithContext(ctx, generateTerminateJobInput(cr, awsclient.String("Terminated for crossplane deletion")))
-	return awsclient.Wrap(resource.Ignore(isErrorNotFound, err), errTerminateJob)
+	_, err := e.client.TerminateJobWithContext(ctx, generateTerminateJobInput(cr, pointer.ToOrNilIfZeroValue("Terminated for crossplane deletion")))
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(isErrorNotFound, err), errTerminateJob)
 }
 
-func (e *external) lateInitialize(spec, current *svcapitypes.JobParameters) { // nolint:gocyclo
+func (e *external) lateInitialize(spec, current *svcapitypes.JobParameters) { //nolint:gocyclo
 
 	if spec.RetryStrategy == nil && current.RetryStrategy != nil {
 		spec.RetryStrategy = current.RetryStrategy
@@ -222,7 +235,7 @@ func (e *external) lateInitialize(spec, current *svcapitypes.JobParameters) { //
 		}
 
 		if current.NodeOverrides != nil {
-			spec.NodeOverrides.NumNodes = awsclient.LateInitializeInt64Ptr(spec.NodeOverrides.NumNodes, current.NodeOverrides.NumNodes)
+			spec.NodeOverrides.NumNodes = pointer.LateInitialize(spec.NodeOverrides.NumNodes, current.NodeOverrides.NumNodes)
 
 			if current.NodeOverrides.NodePropertyOverrides != nil {
 
@@ -237,7 +250,7 @@ func (e *external) lateInitialize(spec, current *svcapitypes.JobParameters) { //
 						specNoProOver.ContainerOverrides = &svcapitypes.ContainerOverrides{}
 					}
 					lateInitContainerOverrides(specNoProOver.ContainerOverrides, noProOver.ContainerOverrides)
-					specNoProOver.TargetNodes = awsclient.LateInitializeString(specNoProOver.TargetNodes, awsclient.String(noProOver.TargetNodes))
+					specNoProOver.TargetNodes = pointer.LateInitializeValueFromPtr(specNoProOver.TargetNodes, pointer.ToOrNilIfZeroValue(noProOver.TargetNodes))
 					spec.NodeOverrides.NodePropertyOverrides[i] = specNoProOver
 				}
 			}
@@ -252,8 +265,8 @@ func (e *external) lateInitialize(spec, current *svcapitypes.JobParameters) { //
 // Helper for lateInitialize() with ContainerOverrides
 func lateInitContainerOverrides(spec, current *svcapitypes.ContainerOverrides) {
 
-	spec.Command = awsclient.LateInitializeStringPtrSlice(spec.Command, current.Command)
-	spec.InstanceType = awsclient.LateInitializeStringPtr(spec.InstanceType, current.InstanceType)
+	spec.Command = pointer.LateInitializeSlice(spec.Command, current.Command)
+	spec.InstanceType = pointer.LateInitialize(spec.InstanceType, current.InstanceType)
 	if spec.Environment == nil && current.Environment != nil {
 		env := []*svcapitypes.KeyValuePair{}
 		for _, pair := range current.Environment {
@@ -280,4 +293,9 @@ func lateInitContainerOverrides(spec, current *svcapitypes.ContainerOverrides) {
 func isErrorNotFound(err error) bool {
 	var awsErr smithy.APIError
 	return errors.As(err, &awsErr) && awsErr.ErrorCode() == "JobNotFoundException"
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

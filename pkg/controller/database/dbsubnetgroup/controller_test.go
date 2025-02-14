@@ -23,22 +23,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsrds "github.com/aws/aws-sdk-go-v2/service/rds"
 	awsrdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/test"
-
 	v1beta1 "github.com/crossplane-contrib/provider-aws/apis/database/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	dbsg "github.com/crossplane-contrib/provider-aws/pkg/clients/dbsubnetgroup"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/dbsubnetgroup/fake"
-)
-
-const (
-	providerName = "aws-creds"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -77,13 +72,7 @@ func mockListTagsForResource(ctx context.Context, input *awsrds.ListTagsForResou
 }
 
 func dbSubnetGroup(m ...dbSubnetGroupModifier) *v1beta1.DBSubnetGroup {
-	cr := &v1beta1.DBSubnetGroup{
-		Spec: v1beta1.DBSubnetGroupSpec{
-			ResourceSpec: xpv1.ResourceSpec{
-				ProviderReference: &xpv1.Reference{Name: providerName},
-			},
-		},
-	}
+	cr := &v1beta1.DBSubnetGroup{}
 	for _, f := range m {
 		f(cr)
 	}
@@ -185,7 +174,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  dbSubnetGroup(),
-				err: awsclient.Wrap(errBoom, errDescribe),
+				err: errorutils.Wrap(errBoom, errDescribe),
 			},
 		},
 		"NotFound": {
@@ -254,7 +243,7 @@ func TestObserve(t *testing.T) {
 				cr: dbSubnetGroup(
 					withDBSubnetGroupDescription(dbSubnetGroupDescription),
 				),
-				err: awsclient.Wrap(errBoom, errLateInit),
+				err: errorutils.Wrap(errBoom, errLateInit),
 			},
 		},
 	}
@@ -314,7 +303,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  dbSubnetGroup(withConditions(xpv1.Creating())),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 	}
@@ -382,7 +371,7 @@ func TestUpdate(t *testing.T) {
 			},
 			want: want{
 				cr:  dbSubnetGroup(),
-				err: awsclient.Wrap(errBoom, errUpdate),
+				err: errorutils.Wrap(errBoom, errUpdate),
 			},
 		},
 		"SuccessfulWithTags": {
@@ -489,7 +478,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  dbSubnetGroup(withConditions(xpv1.Deleting())),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 	}
@@ -497,7 +486,7 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{kube: tc.kube, client: tc.client}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)

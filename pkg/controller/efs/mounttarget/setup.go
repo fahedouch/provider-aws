@@ -4,8 +4,6 @@ import (
 	"context"
 
 	svcsdk "github.com/aws/aws-sdk-go/service/efs"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -13,11 +11,13 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/efs/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupMountTarget adds a controller that reconciles MountTarget.
@@ -37,17 +37,30 @@ func SetupMountTarget(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithInitializers(),
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		cpresource.ManagedKind(svcapitypes.MountTargetGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(cpresource.DesiredStateChanged()).
 		For(&svcapitypes.MountTarget{}).
-		Complete(managed.NewReconciler(mgr,
-			cpresource.ManagedKind(svcapitypes.MountTargetGroupVersionKind),
-			managed.WithInitializers(),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.MountTarget, obj *svcsdk.CreateMountTargetInput) error {
@@ -65,7 +78,7 @@ func postCreate(_ context.Context, cr *svcapitypes.MountTarget, obj *svcsdk.Moun
 	if err != nil {
 		return managed.ExternalCreation{}, err
 	}
-	meta.SetExternalName(cr, awsclients.StringValue(obj.MountTargetId))
+	meta.SetExternalName(cr, pointer.StringValue(obj.MountTargetId))
 	return managed.ExternalCreation{}, nil
 }
 
@@ -75,7 +88,7 @@ func preObserve(_ context.Context, cr *svcapitypes.MountTarget, obj *svcsdk.Desc
 	obj.Marker = nil
 	obj.MaxItems = nil
 	obj.FileSystemId = nil
-	obj.MountTargetId = awsclients.String(meta.GetExternalName(cr))
+	obj.MountTargetId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -83,7 +96,7 @@ func postObserve(_ context.Context, cr *svcapitypes.MountTarget, obj *svcsdk.Des
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	if awsclients.StringValue(obj.MountTargets[0].LifeCycleState) == string(svcapitypes.LifeCycleState_available) {
+	if pointer.StringValue(obj.MountTargets[0].LifeCycleState) == string(svcapitypes.LifeCycleState_available) {
 		cr.SetConditions(xpv1.Available())
 	}
 	return obs, nil

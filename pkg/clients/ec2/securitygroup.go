@@ -8,10 +8,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -27,6 +27,7 @@ type SecurityGroupClient interface {
 	CreateSecurityGroup(ctx context.Context, input *ec2.CreateSecurityGroupInput, opts ...func(*ec2.Options)) (*ec2.CreateSecurityGroupOutput, error)
 	DeleteSecurityGroup(ctx context.Context, input *ec2.DeleteSecurityGroupInput, opts ...func(*ec2.Options)) (*ec2.DeleteSecurityGroupOutput, error)
 	DescribeSecurityGroups(ctx context.Context, input *ec2.DescribeSecurityGroupsInput, opts ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error)
+	DescribeSecurityGroupRules(ctx context.Context, input *ec2.DescribeSecurityGroupRulesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupRulesOutput, error)
 	AuthorizeSecurityGroupIngress(ctx context.Context, input *ec2.AuthorizeSecurityGroupIngressInput, opts ...func(*ec2.Options)) (*ec2.AuthorizeSecurityGroupIngressOutput, error)
 	AuthorizeSecurityGroupEgress(ctx context.Context, input *ec2.AuthorizeSecurityGroupEgressInput, opts ...func(*ec2.Options)) (*ec2.AuthorizeSecurityGroupEgressOutput, error)
 	RevokeSecurityGroupIngress(ctx context.Context, input *ec2.RevokeSecurityGroupIngressInput, opts ...func(*ec2.Options)) (*ec2.RevokeSecurityGroupIngressOutput, error)
@@ -61,25 +62,25 @@ func GenerateEC2Permissions(objectPerms []v1beta1.IPPermission) []ec2types.IpPer
 	for i, p := range objectPerms {
 		ipPerm := ec2types.IpPermission{
 			FromPort:   p.FromPort,
-			IpProtocol: aws.String(p.IPProtocol),
+			IpProtocol: pointer.ToOrNilIfZeroValue(p.IPProtocol),
 			ToPort:     p.ToPort,
 		}
 		for _, c := range p.IPRanges {
 			ipPerm.IpRanges = append(ipPerm.IpRanges, ec2types.IpRange{
-				CidrIp:      aws.String(c.CIDRIP),
+				CidrIp:      pointer.ToOrNilIfZeroValue(c.CIDRIP),
 				Description: c.Description,
 			})
 		}
 		for _, c := range p.IPv6Ranges {
 			ipPerm.Ipv6Ranges = append(ipPerm.Ipv6Ranges, ec2types.Ipv6Range{
-				CidrIpv6:    aws.String(c.CIDRIPv6),
+				CidrIpv6:    pointer.ToOrNilIfZeroValue(c.CIDRIPv6),
 				Description: c.Description,
 			})
 		}
 		for _, c := range p.PrefixListIDs {
 			ipPerm.PrefixListIds = append(ipPerm.PrefixListIds, ec2types.PrefixListId{
 				Description:  c.Description,
-				PrefixListId: aws.String(c.PrefixListID),
+				PrefixListId: pointer.ToOrNilIfZeroValue(c.PrefixListID),
 			})
 		}
 		for _, c := range p.UserIDGroupPairs {
@@ -99,28 +100,60 @@ func GenerateEC2Permissions(objectPerms []v1beta1.IPPermission) []ec2types.IpPer
 
 // GenerateSGObservation is used to produce v1beta1.SecurityGroupExternalStatus from
 // ec2types.SecurityGroup.
-func GenerateSGObservation(sg ec2types.SecurityGroup) v1beta1.SecurityGroupObservation {
+func GenerateSGObservation(sg ec2types.SecurityGroup, rules []ec2types.SecurityGroupRule) v1beta1.SecurityGroupObservation {
+	ingressRules := []v1beta1.SecurityGroupRuleObservation{}
+	egressRules := []v1beta1.SecurityGroupRuleObservation{}
+
+	for _, r := range rules {
+		observedRule := v1beta1.SecurityGroupRuleObservation{
+			ID:           r.SecurityGroupRuleId,
+			CidrIpv4:     r.CidrIpv4,
+			CidrIpv6:     r.CidrIpv6,
+			IpProtocol:   r.IpProtocol,
+			Description:  r.Description,
+			FromPort:     r.FromPort,
+			ToPort:       r.ToPort,
+			PrefixListId: r.PrefixListId,
+		}
+		if r.ReferencedGroupInfo != nil {
+			observedRule.ReferencedGroupInfo = &v1beta1.ReferencedSecurityGroup{
+				GroupId:                r.ReferencedGroupInfo.GroupId,
+				PeeringStatus:          r.ReferencedGroupInfo.PeeringStatus,
+				UserId:                 r.ReferencedGroupInfo.UserId,
+				VpcId:                  r.ReferencedGroupInfo.VpcId,
+				VpcPeeringConnectionId: r.ReferencedGroupInfo.VpcPeeringConnectionId,
+			}
+		}
+		if ptr.Deref(r.IsEgress, false) {
+			egressRules = append(egressRules, observedRule)
+		} else {
+			ingressRules = append(ingressRules, observedRule)
+		}
+	}
+
 	return v1beta1.SecurityGroupObservation{
-		OwnerID:         aws.StringValue(sg.OwnerId),
-		SecurityGroupID: aws.StringValue(sg.GroupId),
+		OwnerID:         pointer.StringValue(sg.OwnerId),
+		SecurityGroupID: pointer.StringValue(sg.GroupId),
+		IngressRules:    ingressRules,
+		EgressRules:     egressRules,
 	}
 }
 
 // LateInitializeSG fills the empty fields in *v1beta1.SecurityGroupParameters with
 // the values seen in ec2types.SecurityGroup.
-func LateInitializeSG(in *v1beta1.SecurityGroupParameters, sg *ec2types.SecurityGroup) { // nolint:gocyclo
+func LateInitializeSG(in *v1beta1.SecurityGroupParameters, sg *ec2types.SecurityGroup) {
 	if sg == nil {
 		return
 	}
 
-	in.Description = awsclients.LateInitializeString(in.Description, sg.Description)
-	in.GroupName = awsclients.LateInitializeString(in.GroupName, sg.GroupName)
-	in.VPCID = awsclients.LateInitializeStringPtr(in.VPCID, sg.VpcId)
+	in.Description = pointer.LateInitializeValueFromPtr(in.Description, sg.Description)
+	in.GroupName = pointer.LateInitializeValueFromPtr(in.GroupName, sg.GroupName)
+	in.VPCID = pointer.LateInitialize(in.VPCID, sg.VpcId)
 
 	// We cannot safely late init egress/ingress rules because they are keyless arrays
 
 	if len(in.Tags) == 0 && len(sg.Tags) != 0 {
-		in.Tags = v1beta1.BuildFromEC2Tags(sg.Tags)
+		in.Tags = BuildFromEC2TagsV1Beta1(sg.Tags)
 	}
 }
 
@@ -130,13 +163,13 @@ func IsSGUpToDate(sg v1beta1.SecurityGroupParameters, observed ec2types.Security
 		return false
 	}
 
-	if !awsclients.BoolValue(sg.IgnoreIngress) {
+	if !pointer.BoolValue(sg.IgnoreIngress) {
 		add, remove := DiffPermissions(GenerateEC2Permissions(sg.Ingress), observed.IpPermissions)
 		if len(add) > 0 || len(remove) > 0 {
 			return false
 		}
 	}
-	if !awsclients.BoolValue(sg.IgnoreEgress) {
+	if !pointer.BoolValue(sg.IgnoreEgress) {
 		add, remove := DiffPermissions(GenerateEC2Permissions(sg.Egress), observed.IpPermissionsEgress)
 		if len(add) > 0 || len(remove) > 0 {
 			return false

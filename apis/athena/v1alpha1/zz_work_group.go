@@ -29,13 +29,14 @@ type WorkGroupParameters struct {
 	// Region is which region the WorkGroup will be created.
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
-	// The configuration for the workgroup, which includes the location in Amazon
-	// S3 where query results are stored, the encryption configuration, if any,
-	// used for encrypting query results, whether the Amazon CloudWatch Metrics
-	// are enabled for the workgroup, the limit for the amount of bytes scanned
-	// (cutoff) per query, if it is specified, and whether workgroup's settings
-	// (specified with EnforceWorkGroupConfiguration) in the WorkGroupConfiguration
-	// override client-side settings. See WorkGroupConfiguration$EnforceWorkGroupConfiguration.
+	// Contains configuration information for creating an Athena SQL workgroup or
+	// Spark enabled Athena workgroup. Athena SQL workgroup configuration includes
+	// the location in Amazon S3 where query and calculation results are stored,
+	// the encryption configuration, if any, used for encrypting query results,
+	// whether the Amazon CloudWatch Metrics are enabled for the workgroup, the
+	// limit for the amount of bytes scanned (cutoff) per query, if it is specified,
+	// and whether workgroup's settings (specified with EnforceWorkGroupConfiguration)
+	// in the WorkGroupConfiguration override client-side settings. See WorkGroupConfiguration$EnforceWorkGroupConfiguration.
 	Configuration *WorkGroupConfiguration `json:"configuration,omitempty"`
 	// The workgroup description.
 	Description *string `json:"description,omitempty"`
@@ -52,6 +53,7 @@ type WorkGroupSpec struct {
 
 // WorkGroupObservation defines the observed state of WorkGroup
 type WorkGroupObservation struct {
+	CustomWorkGroupObservation `json:",inline"`
 }
 
 // WorkGroupStatus defines the observed state of WorkGroup.
@@ -66,6 +68,7 @@ type WorkGroupStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

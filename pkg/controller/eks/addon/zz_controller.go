@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/eks/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.Addon)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.Addon) (managed.TypedExternalClient[*svcapitypes.Addon], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.Addon)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.Addon) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,30 +74,30 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeAddonWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateAddon(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.Addon)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.Addon) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateAddonInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -112,7 +105,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateAddonWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.Addon.AddonArn != nil {
@@ -135,44 +128,71 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Status.AtProvider.ClusterName = nil
 	}
+	if resp.Addon.ConfigurationValues != nil {
+		cr.Spec.ForProvider.ConfigurationValues = resp.Addon.ConfigurationValues
+	} else {
+		cr.Spec.ForProvider.ConfigurationValues = nil
+	}
 	if resp.Addon.CreatedAt != nil {
 		cr.Status.AtProvider.CreatedAt = &metav1.Time{*resp.Addon.CreatedAt}
 	} else {
 		cr.Status.AtProvider.CreatedAt = nil
 	}
 	if resp.Addon.Health != nil {
-		f5 := &svcapitypes.AddonHealth{}
+		f6 := &svcapitypes.AddonHealth{}
 		if resp.Addon.Health.Issues != nil {
-			f5f0 := []*svcapitypes.AddonIssue{}
-			for _, f5f0iter := range resp.Addon.Health.Issues {
-				f5f0elem := &svcapitypes.AddonIssue{}
-				if f5f0iter.Code != nil {
-					f5f0elem.Code = f5f0iter.Code
+			f6f0 := []*svcapitypes.AddonIssue{}
+			for _, f6f0iter := range resp.Addon.Health.Issues {
+				f6f0elem := &svcapitypes.AddonIssue{}
+				if f6f0iter.Code != nil {
+					f6f0elem.Code = f6f0iter.Code
 				}
-				if f5f0iter.Message != nil {
-					f5f0elem.Message = f5f0iter.Message
+				if f6f0iter.Message != nil {
+					f6f0elem.Message = f6f0iter.Message
 				}
-				if f5f0iter.ResourceIds != nil {
-					f5f0elemf2 := []*string{}
-					for _, f5f0elemf2iter := range f5f0iter.ResourceIds {
-						var f5f0elemf2elem string
-						f5f0elemf2elem = *f5f0elemf2iter
-						f5f0elemf2 = append(f5f0elemf2, &f5f0elemf2elem)
+				if f6f0iter.ResourceIds != nil {
+					f6f0elemf2 := []*string{}
+					for _, f6f0elemf2iter := range f6f0iter.ResourceIds {
+						var f6f0elemf2elem string
+						f6f0elemf2elem = *f6f0elemf2iter
+						f6f0elemf2 = append(f6f0elemf2, &f6f0elemf2elem)
 					}
-					f5f0elem.ResourceIDs = f5f0elemf2
+					f6f0elem.ResourceIDs = f6f0elemf2
 				}
-				f5f0 = append(f5f0, f5f0elem)
+				f6f0 = append(f6f0, f6f0elem)
 			}
-			f5.Issues = f5f0
+			f6.Issues = f6f0
 		}
-		cr.Status.AtProvider.Health = f5
+		cr.Status.AtProvider.Health = f6
 	} else {
 		cr.Status.AtProvider.Health = nil
+	}
+	if resp.Addon.MarketplaceInformation != nil {
+		f7 := &svcapitypes.MarketplaceInformation{}
+		if resp.Addon.MarketplaceInformation.ProductId != nil {
+			f7.ProductID = resp.Addon.MarketplaceInformation.ProductId
+		}
+		if resp.Addon.MarketplaceInformation.ProductUrl != nil {
+			f7.ProductURL = resp.Addon.MarketplaceInformation.ProductUrl
+		}
+		cr.Status.AtProvider.MarketplaceInformation = f7
+	} else {
+		cr.Status.AtProvider.MarketplaceInformation = nil
 	}
 	if resp.Addon.ModifiedAt != nil {
 		cr.Status.AtProvider.ModifiedAt = &metav1.Time{*resp.Addon.ModifiedAt}
 	} else {
 		cr.Status.AtProvider.ModifiedAt = nil
+	}
+	if resp.Addon.Owner != nil {
+		cr.Status.AtProvider.Owner = resp.Addon.Owner
+	} else {
+		cr.Status.AtProvider.Owner = nil
+	}
+	if resp.Addon.Publisher != nil {
+		cr.Status.AtProvider.Publisher = resp.Addon.Publisher
+	} else {
+		cr.Status.AtProvider.Publisher = nil
 	}
 	if resp.Addon.ServiceAccountRoleArn != nil {
 		cr.Spec.ForProvider.ServiceAccountRoleARN = resp.Addon.ServiceAccountRoleArn
@@ -185,13 +205,13 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.Status = nil
 	}
 	if resp.Addon.Tags != nil {
-		f9 := map[string]*string{}
-		for f9key, f9valiter := range resp.Addon.Tags {
-			var f9val string
-			f9val = *f9valiter
-			f9[f9key] = &f9val
+		f13 := map[string]*string{}
+		for f13key, f13valiter := range resp.Addon.Tags {
+			var f13val string
+			f13val = *f13valiter
+			f13[f13key] = &f13val
 		}
-		cr.Spec.ForProvider.Tags = f9
+		cr.Spec.ForProvider.Tags = f13
 	} else {
 		cr.Spec.ForProvider.Tags = nil
 	}
@@ -199,35 +219,32 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.Addon)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Update(ctx context.Context, cr *svcapitypes.Addon) (managed.ExternalUpdate, error) {
 	input := GenerateUpdateAddonInput(cr)
 	if err := e.preUpdate(ctx, cr, input); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.UpdateAddonWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Addon)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.Addon) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteAddonInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteAddonWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -259,11 +276,11 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.Addon, *svcsdk.DescribeAddonInput) error
 	postObserve    func(context.Context, *svcapitypes.Addon, *svcsdk.DescribeAddonOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.AddonParameters, *svcsdk.DescribeAddonOutput) error
-	isUpToDate     func(*svcapitypes.Addon, *svcsdk.DescribeAddonOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.Addon, *svcsdk.DescribeAddonOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.Addon, *svcsdk.CreateAddonInput) error
 	postCreate     func(context.Context, *svcapitypes.Addon, *svcsdk.CreateAddonOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.Addon, *svcsdk.DeleteAddonInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.Addon, *svcsdk.DeleteAddonOutput, error) error
+	postDelete     func(context.Context, *svcapitypes.Addon, *svcsdk.DeleteAddonOutput, error) (managed.ExternalDelete, error)
 	preUpdate      func(context.Context, *svcapitypes.Addon, *svcsdk.UpdateAddonInput) error
 	postUpdate     func(context.Context, *svcapitypes.Addon, *svcsdk.UpdateAddonOutput, managed.ExternalUpdate, error) (managed.ExternalUpdate, error)
 }
@@ -278,8 +295,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.Addon, _ *svcsdk.DescribeA
 func nopLateInitialize(*svcapitypes.AddonParameters, *svcsdk.DescribeAddonOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.Addon, *svcsdk.DescribeAddonOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.Addon, *svcsdk.DescribeAddonOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.Addon, *svcsdk.CreateAddonInput) error {
@@ -291,8 +308,8 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.Addon, _ *svcsdk.CreateAddo
 func nopPreDelete(context.Context, *svcapitypes.Addon, *svcsdk.DeleteAddonInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.Addon, _ *svcsdk.DeleteAddonOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.Addon, _ *svcsdk.DeleteAddonOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
 func nopPreUpdate(context.Context, *svcapitypes.Addon, *svcsdk.UpdateAddonInput) error {
 	return nil

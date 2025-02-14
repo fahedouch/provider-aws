@@ -28,10 +28,12 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/s3/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/s3"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -51,14 +53,14 @@ func NewReplicationConfigurationClient(client s3.BucketClient) *ReplicationConfi
 }
 
 // Observe checks if the resource exists and if it matches the local configuration
-func (in *ReplicationConfigurationClient) Observe(ctx context.Context, bucket *v1beta1.Bucket) (ResourceStatus, error) { // nolint:gocyclo
-	external, err := in.client.GetBucketReplication(ctx, &awss3.GetBucketReplicationInput{Bucket: awsclient.String(meta.GetExternalName(bucket))})
+func (in *ReplicationConfigurationClient) Observe(ctx context.Context, bucket *v1beta1.Bucket) (ResourceStatus, error) { //nolint:gocyclo
+	external, err := in.client.GetBucketReplication(ctx, &awss3.GetBucketReplicationInput{Bucket: pointer.ToOrNilIfZeroValue(meta.GetExternalName(bucket))})
 	config := bucket.Spec.ForProvider.ReplicationConfiguration
 	if err != nil {
 		if s3.ReplicationConfigurationNotFound(err) && config == nil {
 			return Updated, nil
 		}
-		return NeedsUpdate, awsclient.Wrap(resource.Ignore(s3.ReplicationConfigurationNotFound, err), replicationGetFailed)
+		return NeedsUpdate, errorutils.Wrap(resource.Ignore(s3.ReplicationConfigurationNotFound, err), replicationGetFailed)
 	}
 
 	switch {
@@ -91,25 +93,25 @@ func (in *ReplicationConfigurationClient) CreateOrUpdate(ctx context.Context, bu
 	}
 	input := GeneratePutBucketReplicationInput(meta.GetExternalName(bucket), bucket.Spec.ForProvider.ReplicationConfiguration)
 	_, err := in.client.PutBucketReplication(ctx, input)
-	return awsclient.Wrap(err, replicationPutFailed)
+	return errorutils.Wrap(err, replicationPutFailed)
 }
 
 // Delete creates the request to delete the resource on AWS or set it to the default value.
 func (in *ReplicationConfigurationClient) Delete(ctx context.Context, bucket *v1beta1.Bucket) error {
 	_, err := in.client.DeleteBucketReplication(ctx,
 		&awss3.DeleteBucketReplicationInput{
-			Bucket: awsclient.String(meta.GetExternalName(bucket)),
+			Bucket: pointer.ToOrNilIfZeroValue(meta.GetExternalName(bucket)),
 		},
 	)
-	return awsclient.Wrap(err, replicationDeleteFailed)
+	return errorutils.Wrap(err, replicationDeleteFailed)
 }
 
 // LateInitialize does nothing because the resource might have been deleted by
 // the user.
 func (in *ReplicationConfigurationClient) LateInitialize(ctx context.Context, bucket *v1beta1.Bucket) error {
-	external, err := in.client.GetBucketReplication(ctx, &awss3.GetBucketReplicationInput{Bucket: awsclient.String(meta.GetExternalName(bucket))})
+	external, err := in.client.GetBucketReplication(ctx, &awss3.GetBucketReplicationInput{Bucket: pointer.ToOrNilIfZeroValue(meta.GetExternalName(bucket))})
 	if err != nil {
-		return awsclient.Wrap(resource.Ignore(s3.ReplicationConfigurationNotFound, err), replicationGetFailed)
+		return errorutils.Wrap(resource.Ignore(s3.ReplicationConfigurationNotFound, err), replicationGetFailed)
 	}
 
 	if external == nil || external.ReplicationConfiguration == nil || len(external.ReplicationConfiguration.Rules) == 0 {
@@ -121,7 +123,7 @@ func (in *ReplicationConfigurationClient) LateInitialize(ctx context.Context, bu
 		// We need the configuration to exist so we can initialize
 		fp.ReplicationConfiguration = &v1beta1.ReplicationConfiguration{}
 	}
-	fp.ReplicationConfiguration.Role = awsclient.LateInitializeStringPtr(fp.ReplicationConfiguration.Role, external.ReplicationConfiguration.Role)
+	fp.ReplicationConfiguration.Role = pointer.LateInitialize(fp.ReplicationConfiguration.Role, external.ReplicationConfiguration.Role)
 	if fp.ReplicationConfiguration.Rules == nil {
 		createReplicationRulesFromExternal(external.ReplicationConfiguration, fp.ReplicationConfiguration)
 	}
@@ -133,7 +135,7 @@ func (in *ReplicationConfigurationClient) SubresourceExists(bucket *v1beta1.Buck
 	return bucket.Spec.ForProvider.ReplicationConfiguration != nil
 }
 
-func createReplicationRulesFromExternal(external *types.ReplicationConfiguration, config *v1beta1.ReplicationConfiguration) { // nolint:gocyclo
+func createReplicationRulesFromExternal(external *types.ReplicationConfiguration, config *v1beta1.ReplicationConfiguration) { //nolint:gocyclo
 	if config.Rules != nil {
 		return
 	}
@@ -142,7 +144,7 @@ func createReplicationRulesFromExternal(external *types.ReplicationConfiguration
 	for i, rule := range external.Rules {
 		config.Rules[i] = v1beta1.ReplicationRule{
 			ID:       rule.ID,
-			Priority: rule.Priority,
+			Priority: ptr.Deref(rule.Priority, 0),
 			Filter:   &v1beta1.ReplicationRuleFilter{},
 			Status:   string(rule.Status),
 		}
@@ -180,7 +182,7 @@ func createReplicationRulesFromExternal(external *types.ReplicationConfiguration
 		if rule.Destination != nil {
 			config.Rules[i].Destination.Account = rule.Destination.Account
 			config.Rules[i].Destination.Bucket = rule.Destination.Bucket
-			config.Rules[i].Destination.StorageClass = awsclient.String(string(rule.Destination.StorageClass))
+			config.Rules[i].Destination.StorageClass = pointer.ToOrNilIfZeroValue(string(rule.Destination.StorageClass))
 			if rule.Destination.AccessControlTranslation != nil {
 				config.Rules[i].Destination.AccessControlTranslation = &v1beta1.AccessControlTranslation{}
 				config.Rules[i].Destination.AccessControlTranslation.Owner = string(rule.Destination.AccessControlTranslation.Owner)
@@ -193,7 +195,7 @@ func createReplicationRulesFromExternal(external *types.ReplicationConfiguration
 				config.Rules[i].Destination.Metrics = &v1beta1.Metrics{}
 				if rule.Destination.Metrics.EventThreshold != nil {
 					config.Rules[i].Destination.Metrics.EventThreshold = &v1beta1.ReplicationTimeValue{}
-					config.Rules[i].Destination.Metrics.EventThreshold.Minutes = rule.Destination.Metrics.EventThreshold.Minutes
+					config.Rules[i].Destination.Metrics.EventThreshold.Minutes = ptr.Deref(rule.Destination.Metrics.EventThreshold.Minutes, 0)
 				}
 				config.Rules[i].Destination.Metrics.Status = string(rule.Destination.Metrics.Status)
 			}
@@ -201,7 +203,7 @@ func createReplicationRulesFromExternal(external *types.ReplicationConfiguration
 				config.Rules[i].Destination.ReplicationTime = &v1beta1.ReplicationTime{}
 				config.Rules[i].Destination.ReplicationTime.Status = string(rule.Destination.ReplicationTime.Status)
 				if rule.Destination.ReplicationTime.Time != nil {
-					config.Rules[i].Destination.ReplicationTime.Time.Minutes = rule.Destination.ReplicationTime.Time.Minutes
+					config.Rules[i].Destination.ReplicationTime.Time.Minutes = ptr.Deref(rule.Destination.ReplicationTime.Time.Minutes, 0)
 				}
 			}
 		}
@@ -243,7 +245,7 @@ func copyDestination(input *v1beta1.ReplicationRule, newRule *types.ReplicationR
 		EncryptionConfiguration:  nil,
 		Metrics:                  nil,
 		ReplicationTime:          nil,
-		StorageClass:             types.StorageClass(awsclient.StringValue(input.Destination.StorageClass)),
+		StorageClass:             types.StorageClass(pointer.StringValue(input.Destination.StorageClass)),
 	}
 	if input.Destination.AccessControlTranslation != nil {
 		newRule.Destination.AccessControlTranslation = &types.AccessControlTranslation{
@@ -260,7 +262,7 @@ func copyDestination(input *v1beta1.ReplicationRule, newRule *types.ReplicationR
 			Status: types.MetricsStatus(input.Destination.Metrics.Status),
 		}
 		if input.Destination.Metrics.EventThreshold != nil {
-			newRule.Destination.Metrics.EventThreshold = &types.ReplicationTimeValue{Minutes: input.Destination.Metrics.EventThreshold.Minutes}
+			newRule.Destination.Metrics.EventThreshold = &types.ReplicationTimeValue{Minutes: &input.Destination.Metrics.EventThreshold.Minutes}
 		}
 	}
 	if input.Destination.ReplicationTime != nil {
@@ -270,7 +272,7 @@ func copyDestination(input *v1beta1.ReplicationRule, newRule *types.ReplicationR
 		}
 		if input.Destination.ReplicationTime != nil {
 			newRule.Destination.ReplicationTime.Time = &types.ReplicationTimeValue{
-				Minutes: input.Destination.ReplicationTime.Time.Minutes,
+				Minutes: &input.Destination.ReplicationTime.Time.Minutes,
 			}
 		}
 	}
@@ -280,7 +282,7 @@ func createRule(input v1beta1.ReplicationRule) types.ReplicationRule {
 	Rule := input
 	newRule := types.ReplicationRule{
 		ID:       Rule.ID,
-		Priority: Rule.Priority,
+		Priority: &Rule.Priority,
 		Filter:   &types.ReplicationRuleFilterMemberPrefix{Value: ""},
 		Status:   types.ReplicationRuleStatus(Rule.Status),
 	}
@@ -295,7 +297,7 @@ func createRule(input v1beta1.ReplicationRule) types.ReplicationRule {
 			}
 			newRule.Filter = &types.ReplicationRuleFilterMemberAnd{Value: *andOperator}
 		case Rule.Filter.Tag != nil:
-			newRule.Filter = &types.ReplicationRuleFilterMemberTag{Value: types.Tag{Key: awsclient.String(Rule.Filter.Tag.Key), Value: awsclient.String(Rule.Filter.Tag.Value)}}
+			newRule.Filter = &types.ReplicationRuleFilterMemberTag{Value: types.Tag{Key: pointer.ToOrNilIfZeroValue(Rule.Filter.Tag.Key), Value: pointer.ToOrNilIfZeroValue(Rule.Filter.Tag.Value)}}
 		case Rule.Filter.Prefix != nil:
 			newRule.Filter = &types.ReplicationRuleFilterMemberPrefix{Value: *Rule.Filter.Prefix}
 		}
@@ -336,7 +338,7 @@ func GenerateReplicationConfiguration(config *v1beta1.ReplicationConfiguration) 
 // GeneratePutBucketReplicationInput creates the input for the PutBucketReplication request for the S3 Client
 func GeneratePutBucketReplicationInput(name string, config *v1beta1.ReplicationConfiguration) *awss3.PutBucketReplicationInput {
 	return &awss3.PutBucketReplicationInput{
-		Bucket:                   awsclient.String(name),
+		Bucket:                   pointer.ToOrNilIfZeroValue(name),
 		ReplicationConfiguration: GenerateReplicationConfiguration(config),
 	}
 }

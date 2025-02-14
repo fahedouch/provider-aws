@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/kms/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.Key)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.Key) (managed.TypedExternalClient[*svcapitypes.Key], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.Key)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.Key) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,30 +74,30 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeKeyWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateKey(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.Key)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.Key) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateKeyInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -112,7 +105,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateKeyWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.KeyMetadata.AWSAccountId != nil {
@@ -276,23 +269,33 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Status.AtProvider.ValidTo = nil
 	}
+	if resp.KeyMetadata.XksKeyConfiguration != nil {
+		f23 := &svcapitypes.XksKeyConfigurationType{}
+		if resp.KeyMetadata.XksKeyConfiguration.Id != nil {
+			f23.ID = resp.KeyMetadata.XksKeyConfiguration.Id
+		}
+		cr.Status.AtProvider.XksKeyConfiguration = f23
+	} else {
+		cr.Status.AtProvider.XksKeyConfiguration = nil
+	}
 
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	return e.update(ctx, mg)
+func (e *external) Update(ctx context.Context, cr *svcapitypes.Key) (managed.ExternalUpdate, error) {
+	return e.update(ctx, cr)
 
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Key)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.Key) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
-	return e.delete(ctx, mg)
+	return e.delete(ctx, cr)
 
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -322,11 +325,11 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.Key, *svcsdk.DescribeKeyInput) error
 	postObserve    func(context.Context, *svcapitypes.Key, *svcsdk.DescribeKeyOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.KeyParameters, *svcsdk.DescribeKeyOutput) error
-	isUpToDate     func(*svcapitypes.Key, *svcsdk.DescribeKeyOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.Key, *svcsdk.DescribeKeyOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.Key, *svcsdk.CreateKeyInput) error
 	postCreate     func(context.Context, *svcapitypes.Key, *svcsdk.CreateKeyOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
-	delete         func(context.Context, cpresource.Managed) error
-	update         func(context.Context, cpresource.Managed) (managed.ExternalUpdate, error)
+	delete         func(context.Context, *svcapitypes.Key) (managed.ExternalDelete, error)
+	update         func(context.Context, *svcapitypes.Key) (managed.ExternalUpdate, error)
 }
 
 func nopPreObserve(context.Context, *svcapitypes.Key, *svcsdk.DescribeKeyInput) error {
@@ -339,8 +342,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.Key, _ *svcsdk.DescribeKey
 func nopLateInitialize(*svcapitypes.KeyParameters, *svcsdk.DescribeKeyOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.Key, *svcsdk.DescribeKeyOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.Key, *svcsdk.DescribeKeyOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.Key, *svcsdk.CreateKeyInput) error {
@@ -349,9 +352,9 @@ func nopPreCreate(context.Context, *svcapitypes.Key, *svcsdk.CreateKeyInput) err
 func nopPostCreate(_ context.Context, _ *svcapitypes.Key, _ *svcsdk.CreateKeyOutput, cre managed.ExternalCreation, err error) (managed.ExternalCreation, error) {
 	return cre, err
 }
-func nopDelete(context.Context, cpresource.Managed) error {
-	return nil
+func nopDelete(context.Context, *svcapitypes.Key) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, nil
 }
-func nopUpdate(context.Context, cpresource.Managed) (managed.ExternalUpdate, error) {
+func nopUpdate(context.Context, *svcapitypes.Key) (managed.ExternalUpdate, error) {
 	return managed.ExternalUpdate{}, nil
 }

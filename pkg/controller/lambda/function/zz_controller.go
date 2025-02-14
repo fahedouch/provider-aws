@@ -34,7 +34,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/lambda/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -52,23 +53,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.Function)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.Function) (managed.TypedExternalClient[*svcapitypes.Function], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.Function)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.Function) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -80,30 +73,30 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.GetFunctionWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateFunction(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.Function)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.Function) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateFunctionInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -111,7 +104,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateFunctionWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.Architectures != nil {
@@ -300,6 +293,25 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Spec.ForProvider.Runtime = nil
 	}
+	if resp.RuntimeVersionConfig != nil {
+		f23 := &svcapitypes.RuntimeVersionConfig{}
+		if resp.RuntimeVersionConfig.Error != nil {
+			f23f0 := &svcapitypes.RuntimeVersionError{}
+			if resp.RuntimeVersionConfig.Error.ErrorCode != nil {
+				f23f0.ErrorCode = resp.RuntimeVersionConfig.Error.ErrorCode
+			}
+			if resp.RuntimeVersionConfig.Error.Message != nil {
+				f23f0.Message = resp.RuntimeVersionConfig.Error.Message
+			}
+			f23.Error = f23f0
+		}
+		if resp.RuntimeVersionConfig.RuntimeVersionArn != nil {
+			f23.RuntimeVersionARN = resp.RuntimeVersionConfig.RuntimeVersionArn
+		}
+		cr.Status.AtProvider.RuntimeVersionConfig = f23
+	} else {
+		cr.Status.AtProvider.RuntimeVersionConfig = nil
+	}
 	if resp.SigningJobArn != nil {
 		cr.Status.AtProvider.SigningJobARN = resp.SigningJobArn
 	} else {
@@ -309,6 +321,15 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.SigningProfileVersionARN = resp.SigningProfileVersionArn
 	} else {
 		cr.Status.AtProvider.SigningProfileVersionARN = nil
+	}
+	if resp.SnapStart != nil {
+		f26 := &svcapitypes.SnapStart{}
+		if resp.SnapStart.ApplyOn != nil {
+			f26.ApplyOn = resp.SnapStart.ApplyOn
+		}
+		cr.Spec.ForProvider.SnapStart = f26
+	} else {
+		cr.Spec.ForProvider.SnapStart = nil
 	}
 	if resp.State != nil {
 		cr.Status.AtProvider.State = resp.State
@@ -331,11 +352,11 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Spec.ForProvider.Timeout = nil
 	}
 	if resp.TracingConfig != nil {
-		f29 := &svcapitypes.TracingConfig{}
+		f31 := &svcapitypes.TracingConfig{}
 		if resp.TracingConfig.Mode != nil {
-			f29.Mode = resp.TracingConfig.Mode
+			f31.Mode = resp.TracingConfig.Mode
 		}
-		cr.Spec.ForProvider.TracingConfig = f29
+		cr.Spec.ForProvider.TracingConfig = f31
 	} else {
 		cr.Spec.ForProvider.TracingConfig = nil
 	}
@@ -345,29 +366,32 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Status.AtProvider.Version = nil
 	}
 	if resp.VpcConfig != nil {
-		f31 := &svcapitypes.VPCConfigResponse{}
+		f33 := &svcapitypes.VPCConfigResponse{}
+		if resp.VpcConfig.Ipv6AllowedForDualStack != nil {
+			f33.IPv6AllowedForDualStack = resp.VpcConfig.Ipv6AllowedForDualStack
+		}
 		if resp.VpcConfig.SecurityGroupIds != nil {
-			f31f0 := []*string{}
-			for _, f31f0iter := range resp.VpcConfig.SecurityGroupIds {
-				var f31f0elem string
-				f31f0elem = *f31f0iter
-				f31f0 = append(f31f0, &f31f0elem)
+			f33f1 := []*string{}
+			for _, f33f1iter := range resp.VpcConfig.SecurityGroupIds {
+				var f33f1elem string
+				f33f1elem = *f33f1iter
+				f33f1 = append(f33f1, &f33f1elem)
 			}
-			f31.SecurityGroupIDs = f31f0
+			f33.SecurityGroupIDs = f33f1
 		}
 		if resp.VpcConfig.SubnetIds != nil {
-			f31f1 := []*string{}
-			for _, f31f1iter := range resp.VpcConfig.SubnetIds {
-				var f31f1elem string
-				f31f1elem = *f31f1iter
-				f31f1 = append(f31f1, &f31f1elem)
+			f33f2 := []*string{}
+			for _, f33f2iter := range resp.VpcConfig.SubnetIds {
+				var f33f2elem string
+				f33f2elem = *f33f2iter
+				f33f2 = append(f33f2, &f33f2elem)
 			}
-			f31.SubnetIDs = f31f1
+			f33.SubnetIDs = f33f2
 		}
 		if resp.VpcConfig.VpcId != nil {
-			f31.VPCID = resp.VpcConfig.VpcId
+			f33.VPCID = resp.VpcConfig.VpcId
 		}
-		cr.Status.AtProvider.VPCConfig = f31
+		cr.Status.AtProvider.VPCConfig = f33
 	} else {
 		cr.Status.AtProvider.VPCConfig = nil
 	}
@@ -375,27 +399,28 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	return e.update(ctx, mg)
+func (e *external) Update(ctx context.Context, cr *svcapitypes.Function) (managed.ExternalUpdate, error) {
+	return e.update(ctx, cr)
 
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Function)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.Function) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteFunctionInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteFunctionWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -426,12 +451,12 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.Function, *svcsdk.GetFunctionInput) error
 	postObserve    func(context.Context, *svcapitypes.Function, *svcsdk.GetFunctionOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.FunctionParameters, *svcsdk.GetFunctionOutput) error
-	isUpToDate     func(*svcapitypes.Function, *svcsdk.GetFunctionOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.Function, *svcsdk.GetFunctionOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.Function, *svcsdk.CreateFunctionInput) error
 	postCreate     func(context.Context, *svcapitypes.Function, *svcsdk.FunctionConfiguration, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.Function, *svcsdk.DeleteFunctionInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.Function, *svcsdk.DeleteFunctionOutput, error) error
-	update         func(context.Context, cpresource.Managed) (managed.ExternalUpdate, error)
+	postDelete     func(context.Context, *svcapitypes.Function, *svcsdk.DeleteFunctionOutput, error) (managed.ExternalDelete, error)
+	update         func(context.Context, *svcapitypes.Function) (managed.ExternalUpdate, error)
 }
 
 func nopPreObserve(context.Context, *svcapitypes.Function, *svcsdk.GetFunctionInput) error {
@@ -444,8 +469,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.Function, _ *svcsdk.GetFun
 func nopLateInitialize(*svcapitypes.FunctionParameters, *svcsdk.GetFunctionOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.Function, *svcsdk.GetFunctionOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.Function, *svcsdk.GetFunctionOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.Function, *svcsdk.CreateFunctionInput) error {
@@ -457,9 +482,9 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.Function, _ *svcsdk.Functio
 func nopPreDelete(context.Context, *svcapitypes.Function, *svcsdk.DeleteFunctionInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.Function, _ *svcsdk.DeleteFunctionOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.Function, _ *svcsdk.DeleteFunctionOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
-func nopUpdate(context.Context, cpresource.Managed) (managed.ExternalUpdate, error) {
+func nopUpdate(context.Context, *svcapitypes.Function) (managed.ExternalUpdate, error) {
 	return managed.ExternalUpdate{}, nil
 }

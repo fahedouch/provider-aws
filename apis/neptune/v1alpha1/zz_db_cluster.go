@@ -87,6 +87,9 @@ type DBClusterParameters struct {
 	//
 	// Example: 1.0.2.1
 	EngineVersion *string `json:"engineVersion,omitempty"`
+	// The ID of the Neptune global database to which this new DB cluster should
+	// be added.
+	GlobalClusterIdentifier *string `json:"globalClusterIdentifier,omitempty"`
 	// The Amazon KMS key identifier for an encrypted DB cluster.
 	//
 	// The KMS key identifier is the Amazon Resource Name (ARN) for the KMS encryption
@@ -128,8 +131,8 @@ type DBClusterParameters struct {
 	// backups are enabled using the BackupRetentionPeriod parameter.
 	//
 	// The default is a 30-minute window selected at random from an 8-hour block
-	// of time for each Amazon Region. To see the time blocks available, see Adjusting
-	// the Preferred Maintenance Window (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/AdjustingTheMaintenanceWindow.html)
+	// of time for each Amazon Region. To see the time blocks available, see Neptune
+	// Maintenance Window (https://docs.aws.amazon.com/neptune/latest/userguide/manage-console-maintaining.html#manage-console-maintaining-window)
 	// in the Amazon Neptune User Guide.
 	//
 	// Constraints:
@@ -149,8 +152,7 @@ type DBClusterParameters struct {
 	//
 	// The default is a 30-minute window selected at random from an 8-hour block
 	// of time for each Amazon Region, occurring on a random day of the week. To
-	// see the time blocks available, see Adjusting the Preferred Maintenance Window
-	// (https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/AdjustingTheMaintenanceWindow.html)
+	// see the time blocks available, see Neptune Maintenance Window (https://docs.aws.amazon.com/neptune/latest/userguide/manage-console-maintaining.html#manage-console-maintaining-window)
 	// in the Amazon Neptune User Guide.
 	//
 	// Valid Days: Mon, Tue, Wed, Thu, Fri, Sat, Sun.
@@ -160,6 +162,11 @@ type DBClusterParameters struct {
 	// The Amazon Resource Name (ARN) of the source DB instance or DB cluster if
 	// this DB cluster is created as a Read Replica.
 	ReplicationSourceIdentifier *string `json:"replicationSourceIdentifier,omitempty"`
+	// Contains the scaling configuration of a Neptune Serverless DB cluster.
+	//
+	// For more information, see Using Amazon Neptune Serverless (https://docs.aws.amazon.com/neptune/latest/userguide/neptune-serverless-using.html)
+	// in the Amazon Neptune User Guide.
+	ServerlessV2ScalingConfiguration *ServerlessV2ScalingConfiguration `json:"serverlessV2ScalingConfiguration,omitempty"`
 	// SourceRegion is the source region where the resource exists. This is not
 	// sent over the wire and is only used for presigning. This value should always
 	// have the same region as the source ARN.
@@ -234,6 +241,9 @@ type DBClusterObservation struct {
 	LatestRestorableTime *metav1.Time `json:"latestRestorableTime,omitempty"`
 	// Specifies whether the DB cluster has instances in multiple Availability Zones.
 	MultiAZ *bool `json:"multiAZ,omitempty"`
+	// This data type is used as a response element in the ModifyDBCluster operation
+	// and contains changes that will be applied during the next maintenance window.
+	PendingModifiedValues *ClusterPendingModifiedValues `json:"pendingModifiedValues,omitempty"`
 	// Specifies the progress of the operation as a percentage.
 	PercentProgress *string `json:"percentProgress,omitempty"`
 	// Contains one or more identifiers of the Read Replicas associated with this
@@ -255,6 +265,8 @@ type DBClusterObservation struct {
 	Status *string `json:"status,omitempty"`
 	// Provides a list of VPC security groups that the DB cluster belongs to.
 	VPCSecurityGroups []*VPCSecurityGroupMembership `json:"vpcSecurityGroups,omitempty"`
+
+	CustomDBClusterObservation `json:",inline"`
 }
 
 // DBClusterStatus defines the observed state of DBCluster.
@@ -269,6 +281,7 @@ type DBClusterStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

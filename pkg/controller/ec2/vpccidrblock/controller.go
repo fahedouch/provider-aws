@@ -24,10 +24,6 @@ import (
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	awsgo "github.com/aws/aws-sdk-go/aws"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -35,12 +31,17 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/ec2/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -60,21 +61,33 @@ func SetupVPCCIDRBlock(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewVPCCIDRBlockClient}),
+		managed.WithCreationGracePeriod(3 * time.Minute),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.VPCCIDRBlockGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.VPCCIDRBlock{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.VPCCIDRBlockGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewVPCCIDRBlockClient}),
-			managed.WithCreationGracePeriod(3*time.Minute),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithInitializers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -87,7 +100,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +112,7 @@ type external struct {
 	client ec2.VPCCIDRBlockClient
 }
 
-func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) { // nolint:gocyclo
+func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) { //nolint:gocyclo
 	cr, ok := mgd.(*v1beta1.VPCCIDRBlock)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
@@ -118,7 +131,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	if err != nil {
 		return managed.ExternalObservation{
 			ResourceExists: false,
-		}, awsclient.Wrap(resource.Ignore(ec2.IsVPCNotFoundErr, err), errDescribe)
+		}, errorutils.Wrap(resource.Ignore(ec2.IsVPCNotFoundErr, err), errDescribe)
 	}
 
 	// in a successful response, there should be one and only one object
@@ -139,6 +152,12 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	case awsec2types.VpcCidrBlockStateCodeAssociating:
 		cr.SetConditions(xpv1.Creating())
 	case awsec2types.VpcCidrBlockStateCodeDisassociated:
+		if meta.WasDeleted(mgd) {
+			return managed.ExternalObservation{
+				ResourceExists:   false,
+				ResourceUpToDate: false,
+			}, nil
+		}
 		cr.Status.SetConditions(xpv1.Deleting())
 	case awsec2types.VpcCidrBlockStateCodeDisassociating:
 		cr.Status.SetConditions(xpv1.Deleting())
@@ -169,7 +188,7 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 		VpcId:                           cr.Spec.ForProvider.VPCID,
 	})
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errAssociate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errAssociate)
 	}
 
 	if result != nil {
@@ -188,18 +207,23 @@ func (e *external) Update(_ context.Context, _ resource.Managed) (managed.Extern
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.VPCCIDRBlock)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 	if ec2.IsVpcCidrDeleting(cr.Status.AtProvider) {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 
 	_, err := e.client.DisassociateVpcCidrBlock(ctx, &awsec2.DisassociateVpcCidrBlockInput{
 		AssociationId: aws.String(meta.GetExternalName(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(ec2.IsCIDRNotFound, err), errDisassociate)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(ec2.IsCIDRNotFound, err), errDisassociate)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

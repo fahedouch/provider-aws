@@ -22,10 +22,6 @@ import (
 
 	svcsdk "github.com/aws/aws-sdk-go/service/docdb"
 	"github.com/aws/aws-sdk-go/service/docdb/docdbiface"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -33,17 +29,15 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/docdb/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/docdb"
+	svcutils "github.com/crossplane-contrib/provider-aws/pkg/controller/docdb/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
-)
-
-const (
-	errNotDBInstance    = "managed resource is not a DocDB instance custom resource"
-	errKubeUpdateFailed = "cannot update DocDB instance custom resource"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupDBInstance adds a controller that reconciles a DBInstance.
@@ -56,19 +50,31 @@ func SetupDBInstance(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.DBInstanceGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		For(&svcapitypes.DBInstance{}).
 		WithOptions(o.ForControllerRuntime()).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.DBInstanceGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		WithEventFilter(resource.DesiredStateChanged()).
+		Complete(r)
 }
 
 func setupExternal(e *external) {
@@ -91,7 +97,7 @@ type hooks struct {
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.DescribeDBInstancesInput) error {
-	obj.DBInstanceIdentifier = awsclient.String(meta.GetExternalName(cr))
+	obj.DBInstanceIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -100,7 +106,7 @@ func postObserve(_ context.Context, cr *svcapitypes.DBInstance, resp *svcsdk.Des
 		return managed.ExternalObservation{}, err
 	}
 
-	switch awsclient.StringValue(cr.Status.AtProvider.DBInstanceStatus) {
+	switch pointer.StringValue(cr.Status.AtProvider.DBInstanceStatus) {
 	case svcapitypes.DocDBInstanceStateAvailable:
 		cr.Status.SetConditions(xpv1.Available())
 	case svcapitypes.DocDBInstanceStateCreating:
@@ -115,34 +121,35 @@ func postObserve(_ context.Context, cr *svcapitypes.DBInstance, resp *svcsdk.Des
 	return obs, nil
 }
 
-func (e *hooks) isUpToDate(cr *svcapitypes.DBInstance, resp *svcsdk.DescribeDBInstancesOutput) (bool, error) { // nolint:gocyclo
+func (e *hooks) isUpToDate(_ context.Context, cr *svcapitypes.DBInstance, resp *svcsdk.DescribeDBInstancesOutput) (bool, string, error) {
 	instance := resp.DBInstances[0]
 
 	switch {
-	case awsclient.BoolValue(cr.Spec.ForProvider.AutoMinorVersionUpgrade) != awsclient.BoolValue(instance.AutoMinorVersionUpgrade),
-		awsclient.StringValue(cr.Spec.ForProvider.CACertificateIdentifier) != awsclient.StringValue(instance.CACertificateIdentifier),
-		awsclient.StringValue(cr.Spec.ForProvider.DBInstanceClass) != awsclient.StringValue(instance.DBInstanceClass),
-		awsclient.StringValue(cr.Spec.ForProvider.PreferredMaintenanceWindow) != awsclient.StringValue(instance.PreferredMaintenanceWindow),
-		awsclient.Int64Value(cr.Spec.ForProvider.PromotionTier) != awsclient.Int64Value(instance.PromotionTier):
-		return false, nil
+	case pointer.BoolValue(cr.Spec.ForProvider.AutoMinorVersionUpgrade) != pointer.BoolValue(instance.AutoMinorVersionUpgrade),
+		pointer.StringValue(cr.Spec.ForProvider.CACertificateIdentifier) != pointer.StringValue(instance.CACertificateIdentifier),
+		pointer.StringValue(cr.Spec.ForProvider.DBInstanceClass) != pointer.StringValue(instance.DBInstanceClass),
+		pointer.StringValue(cr.Spec.ForProvider.PreferredMaintenanceWindow) != pointer.StringValue(instance.PreferredMaintenanceWindow),
+		pointer.Int64Value(cr.Spec.ForProvider.PromotionTier) != pointer.Int64Value(instance.PromotionTier):
+		return false, "", nil
 	}
 
-	return svcutils.AreTagsUpToDate(e.client, cr.Spec.ForProvider.Tags, instance.DBInstanceArn)
+	areTagsUpToDate, err := svcutils.AreTagsUpToDate(e.client, cr.Spec.ForProvider.Tags, instance.DBInstanceArn)
+	return areTagsUpToDate, "", err
 }
 
 func lateInitialize(cr *svcapitypes.DBInstanceParameters, resp *svcsdk.DescribeDBInstancesOutput) error {
 	instance := resp.DBInstances[0]
 
-	cr.AvailabilityZone = awsclient.LateInitializeStringPtr(cr.AvailabilityZone, instance.AvailabilityZone)
-	cr.AutoMinorVersionUpgrade = awsclient.LateInitializeBoolPtr(cr.AutoMinorVersionUpgrade, instance.AutoMinorVersionUpgrade)
-	cr.CACertificateIdentifier = awsclient.LateInitializeStringPtr(cr.CACertificateIdentifier, instance.CACertificateIdentifier)
-	cr.PreferredMaintenanceWindow = awsclient.LateInitializeStringPtr(cr.PreferredMaintenanceWindow, instance.PreferredMaintenanceWindow)
-	cr.PromotionTier = awsclient.LateInitializeInt64Ptr(cr.PromotionTier, instance.PromotionTier)
+	cr.AvailabilityZone = pointer.LateInitialize(cr.AvailabilityZone, instance.AvailabilityZone)
+	cr.AutoMinorVersionUpgrade = pointer.LateInitialize(cr.AutoMinorVersionUpgrade, instance.AutoMinorVersionUpgrade)
+	cr.CACertificateIdentifier = pointer.LateInitialize(cr.CACertificateIdentifier, instance.CACertificateIdentifier)
+	cr.PreferredMaintenanceWindow = pointer.LateInitialize(cr.PreferredMaintenanceWindow, instance.PreferredMaintenanceWindow)
+	cr.PromotionTier = pointer.LateInitialize(cr.PromotionTier, instance.PromotionTier)
 	return nil
 }
 
 func preUpdate(ctx context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.ModifyDBInstanceInput) error {
-	obj.DBInstanceIdentifier = awsclient.String(meta.GetExternalName(cr))
+	obj.DBInstanceIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.CACertificateIdentifier = cr.Spec.ForProvider.CACertificateIdentifier
 	obj.ApplyImmediately = cr.Spec.ForProvider.ApplyImmediately
 	return nil
@@ -156,7 +163,7 @@ func (e *hooks) postUpdate(ctx context.Context, cr *svcapitypes.DBInstance, resp
 }
 
 func preCreate(ctx context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.CreateDBInstanceInput) error {
-	obj.DBInstanceIdentifier = awsclient.String(meta.GetExternalName(cr))
+	obj.DBInstanceIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.DBClusterIdentifier = cr.Spec.ForProvider.DBClusterIdentifier
 	return nil
 }
@@ -172,18 +179,18 @@ func postCreate(ctx context.Context, cr *svcapitypes.DBInstance, resp *svcsdk.Cr
 
 func preDelete(_ context.Context, cr *svcapitypes.DBInstance, obj *svcsdk.DeleteDBInstanceInput) (bool, error) {
 	// Skip if cluster is already in deleting state
-	if awsclient.StringValue(cr.Status.AtProvider.DBInstanceStatus) == svcapitypes.DocDBInstanceStateDeleting {
+	if pointer.StringValue(cr.Status.AtProvider.DBInstanceStatus) == svcapitypes.DocDBInstanceStateDeleting {
 		return true, nil
 	}
 
-	obj.DBInstanceIdentifier = awsclient.String(meta.GetExternalName(cr))
+	obj.DBInstanceIdentifier = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
 func filterList(cr *svcapitypes.DBInstance, list *svcsdk.DescribeDBInstancesOutput) *svcsdk.DescribeDBInstancesOutput {
 	id := meta.GetExternalName(cr)
 	for _, instance := range list.DBInstances {
-		if awsclient.StringValue(instance.DBInstanceIdentifier) == id {
+		if pointer.StringValue(instance.DBInstanceIdentifier) == id {
 			return &svcsdk.DescribeDBInstancesOutput{
 				Marker:      list.Marker,
 				DBInstances: []*svcsdk.DBInstance{instance},
@@ -202,21 +209,7 @@ func getConnectionDetails(cr *svcapitypes.DBInstance) managed.ConnectionDetails 
 		return nil
 	}
 	return managed.ConnectionDetails{
-		xpv1.ResourceCredentialsSecretEndpointKey: []byte(awsclient.StringValue(cr.Status.AtProvider.Endpoint.Address)),
-		xpv1.ResourceCredentialsSecretPortKey:     []byte(strconv.Itoa(int(awsclient.Int64Value(cr.Status.AtProvider.Endpoint.Port)))),
+		xpv1.ResourceCredentialsSecretEndpointKey: []byte(pointer.StringValue(cr.Status.AtProvider.Endpoint.Address)),
+		xpv1.ResourceCredentialsSecretPortKey:     []byte(strconv.Itoa(int(pointer.Int64Value(cr.Status.AtProvider.Endpoint.Port)))),
 	}
-}
-
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*svcapitypes.DBInstance)
-	if !ok {
-		return errors.New(errNotDBInstance)
-	}
-
-	cr.Spec.ForProvider.Tags = svcutils.AddExternalTags(mg, cr.Spec.ForProvider.Tags)
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
 }

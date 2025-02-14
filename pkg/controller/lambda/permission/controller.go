@@ -23,12 +23,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	svcsdk "github.com/aws/aws-sdk-go-v2/service/lambda"
 	svcsdktypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -36,11 +30,19 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/lambda/manualv1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -61,19 +63,31 @@ func SetupPermission(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newLambdaClientFn: svcsdk.NewFromConfig}),
+		managed.WithInitializers(&externalNameGenerator{kube: mgr.GetClient()}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.PermissionGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Permission{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.PermissionGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newLambdaClientFn: svcsdk.NewFromConfig}),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient()), &externalNameGenerator{kube: mgr.GetClient()}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -86,7 +100,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errNotLambdaPermission)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -108,10 +122,10 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		FunctionName: cr.Spec.ForProvider.FunctionName,
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(isErrorNotFound, err), errGetPolicyFailed)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(isErrorNotFound, err), errGetPolicyFailed)
 	}
 
-	policyDocument, err := parsePolicy(awsclient.StringValue(resp.Policy))
+	policyDocument, err := parsePolicy(pointer.StringValue(resp.Policy))
 	if err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, errParsePolicy)
 	}
@@ -155,7 +169,7 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	_, err := e.client.AddPermission(ctx, generateAddPermissionInput(cr))
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errAddPermission)
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errAddPermission)
 }
 
 func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
@@ -172,20 +186,25 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	return managed.ExternalUpdate{}, errors.Wrap(err, errAddPermission)
 }
 
-func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*svcapitypes.Permission)
 	if !ok {
-		return errors.New(errNotLambdaPermission)
+		return managed.ExternalDelete{}, errors.New(errNotLambdaPermission)
 	}
 	_, err := e.client.RemovePermission(ctx, generateRemovePermissionInput(cr))
-	return awsclient.Wrap(resource.Ignore(isErrorNotFound, err), errRemovePermission)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(isErrorNotFound, err), errRemovePermission)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 func (e *external) lateInitialize(spec, current *svcapitypes.PermissionParameters) {
-	spec.EventSourceToken = awsclient.LateInitializeStringPtr(spec.EventSourceToken, current.EventSourceToken)
-	spec.PrincipalOrgID = awsclient.LateInitializeStringPtr(spec.PrincipalOrgID, current.PrincipalOrgID)
-	spec.SourceAccount = awsclient.LateInitializeStringPtr(spec.SourceAccount, current.SourceAccount)
-	spec.SourceArn = awsclient.LateInitializeStringPtr(spec.SourceArn, current.SourceArn)
+	spec.EventSourceToken = pointer.LateInitialize(spec.EventSourceToken, current.EventSourceToken)
+	spec.PrincipalOrgID = pointer.LateInitialize(spec.PrincipalOrgID, current.PrincipalOrgID)
+	spec.SourceAccount = pointer.LateInitialize(spec.SourceAccount, current.SourceAccount)
+	spec.SourceArn = pointer.LateInitialize(spec.SourceArn, current.SourceArn)
 }
 
 // IsErrorNotFound helper function to test for ResourceNotFoundException error.

@@ -4,13 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/lambda"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/lambda/lambdaiface"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -18,11 +14,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/lambda/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
+	tagutils "github.com/crossplane-contrib/provider-aws/pkg/utils/tags"
 )
 
 const (
@@ -58,24 +61,36 @@ func SetupFunction(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.FunctionGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Function{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.FunctionGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 // LateInitialize fills the empty fields in *svcapitypes.FunctionParameters with
 // the values seen in svcsdk.GetFunctionOutput.
 func LateInitialize(cr *svcapitypes.FunctionParameters, resp *svcsdk.GetFunctionOutput) error {
-	cr.MemorySize = aws.LateInitializeInt64Ptr(cr.MemorySize, resp.Configuration.MemorySize)
-	cr.Timeout = aws.LateInitializeInt64Ptr(cr.Timeout, resp.Configuration.Timeout)
+	cr.MemorySize = pointer.LateInitialize(cr.MemorySize, resp.Configuration.MemorySize)
+	cr.Timeout = pointer.LateInitialize(cr.Timeout, resp.Configuration.Timeout)
 	if cr.TracingConfig == nil {
 		cr.TracingConfig = &svcapitypes.TracingConfig{Mode: resp.Configuration.TracingConfig.Mode}
 	}
@@ -116,7 +131,13 @@ func postObserve(_ context.Context, cr *svcapitypes.Function, resp *svcsdk.GetFu
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.State_Pending):
 		cr.SetConditions(xpv1.Creating())
-	case string(svcapitypes.State_Failed), string(svcapitypes.State_Inactive):
+	case string(svcapitypes.State_Inactive):
+		if aws.StringValue(resp.Configuration.StateReasonCode) == string(svcapitypes.StateReasonCode_Idle) {
+			cr.SetConditions(xpv1.Available().WithMessage(ptr.Deref(resp.Configuration.StateReason, "")))
+		} else {
+			cr.SetConditions(xpv1.Unavailable().WithMessage(ptr.Deref(resp.Configuration.StateReason, "")))
+		}
+	case string(svcapitypes.State_Failed):
 		cr.SetConditions(xpv1.Unavailable())
 	}
 	return obs, nil
@@ -127,8 +148,8 @@ func preDelete(_ context.Context, cr *svcapitypes.Function, obj *svcsdk.DeleteFu
 	return false, nil
 }
 
-// nolint:gocyclo
-func isUpToDate(cr *svcapitypes.Function, obj *svcsdk.GetFunctionOutput) (bool, error) {
+//nolint:gocyclo
+func isUpToDate(_ context.Context, cr *svcapitypes.Function, obj *svcsdk.GetFunctionOutput) (bool, string, error) {
 
 	// Compare CODE
 	// GetFunctionOutput returns
@@ -140,29 +161,29 @@ func isUpToDate(cr *svcapitypes.Function, obj *svcsdk.GetFunctionOutput) (bool, 
 	// It is partially possible for code supplied via FunctionCode.ImageUri
 
 	if !isUpToDateCodeImage(cr, obj) {
-		return false, nil
+		return false, "", nil
 	}
 
 	// Compare CONFIGURATION
 	if aws.StringValue(cr.Spec.ForProvider.Description) != aws.StringValue(obj.Configuration.Description) {
-		return false, nil
+		return false, "", nil
 	}
 
 	if !isUpToDateEnvironment(cr, obj) {
-		return false, nil
+		return false, "", nil
 	}
 
 	// Connection settings for an Amazon EFS file system.
 	if !isUpToDateFileSystemConfigs(cr, obj) {
-		return false, nil
+		return false, "", nil
 	}
 
 	if aws.StringValue(cr.Spec.ForProvider.Handler) != aws.StringValue(obj.Configuration.Handler) {
-		return false, nil
+		return false, "", nil
 	}
 
 	if aws.StringValue(cr.Spec.ForProvider.KMSKeyARN) != aws.StringValue(obj.Configuration.KMSKeyArn) {
-		return false, nil
+		return false, "", nil
 	}
 
 	// The function's layers (https://docs.aws.amazon.com/lambda/latest/dg/configuration-layers.html).
@@ -173,32 +194,32 @@ func isUpToDate(cr *svcapitypes.Function, obj *svcsdk.GetFunctionOutput) (bool, 
 
 	// set default
 	if aws.Int64Value(cr.Spec.ForProvider.MemorySize) != aws.Int64Value(obj.Configuration.MemorySize) {
-		return false, nil
+		return false, "", nil
 	}
 
 	if aws.StringValue(cr.Spec.ForProvider.Role) != aws.StringValue(obj.Configuration.Role) {
-		return false, nil
+		return false, "", nil
 	}
 
 	if aws.StringValue(cr.Spec.ForProvider.Runtime) != aws.StringValue(obj.Configuration.Runtime) {
-		return false, nil
+		return false, "", nil
 	}
 
 	if aws.Int64Value(cr.Spec.ForProvider.Timeout) != aws.Int64Value(obj.Configuration.Timeout) {
-		return false, nil
+		return false, "", nil
 	}
 
 	// This should never be nil.  We set this in LateInit as aws will initialize a default value
 	if aws.StringValue(cr.Spec.ForProvider.TracingConfig.Mode) != aws.StringValue(obj.Configuration.TracingConfig.Mode) {
-		return false, nil
+		return false, "", nil
 	}
 
 	if !isUpToDateSecurityGroupIDs(cr, obj) {
-		return false, nil
+		return false, "", nil
 	}
 
-	addTags, removeTags := aws.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, obj.Tags)
-	return len(addTags) == 0 && len(removeTags) == 0, nil
+	addTags, removeTags := tagutils.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, obj.Tags)
+	return len(addTags) == 0 && len(removeTags) == 0, "", nil
 
 }
 
@@ -347,32 +368,27 @@ func (u *updater) isLastUpdateStatusSuccessful(ctx context.Context, cr *svcapity
 	}
 }
 
-// nolint:gocyclo
-func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.Function)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
-
+//nolint:gocyclo
+func (u *updater) update(ctx context.Context, cr *svcapitypes.Function) (managed.ExternalUpdate, error) {
 	// LastUpdateStatus must be Successful before running UpdateFunctionCode
 	if err := u.isLastUpdateStatusSuccessful(ctx, cr); err != nil {
-		return managed.ExternalUpdate{}, aws.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
 	// https://docs.aws.amazon.com/sdk-for-go/api/service/lambda/#Lambda.UpdateFunctionCode
 	updateFunctionCodeInput := GenerateUpdateFunctionCodeInput(cr)
 	if _, err := u.client.UpdateFunctionCodeWithContext(ctx, updateFunctionCodeInput); err != nil {
-		return managed.ExternalUpdate{}, aws.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
 	// LastUpdateStatus must be Successful before running UpdateFunctionConfiguration
 	if err := u.isLastUpdateStatusSuccessful(ctx, cr); err != nil {
-		return managed.ExternalUpdate{}, aws.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
 	updateFunctionConfigurationInput := GenerateUpdateFunctionConfigurationInput(cr)
 	if _, err := u.client.UpdateFunctionConfigurationWithContext(ctx, updateFunctionConfigurationInput); err != nil {
-		return managed.ExternalUpdate{}, aws.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
 	// Should store the ARN somewhere else?
@@ -380,7 +396,7 @@ func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.Exte
 		FunctionName: aws.String(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return managed.ExternalUpdate{}, aws.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
 	// Tags
@@ -388,17 +404,17 @@ func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.Exte
 		Resource: functionConfiguration.FunctionArn,
 	})
 	if err != nil {
-		return managed.ExternalUpdate{}, aws.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
-	addTags, removeTags := aws.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, tags.Tags)
+	addTags, removeTags := tagutils.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, tags.Tags)
 	// Remove old tags before adding new tags in case values change for keys
 	if len(removeTags) > 0 {
 		if _, err := u.client.UntagResourceWithContext(ctx, &svcsdk.UntagResourceInput{
 			Resource: functionConfiguration.FunctionArn,
 			TagKeys:  removeTags,
 		}); err != nil {
-			return managed.ExternalUpdate{}, aws.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 	}
 
@@ -407,7 +423,7 @@ func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.Exte
 			Resource: functionConfiguration.FunctionArn,
 			Tags:     addTags,
 		}); err != nil {
-			return managed.ExternalUpdate{}, aws.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 	}
 
@@ -443,7 +459,8 @@ func GenerateUpdateFunctionCodeInput(cr *svcapitypes.Function) *svcsdk.UpdateFun
 
 // GenerateUpdateFunctionConfigurationInput is similar to GenerateCreateFunctionConfigurationInput
 // Copied almost verbatim from the zz_conversions generated code
-// nolint:gocyclo
+//
+//nolint:gocyclo
 func GenerateUpdateFunctionConfigurationInput(cr *svcapitypes.Function) *svcsdk.UpdateFunctionConfigurationInput {
 	res := &svcsdk.UpdateFunctionConfigurationInput{}
 	res.SetFunctionName(cr.Name)
@@ -460,14 +477,12 @@ func GenerateUpdateFunctionConfigurationInput(cr *svcapitypes.Function) *svcsdk.
 	}
 	if cr.Spec.ForProvider.Environment != nil {
 		f4 := &svcsdk.Environment{}
-		if cr.Spec.ForProvider.Environment.Variables != nil {
-			f4f0 := map[string]*string{}
-			for f4f0key, f4f0valiter := range cr.Spec.ForProvider.Environment.Variables {
-				var f4f0val = *f4f0valiter
-				f4f0[f4f0key] = &f4f0val
-			}
-			f4.SetVariables(f4f0)
+		f4f0 := map[string]*string{}
+		for f4f0key, f4f0valiter := range cr.Spec.ForProvider.Environment.Variables {
+			var f4f0val = *f4f0valiter
+			f4f0[f4f0key] = &f4f0val
 		}
+		f4.SetVariables(f4f0)
 		res.SetEnvironment(f4)
 	}
 	if cr.Spec.ForProvider.FileSystemConfigs != nil {
@@ -542,22 +557,21 @@ func GenerateUpdateFunctionConfigurationInput(cr *svcapitypes.Function) *svcsdk.
 	}
 	if cr.Spec.ForProvider.CustomFunctionVPCConfigParameters != nil {
 		f19 := &svcsdk.VpcConfig{}
-		if cr.Spec.ForProvider.CustomFunctionVPCConfigParameters.SecurityGroupIDs != nil {
-			f19f0 := []*string{}
-			for _, f19f0iter := range cr.Spec.ForProvider.CustomFunctionVPCConfigParameters.SecurityGroupIDs {
-				var f19f0elem = *f19f0iter
-				f19f0 = append(f19f0, &f19f0elem)
-			}
-			f19.SetSecurityGroupIds(f19f0)
+
+		f19f0 := []*string{}
+		for _, f19f0iter := range cr.Spec.ForProvider.CustomFunctionVPCConfigParameters.SecurityGroupIDs {
+			var f19f0elem = *f19f0iter
+			f19f0 = append(f19f0, &f19f0elem)
 		}
-		if cr.Spec.ForProvider.CustomFunctionVPCConfigParameters.SubnetIDs != nil {
-			f19f1 := []*string{}
-			for _, f19f1iter := range cr.Spec.ForProvider.CustomFunctionVPCConfigParameters.SubnetIDs {
-				var f19f1elem = *f19f1iter
-				f19f1 = append(f19f1, &f19f1elem)
-			}
-			f19.SetSubnetIds(f19f1)
+		f19.SetSecurityGroupIds(f19f0)
+
+		f19f1 := []*string{}
+		for _, f19f1iter := range cr.Spec.ForProvider.CustomFunctionVPCConfigParameters.SubnetIDs {
+			var f19f1elem = *f19f1iter
+			f19f1 = append(f19f1, &f19f1elem)
 		}
+		f19.SetSubnetIds(f19f1)
+
 		res.SetVpcConfig(f19)
 	}
 	return res

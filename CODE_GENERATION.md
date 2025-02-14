@@ -15,6 +15,14 @@ behavior of the AWS API.
 
 This guide shows how to get a new resource support up and running step by step.
 
+## Git Submodules
+
+First of all, you need to sync and update the submodules. This operation is required to `make` tasks work properly
+
+```console
+make submodules
+```
+
 ## Code generation
 
 AWS groups their resources under _services_ and the code generator works on
@@ -92,6 +100,38 @@ files that help CRD structs satisfy the Go interfaces we use in crossplane-runti
 There are a few things we need to implement manually since there is no support for
 their generation yet.
 
+### Setup Api Group
+
+If a new group of api's has been introduced, we will need write a `Setup` function to satisfy
+the interface which we will need to register the contollers. For example, if you added `globalaccelerator`
+api group, we will need a file in `pkg/controller/globalaccelerator/setup.go with following contents:
+
+```golang
+package globalaccelerator
+
+import (
+	ctrl "sigs.k8s.io/controller-runtime"
+	"github.com/crossplane/crossplane-runtime/pkg/controller"
+
+	"github.com/crossplane-contrib/provider-aws/pkg/controller/globalaccelerator/accelerator"
+	"github.com/crossplane-contrib/provider-aws/pkg/controller/globalaccelerator/listener"
+	"github.com/crossplane-contrib/provider-aws/pkg/controller/globalaccelerator/endpointgroup"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/setup"
+)
+
+// Setup athena controllers.
+func Setup(mgr ctrl.Manager, o controller.Options) error {
+	return setup.SetupControllers(
+		mgr, o,
+		accelerator.SetupAccelerator,
+		listener.SetupListener,
+		endpointgroup.SetupEndpointGroup,
+	)
+}
+```
+
+Now you need to make sure this function is called in setup phase [here](https://github.com/crossplane-contrib/provider-aws/blob/2e52b0a8b9ca9efa132e82549b9a48c13345dd27/pkg/controller/aws.go#L81).
+
 ### Setup Controller
 
 The generated controller needs to be registered with the main controller manager
@@ -110,6 +150,7 @@ func SetupStage(mgr ctrl.Manager, o controller.Options) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Stage{}).
 		Complete(managed.NewReconciler(mgr,
 			resource.ManagedKind(svcapitypes.StageGroupVersionKind),
@@ -120,8 +161,6 @@ func SetupStage(mgr ctrl.Manager, o controller.Options) error {
 			managed.WithConnectionPublishers(cps...)))
 }
 ```
-
-Now you need to make sure this function is called in setup phase [here](https://github.com/crossplane/provider-aws/blob/483058c/pkg/controller/aws.go#L84).
 
 #### Register CRD
 
@@ -201,6 +240,9 @@ external name of the referenced object, you can use the following comment marker
 You can add the package prefix for `type` and `extractor` configurations if they
 live in a different Go package.
 
+Be aware that once you customize the extractor, you will need to implement it yourself.
+An example can be found [here](https://github.com/crossplane-contrib/provider-aws/blob/72a6950/apis/lambda/v1beta1/referencers.go#L35).
+
 ### External Name
 
 Crossplane has the notion of external name that we put under annotations. It corresponds
@@ -230,6 +272,7 @@ func SetupStage(mgr ctrl.Manager, o controller.Options) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Stage{}).
 		Complete(managed.NewReconciler(mgr,
 			resource.ManagedKind(svcapitypes.StageGroupVersionKind),
@@ -241,22 +284,22 @@ func SetupStage(mgr ctrl.Manager, o controller.Options) error {
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Stage, obj *svcsdk.DescribeStageInput) error {
-	obj.StageName = aws.String(meta.GetExternalName(cr))
+	obj.StageName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.Stage, obj *svcsdk.CreateStageInput) error {
-	obj.StageName = aws.String(meta.GetExternalName(cr))
+	obj.StageName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
 func preUpdate(_ context.Context, cr *svcapitypes.Stage, obj *svcsdk.UpdateStageInput) error {
-	obj.StageName = aws.String(meta.GetExternalName(cr))
+	obj.StageName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Stage, obj *svcsdk.DeleteStageInput) error {
-	obj.StageName = aws.String(meta.GetExternalName(cr))
+	obj.StageName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 ```
@@ -264,8 +307,32 @@ func preDelete(_ context.Context, cr *svcapitypes.Stage, obj *svcsdk.DeleteStage
 If the external-name is decided by AWS after the creation (like in most EC2
 resources such as `vpc-id` of `VPC`), then you need to inject `postCreate` to
 set the crossplane resource external-name to the unique identifier of the
-resource, for eg see [`apigatewayv2`](https://github.com/crossplane/provider-aws/blob/master/pkg/controller/apigatewayv2/api/setup.go#L77)
+resource, for eg see [`apigatewayv2`](https://github.com/crossplane/provider-aws/blob/72a6950/pkg/controller/apigatewayv2/api/setup.go#L85)
 You can discover what you can inject by inspecting `zz_controller.go` file.
+
+### Errors On Observe
+
+In some situations aws api returns an error in cases where the resource does not exist.
+It will be noticeable when the resource never gets created but you see an error from the api
+which describes the object. You should see `return ok && awsErr.Code() == "ResourceNotFoundException"` in
+the `IsNotFound`-function of `zz_conversion.go`.
+
+To tell ack which error indicates that the resource is not present, add a similar config to `generator-config.yaml`:
+
+```
+resources:
+  Table:
+    fields:
+      PointInTimeRecoveryEnabled:
+        from:
+          operation: UpdateContinuousBackups
+          path: PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled
+    exceptions:
+      errors:
+        404:
+          code: ResourceNotFoundException
+```
+
 
 ### Readiness Check
 
@@ -277,7 +344,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Backup, resp *svcsdk.Describ
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	switch aws.StringValue(resp.BackupDescription.BackupDetails.BackupStatus) {
+	switch pointer.StringValue(resp.BackupDescription.BackupDetails.BackupStatus) {
 	case string(svcapitypes.BackupStatus_SDK_AVAILABLE):
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.BackupStatus_SDK_CREATING):

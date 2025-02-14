@@ -52,6 +52,8 @@ type DBParameterGroupObservation struct {
 	DBParameterGroupFamily *string `json:"dbParameterGroupFamily,omitempty"`
 	// The name of the DB parameter group.
 	DBParameterGroupName *string `json:"dbParameterGroupName,omitempty"`
+
+	CustomDBParameterGroupObservation `json:",inline"`
 }
 
 // DBParameterGroupStatus defines the observed state of DBParameterGroup.
@@ -66,6 +68,7 @@ type DBParameterGroupStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

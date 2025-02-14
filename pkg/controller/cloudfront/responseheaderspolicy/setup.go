@@ -20,8 +20,6 @@ import (
 	"context"
 
 	svcsdk "github.com/aws/aws-sdk-go/service/cloudfront"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -29,12 +27,14 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cloudfront/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	"github.com/crossplane-contrib/provider-aws/pkg/controller/cloudfront"
+	cloudfront "github.com/crossplane-contrib/provider-aws/pkg/controller/cloudfront/utils"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupResponseHeadersPolicy adds a controller that reconciles ResponseHeadersPolicy.
@@ -46,60 +46,72 @@ func SetupResponseHeadersPolicy(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{
+			kube: mgr.GetClient(),
+			opts: []option{
+				func(e *external) {
+					e.preCreate = preCreate
+					e.postCreate = postCreate
+					e.lateInitialize = lateInitialize
+					e.preObserve = preObserve
+					e.postObserve = postObserve
+					e.isUpToDate = isUpToDate
+					e.preUpdate = preUpdate
+					e.postUpdate = postUpdate
+					d := &deleter{external: e}
+					e.preDelete = d.preDelete
+				},
+			},
+		}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.ResponseHeadersPolicyGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.ResponseHeadersPolicy{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.ResponseHeadersPolicyGroupVersionKind),
-			managed.WithExternalConnecter(&connector{
-				kube: mgr.GetClient(),
-				opts: []option{
-					func(e *external) {
-						e.preCreate = preCreate
-						e.postCreate = postCreate
-						e.lateInitialize = lateInitialize
-						e.preObserve = preObserve
-						e.postObserve = postObserve
-						e.isUpToDate = isUpToDate
-						e.preUpdate = preUpdate
-						e.postUpdate = postUpdate
-						d := &deleter{external: e}
-						e.preDelete = d.preDelete
-					},
-				},
-			}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.ResponseHeadersPolicy, crhpi *svcsdk.CreateResponseHeadersPolicyInput) error {
-	crhpi.ResponseHeadersPolicyConfig.Name = awsclients.String(cr.Name)
+	crhpi.ResponseHeadersPolicyConfig.Name = pointer.ToOrNilIfZeroValue(cr.Name)
 
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CustomHeadersConfig != nil {
 		crhpi.ResponseHeadersPolicyConfig.CustomHeadersConfig.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CustomHeadersConfig.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CustomHeadersConfig.Items))
 	}
 
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig != nil && cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowHeaders != nil {
 		crhpi.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowHeaders.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowHeaders.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowHeaders.Items))
 	}
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig != nil && cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowMethods != nil {
 		crhpi.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowMethods.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowMethods.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowMethods.Items))
 	}
 
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig != nil && cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowOrigins != nil {
 		crhpi.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowOrigins.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowOrigins.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowOrigins.Items))
 	}
 
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig != nil && cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlExposeHeaders != nil {
 		crhpi.ResponseHeadersPolicyConfig.CorsConfig.AccessControlExposeHeaders.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlExposeHeaders.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlExposeHeaders.Items))
 	}
 
 	return nil
@@ -112,12 +124,12 @@ func postCreate(_ context.Context, cr *svcapitypes.ResponseHeadersPolicy, crhpo 
 		return managed.ExternalCreation{}, err
 	}
 
-	meta.SetExternalName(cr, awsclients.StringValue(crhpo.ResponseHeadersPolicy.Id))
+	meta.SetExternalName(cr, pointer.StringValue(crhpo.ResponseHeadersPolicy.Id))
 	return ec, nil
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.ResponseHeadersPolicy, grhpi *svcsdk.GetResponseHeadersPolicyInput) error {
-	grhpi.Id = awsclients.String(meta.GetExternalName(cr))
+	grhpi.Id = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -132,31 +144,31 @@ func postObserve(_ context.Context, cr *svcapitypes.ResponseHeadersPolicy, grhpo
 }
 
 func preUpdate(_ context.Context, cr *svcapitypes.ResponseHeadersPolicy, urhpi *svcsdk.UpdateResponseHeadersPolicyInput) error {
-	urhpi.Id = awsclients.String(meta.GetExternalName(cr))
-	urhpi.SetIfMatch(awsclients.StringValue(cr.Status.AtProvider.ETag))
+	urhpi.Id = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
+	urhpi.SetIfMatch(pointer.StringValue(cr.Status.AtProvider.ETag))
 
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CustomHeadersConfig != nil {
 		urhpi.ResponseHeadersPolicyConfig.CustomHeadersConfig.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CustomHeadersConfig.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CustomHeadersConfig.Items))
 	}
 
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig != nil && cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowHeaders != nil {
 		urhpi.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowHeaders.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowHeaders.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowHeaders.Items))
 	}
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig != nil && cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowMethods != nil {
 		urhpi.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowMethods.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowMethods.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowMethods.Items))
 	}
 
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig != nil && cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowOrigins != nil {
 		urhpi.ResponseHeadersPolicyConfig.CorsConfig.AccessControlAllowOrigins.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowOrigins.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlAllowOrigins.Items))
 	}
 
 	if cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig != nil && cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlExposeHeaders != nil {
 		urhpi.ResponseHeadersPolicyConfig.CorsConfig.AccessControlExposeHeaders.Quantity =
-			awsclients.Int64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlExposeHeaders.Items), 0)
+			pointer.ToIntAsInt64(len(cr.Spec.ForProvider.ResponseHeadersPolicyConfig.CORSConfig.AccessControlExposeHeaders.Items))
 	}
 	return nil
 }
@@ -176,8 +188,8 @@ type deleter struct {
 }
 
 func (d *deleter) preDelete(_ context.Context, cr *svcapitypes.ResponseHeadersPolicy, drhpi *svcsdk.DeleteResponseHeadersPolicyInput) (bool, error) {
-	drhpi.Id = awsclients.String(meta.GetExternalName(cr))
-	drhpi.SetIfMatch(awsclients.StringValue(cr.Status.AtProvider.ETag))
+	drhpi.Id = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
+	drhpi.SetIfMatch(pointer.StringValue(cr.Status.AtProvider.ETag))
 	return false, nil
 }
 
@@ -189,7 +201,7 @@ func lateInitialize(in *svcapitypes.ResponseHeadersPolicyParameters, grhpo *svcs
 	return err
 }
 
-func isUpToDate(rhp *svcapitypes.ResponseHeadersPolicy, grhpo *svcsdk.GetResponseHeadersPolicyOutput) (bool, error) {
+func isUpToDate(_ context.Context, rhp *svcapitypes.ResponseHeadersPolicy, grhpo *svcsdk.GetResponseHeadersPolicyOutput) (bool, string, error) {
 	return cloudfront.IsUpToDate(grhpo.ResponseHeadersPolicy, rhp.Spec.ForProvider.ResponseHeadersPolicyConfig,
 		mappingOptions...)
 }

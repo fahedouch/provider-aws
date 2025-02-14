@@ -17,9 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // +kubebuilder:object:root=true
@@ -89,6 +88,10 @@ type HostedZoneParameters struct {
 	// +immutable
 	// +optional
 	VPC *VPC `json:"vpc,omitempty"`
+
+	// Tags for this hosted zone.
+	// +optional
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // Config represents the configuration of a Hosted Zone.

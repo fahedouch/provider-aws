@@ -5,18 +5,18 @@ import (
 
 	svcsdk "github.com/aws/aws-sdk-go/service/ecr"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/ecr/ecriface"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/ecr/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupLifecyclePolicy adds a controller that reconciles LifecyclePolicy.
@@ -33,16 +33,29 @@ func SetupLifecyclePolicy(mgr ctrl.Manager, o controller.Options) error {
 			e.update = u.update
 		},
 	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.LifecyclePolicyGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.LifecyclePolicy{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.LifecyclePolicyGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name)))))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.LifecyclePolicy, obj *svcsdk.GetLifecyclePolicyInput) error {
@@ -68,25 +81,19 @@ func preDelete(_ context.Context, cr *svcapitypes.LifecyclePolicy, obj *svcsdk.D
 	return false, nil
 }
 
-func isUpToDate(cr *svcapitypes.LifecyclePolicy, obj *svcsdk.GetLifecyclePolicyOutput) (bool, error) {
-	if diff := cmp.Diff(cr.Spec.ForProvider.LifecyclePolicyText, obj.LifecyclePolicyText); diff != "" {
-		return false, nil
-	}
-	return true, nil
+func isUpToDate(_ context.Context, cr *svcapitypes.LifecyclePolicy, obj *svcsdk.GetLifecyclePolicyOutput) (bool, string, error) {
+	diff := cmp.Diff(cr.Spec.ForProvider.LifecyclePolicyText, obj.LifecyclePolicyText)
+	return diff == "", diff, nil
 }
 
 type updateClient struct {
 	client svcsdkapi.ECRAPI
 }
 
-func (e *updateClient) update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.LifecyclePolicy)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *updateClient) update(ctx context.Context, cr *svcapitypes.LifecyclePolicy) (managed.ExternalUpdate, error) {
 	input := GeneratePutLifecyclePolicyInput(cr)
 	input.RepositoryName = cr.Spec.ForProvider.RepositoryName
 
 	_, err := e.client.PutLifecyclePolicyWithContext(ctx, input)
-	return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+	return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 }

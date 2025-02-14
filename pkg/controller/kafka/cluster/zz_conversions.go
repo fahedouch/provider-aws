@@ -44,10 +44,114 @@ func GenerateDescribeClusterInput(cr *svcapitypes.Cluster) *svcsdk.DescribeClust
 func GenerateCluster(resp *svcsdk.DescribeClusterOutput) *svcapitypes.Cluster {
 	cr := &svcapitypes.Cluster{}
 
+	if resp.ClusterInfo.BrokerNodeGroupInfo != nil {
+		f1 := &svcapitypes.BrokerNodeGroupInfo{}
+		if resp.ClusterInfo.BrokerNodeGroupInfo.BrokerAZDistribution != nil {
+			f1.BrokerAZDistribution = resp.ClusterInfo.BrokerNodeGroupInfo.BrokerAZDistribution
+		}
+		if resp.ClusterInfo.BrokerNodeGroupInfo.ClientSubnets != nil {
+			f1f1 := []*string{}
+			for _, f1f1iter := range resp.ClusterInfo.BrokerNodeGroupInfo.ClientSubnets {
+				var f1f1elem string
+				f1f1elem = *f1f1iter
+				f1f1 = append(f1f1, &f1f1elem)
+			}
+			f1.ClientSubnets = f1f1
+		}
+		if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo != nil {
+			f1f2 := &svcapitypes.ConnectivityInfo{}
+			if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.PublicAccess != nil {
+				f1f2f0 := &svcapitypes.PublicAccess{}
+				if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.PublicAccess.Type != nil {
+					f1f2f0.Type = resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.PublicAccess.Type
+				}
+				f1f2.PublicAccess = f1f2f0
+			}
+			if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity != nil {
+				f1f2f1 := &svcapitypes.VPCConnectivity{}
+				if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication != nil {
+					f1f2f1f0 := &svcapitypes.VPCConnectivityClientAuthentication{}
+					if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Sasl != nil {
+						f1f2f1f0f0 := &svcapitypes.VPCConnectivitySASL{}
+						if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Sasl.Iam != nil {
+							f1f2f1f0f0f0 := &svcapitypes.VPCConnectivityIAM{}
+							if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Sasl.Iam.Enabled != nil {
+								f1f2f1f0f0f0.Enabled = resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Sasl.Iam.Enabled
+							}
+							f1f2f1f0f0.IAM = f1f2f1f0f0f0
+						}
+						if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Sasl.Scram != nil {
+							f1f2f1f0f0f1 := &svcapitypes.VPCConnectivitySCRAM{}
+							if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Sasl.Scram.Enabled != nil {
+								f1f2f1f0f0f1.Enabled = resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Sasl.Scram.Enabled
+							}
+							f1f2f1f0f0.SCRAM = f1f2f1f0f0f1
+						}
+						f1f2f1f0.SASL = f1f2f1f0f0
+					}
+					if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Tls != nil {
+						f1f2f1f0f1 := &svcapitypes.VPCConnectivityTLS{}
+						if resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Tls.Enabled != nil {
+							f1f2f1f0f1.Enabled = resp.ClusterInfo.BrokerNodeGroupInfo.ConnectivityInfo.VpcConnectivity.ClientAuthentication.Tls.Enabled
+						}
+						f1f2f1f0.TLS = f1f2f1f0f1
+					}
+					f1f2f1.ClientAuthentication = f1f2f1f0
+				}
+				f1f2.VPCConnectivity = f1f2f1
+			}
+			f1.ConnectivityInfo = f1f2
+		}
+		if resp.ClusterInfo.BrokerNodeGroupInfo.InstanceType != nil {
+			f1.InstanceType = resp.ClusterInfo.BrokerNodeGroupInfo.InstanceType
+		}
+		if resp.ClusterInfo.BrokerNodeGroupInfo.SecurityGroups != nil {
+			f1f4 := []*string{}
+			for _, f1f4iter := range resp.ClusterInfo.BrokerNodeGroupInfo.SecurityGroups {
+				var f1f4elem string
+				f1f4elem = *f1f4iter
+				f1f4 = append(f1f4, &f1f4elem)
+			}
+			f1.SecurityGroups = f1f4
+		}
+		if resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo != nil {
+			f1f5 := &svcapitypes.StorageInfo{}
+			if resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo != nil {
+				f1f5f0 := &svcapitypes.EBSStorageInfo{}
+				if resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.ProvisionedThroughput != nil {
+					f1f5f0f0 := &svcapitypes.ProvisionedThroughput{}
+					if resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.ProvisionedThroughput.Enabled != nil {
+						f1f5f0f0.Enabled = resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.ProvisionedThroughput.Enabled
+					}
+					if resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.ProvisionedThroughput.VolumeThroughput != nil {
+						f1f5f0f0.VolumeThroughput = resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.ProvisionedThroughput.VolumeThroughput
+					}
+					f1f5f0.ProvisionedThroughput = f1f5f0f0
+				}
+				if resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.VolumeSize != nil {
+					f1f5f0.VolumeSize = resp.ClusterInfo.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.VolumeSize
+				}
+				f1f5.EBSStorageInfo = f1f5f0
+			}
+			f1.StorageInfo = f1f5
+		}
+		if resp.ClusterInfo.BrokerNodeGroupInfo.ZoneIds != nil {
+			f1f6 := []*string{}
+			for _, f1f6iter := range resp.ClusterInfo.BrokerNodeGroupInfo.ZoneIds {
+				var f1f6elem string
+				f1f6elem = *f1f6iter
+				f1f6 = append(f1f6, &f1f6elem)
+			}
+			f1.ZoneIDs = f1f6
+		}
+		cr.Status.AtProvider.BrokerNodeGroupInfo = f1
+	} else {
+		cr.Status.AtProvider.BrokerNodeGroupInfo = nil
+	}
 	if resp.ClusterInfo.ClientAuthentication != nil {
 		f2 := &svcapitypes.ClientAuthentication{}
 		if resp.ClusterInfo.ClientAuthentication.Sasl != nil {
-			f2f0 := &svcapitypes.Sasl{}
+			f2f0 := &svcapitypes.SASL{}
 			if resp.ClusterInfo.ClientAuthentication.Sasl.Iam != nil {
 				f2f0f0 := &svcapitypes.IAM{}
 				if resp.ClusterInfo.ClientAuthentication.Sasl.Iam.Enabled != nil {
@@ -56,13 +160,13 @@ func GenerateCluster(resp *svcsdk.DescribeClusterOutput) *svcapitypes.Cluster {
 				f2f0.IAM = f2f0f0
 			}
 			if resp.ClusterInfo.ClientAuthentication.Sasl.Scram != nil {
-				f2f0f1 := &svcapitypes.Scram{}
+				f2f0f1 := &svcapitypes.SCRAM{}
 				if resp.ClusterInfo.ClientAuthentication.Sasl.Scram.Enabled != nil {
 					f2f0f1.Enabled = resp.ClusterInfo.ClientAuthentication.Sasl.Scram.Enabled
 				}
-				f2f0.Scram = f2f0f1
+				f2f0.SCRAM = f2f0f1
 			}
-			f2.Sasl = f2f0
+			f2.SASL = f2f0
 		}
 		if resp.ClusterInfo.ClientAuthentication.Tls != nil {
 			f2f1 := &svcapitypes.TLS{}
@@ -206,14 +310,19 @@ func GenerateCluster(resp *svcsdk.DescribeClusterOutput) *svcapitypes.Cluster {
 	} else {
 		cr.Status.AtProvider.State = nil
 	}
+	if resp.ClusterInfo.StorageMode != nil {
+		cr.Spec.ForProvider.StorageMode = resp.ClusterInfo.StorageMode
+	} else {
+		cr.Spec.ForProvider.StorageMode = nil
+	}
 	if resp.ClusterInfo.Tags != nil {
-		f15 := map[string]*string{}
-		for f15key, f15valiter := range resp.ClusterInfo.Tags {
-			var f15val string
-			f15val = *f15valiter
-			f15[f15key] = &f15val
+		f16 := map[string]*string{}
+		for f16key, f16valiter := range resp.ClusterInfo.Tags {
+			var f16val string
+			f16val = *f16valiter
+			f16[f16key] = &f16val
 		}
-		cr.Spec.ForProvider.Tags = f15
+		cr.Spec.ForProvider.Tags = f16
 	} else {
 		cr.Spec.ForProvider.Tags = nil
 	}
@@ -227,19 +336,19 @@ func GenerateCreateClusterInput(cr *svcapitypes.Cluster) *svcsdk.CreateClusterIn
 
 	if cr.Spec.ForProvider.ClientAuthentication != nil {
 		f0 := &svcsdk.ClientAuthentication{}
-		if cr.Spec.ForProvider.ClientAuthentication.Sasl != nil {
+		if cr.Spec.ForProvider.ClientAuthentication.SASL != nil {
 			f0f0 := &svcsdk.Sasl{}
-			if cr.Spec.ForProvider.ClientAuthentication.Sasl.IAM != nil {
+			if cr.Spec.ForProvider.ClientAuthentication.SASL.IAM != nil {
 				f0f0f0 := &svcsdk.Iam{}
-				if cr.Spec.ForProvider.ClientAuthentication.Sasl.IAM.Enabled != nil {
-					f0f0f0.SetEnabled(*cr.Spec.ForProvider.ClientAuthentication.Sasl.IAM.Enabled)
+				if cr.Spec.ForProvider.ClientAuthentication.SASL.IAM.Enabled != nil {
+					f0f0f0.SetEnabled(*cr.Spec.ForProvider.ClientAuthentication.SASL.IAM.Enabled)
 				}
 				f0f0.SetIam(f0f0f0)
 			}
-			if cr.Spec.ForProvider.ClientAuthentication.Sasl.Scram != nil {
+			if cr.Spec.ForProvider.ClientAuthentication.SASL.SCRAM != nil {
 				f0f0f1 := &svcsdk.Scram{}
-				if cr.Spec.ForProvider.ClientAuthentication.Sasl.Scram.Enabled != nil {
-					f0f0f1.SetEnabled(*cr.Spec.ForProvider.ClientAuthentication.Sasl.Scram.Enabled)
+				if cr.Spec.ForProvider.ClientAuthentication.SASL.SCRAM.Enabled != nil {
+					f0f0f1.SetEnabled(*cr.Spec.ForProvider.ClientAuthentication.SASL.SCRAM.Enabled)
 				}
 				f0f0.SetScram(f0f0f1)
 			}
@@ -366,14 +475,17 @@ func GenerateCreateClusterInput(cr *svcapitypes.Cluster) *svcsdk.CreateClusterIn
 		}
 		res.SetOpenMonitoring(f7)
 	}
+	if cr.Spec.ForProvider.StorageMode != nil {
+		res.SetStorageMode(*cr.Spec.ForProvider.StorageMode)
+	}
 	if cr.Spec.ForProvider.Tags != nil {
-		f8 := map[string]*string{}
-		for f8key, f8valiter := range cr.Spec.ForProvider.Tags {
-			var f8val string
-			f8val = *f8valiter
-			f8[f8key] = &f8val
+		f9 := map[string]*string{}
+		for f9key, f9valiter := range cr.Spec.ForProvider.Tags {
+			var f9val string
+			f9val = *f9valiter
+			f9[f9key] = &f9val
 		}
-		res.SetTags(f8)
+		res.SetTags(f9)
 	}
 
 	return res

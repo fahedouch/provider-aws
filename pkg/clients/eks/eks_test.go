@@ -20,15 +20,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/smithy-go/document"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
-	"github.com/google/go-cmp/cmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
+	"github.com/aws/smithy-go/document"
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/eks/v1beta1"
 )
@@ -354,6 +353,8 @@ func TestGenerateUpdateClusterConfigInputForVPC(t *testing.T) {
 						EndpointPrivateAccess: &trueVal,
 						EndpointPublicAccess:  &trueVal,
 						PublicAccessCidrs:     []string{"0.0.0.0/0"},
+						SubnetIDs:             []string{"subnet-1234567890abcdefg"},
+						SecurityGroupIDs:      []string{"sg-1234567890abcdefg"},
 					},
 					RoleArn: roleArn,
 					Tags:    map[string]string{"key": "val"},
@@ -366,6 +367,8 @@ func TestGenerateUpdateClusterConfigInputForVPC(t *testing.T) {
 					EndpointPrivateAccess: &trueVal,
 					EndpointPublicAccess:  &trueVal,
 					PublicAccessCidrs:     []string{"0.0.0.0/0"},
+					SubnetIds:             []string{"subnet-1234567890abcdefg"},
+					SecurityGroupIds:      []string{"sg-1234567890abcdefg"},
 				},
 			},
 		},
@@ -374,6 +377,70 @@ func TestGenerateUpdateClusterConfigInputForVPC(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			got := GenerateUpdateClusterConfigInputForVPC(tc.args.name, tc.args.p)
+			if diff := cmp.Diff(tc.want, got, cmpopts.IgnoreTypes(document.NoSerde{})); diff != "" {
+				t.Errorf("r: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestGenerateUpdateClusterConfigInputForAccessConfig(t *testing.T) {
+	type args struct {
+		name string
+		p    *v1beta1.ClusterParameters
+	}
+
+	cases := map[string]struct {
+		args args
+		want *eks.UpdateClusterConfigInput
+	}{
+		"AllFields": {
+			args: args{
+				name: clusterName,
+				p: &v1beta1.ClusterParameters{
+					EncryptionConfig: []v1beta1.EncryptionConfig{
+						{
+							Provider: v1beta1.Provider{
+								KeyArn: keyArn,
+							},
+							Resources: []string{"secrets"},
+						},
+					},
+					Logging: &v1beta1.Logging{
+						ClusterLogging: []v1beta1.LogSetup{
+							{
+								Enabled: &falseVal,
+								Types: []v1beta1.LogType{
+									v1beta1.LogTypeAPI,
+								},
+							},
+						},
+					},
+					ResourcesVpcConfig: v1beta1.VpcConfigRequest{
+						EndpointPrivateAccess: &trueVal,
+						EndpointPublicAccess:  &trueVal,
+						PublicAccessCidrs:     []string{"0.0.0.0/0"},
+					},
+					RoleArn: roleArn,
+					Tags:    map[string]string{"key": "val"},
+					Version: &version,
+					AccessConfig: &v1beta1.AccessConfig{
+						AuthenticationMode: ptr.To(v1beta1.AuthenticationModeApiAndConfigMap),
+					},
+				},
+			},
+			want: &eks.UpdateClusterConfigInput{
+				Name: &clusterName,
+				AccessConfig: &ekstypes.UpdateAccessConfigRequest{
+					AuthenticationMode: ekstypes.AuthenticationModeApiAndConfigMap,
+				},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := GenerateUpdateClusterConfigInputForAccessConfig(tc.args.name, tc.args.p)
 			if diff := cmp.Diff(tc.want, got, cmpopts.IgnoreTypes(document.NoSerde{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
@@ -477,6 +544,8 @@ func TestGenerateObservation(t *testing.T) {
 }
 
 func TestLateInitialize(t *testing.T) {
+	ServiceIpv4Cidr := "172.20.0.0/16"
+	Ipv4Family := "ipv4"
 	cases := map[string]struct {
 		parameters *v1beta1.ClusterParameters
 		cluster    *ekstypes.Cluster
@@ -519,6 +588,10 @@ func TestLateInitialize(t *testing.T) {
 					SecurityGroupIds:      []string{"cool-sg-1"},
 					SubnetIds:             []string{"cool-subnet"},
 				},
+				KubernetesNetworkConfig: &ekstypes.KubernetesNetworkConfigResponse{
+					IpFamily:        ekstypes.IpFamily(Ipv4Family),
+					ServiceIpv4Cidr: &ServiceIpv4Cidr,
+				},
 				RoleArn: &roleArn,
 				Tags:    map[string]string{"key": "val"},
 				Version: &version,
@@ -548,6 +621,10 @@ func TestLateInitialize(t *testing.T) {
 					PublicAccessCidrs:     []string{"0.0.0.0/0"},
 					SecurityGroupIDs:      []string{"cool-sg-1"},
 					SubnetIDs:             []string{"cool-subnet"},
+				},
+				KubernetesNetworkConfig: &v1beta1.KubernetesNetworkConfigRequest{
+					ServiceIpv4Cidr: ServiceIpv4Cidr,
+					IPFamily:        v1beta1.IPFamily(Ipv4Family),
 				},
 				RoleArn: roleArn,
 				Tags:    map[string]string{"key": "val"},

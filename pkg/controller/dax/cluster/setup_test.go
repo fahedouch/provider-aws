@@ -22,19 +22,18 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/dax"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
-
-	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/dax/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	"github.com/crossplane-contrib/provider-aws/pkg/clients/dax/fake"
-
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/dax/v1alpha1"
+	"github.com/crossplane-contrib/provider-aws/pkg/clients/dax/fake"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -135,7 +134,7 @@ func withName(value string) daxModifier {
 
 func withStatusName(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Status.AtProvider.ClusterName = awsclient.String(value)
+		o.Status.AtProvider.ClusterName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
@@ -147,61 +146,61 @@ func withSpec(value svcapitypes.ClusterParameters) daxModifier {
 
 func withDescription(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.Description = awsclient.String(value)
+		o.Spec.ForProvider.Description = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withParameterGroupName(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.ParameterGroupName = awsclient.String(value)
+		o.Spec.ForProvider.ParameterGroupName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withSubnetGroupName(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.SubnetGroupName = awsclient.String(value)
+		o.Spec.ForProvider.SubnetGroupName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withIAMRoleARN(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.IAMRoleARN = awsclient.String(value)
+		o.Spec.ForProvider.IAMRoleARN = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withSecurityGroupIDs(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.SecurityGroupIDs = append(o.Spec.ForProvider.SecurityGroupIDs, awsclient.String(value))
+		o.Spec.ForProvider.SecurityGroupIDs = append(o.Spec.ForProvider.SecurityGroupIDs, pointer.ToOrNilIfZeroValue(value))
 	}
 }
 
 func withAvailabilityZones(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.AvailabilityZones = append(o.Spec.ForProvider.AvailabilityZones, awsclient.String(value))
+		o.Spec.ForProvider.AvailabilityZones = append(o.Spec.ForProvider.AvailabilityZones, pointer.ToOrNilIfZeroValue(value))
 	}
 }
 
 func withPreferredMaintenanceWindow(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.PreferredMaintenanceWindow = awsclient.String(value)
+		o.Spec.ForProvider.PreferredMaintenanceWindow = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withClusterEndpointEncryptionType(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.ClusterEndpointEncryptionType = awsclient.String(value)
+		o.Spec.ForProvider.ClusterEndpointEncryptionType = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withNodeType(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.NodeType = awsclient.String(value)
+		o.Spec.ForProvider.NodeType = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withNotificationTopicARN(value string) daxModifier {
 	return func(o *svcapitypes.Cluster) {
-		o.Spec.ForProvider.NotificationTopicARN = awsclient.String(value)
+		o.Spec.ForProvider.NotificationTopicARN = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
@@ -219,53 +218,53 @@ func withConditions(value ...xpv1.Condition) daxModifier {
 
 func baseCluster() *dax.Cluster {
 	return &dax.Cluster{
-		ActiveNodes: awsclient.Int64(testActiveNodes),
-		ClusterArn:  awsclient.String(testClusterARN),
+		ActiveNodes: pointer.ToIntAsInt64(testActiveNodes),
+		ClusterArn:  pointer.ToOrNilIfZeroValue(testClusterARN),
 		ClusterDiscoveryEndpoint: &dax.Endpoint{
-			Address: awsclient.String(testEndpointAddress),
-			Port:    awsclient.Int64(testEndpointPort),
-			URL:     awsclient.String(testEndpointURL),
+			Address: pointer.ToOrNilIfZeroValue(testEndpointAddress),
+			Port:    pointer.ToIntAsInt64(testEndpointPort),
+			URL:     pointer.ToOrNilIfZeroValue(testEndpointURL),
 		},
-		ClusterEndpointEncryptionType: awsclient.String(testClusterEndpointEncryptionType),
-		ClusterName:                   awsclient.String(testClusterName),
-		Description:                   awsclient.String(testDescription),
-		IamRoleArn:                    awsclient.String(testIamRoleARN),
-		NodeIdsToRemove:               []*string{awsclient.String(testNodeIDToRemove), awsclient.String(testOtherNodeIDToRemove)},
-		NodeType:                      awsclient.String(testNodeType),
+		ClusterEndpointEncryptionType: pointer.ToOrNilIfZeroValue(testClusterEndpointEncryptionType),
+		ClusterName:                   pointer.ToOrNilIfZeroValue(testClusterName),
+		Description:                   pointer.ToOrNilIfZeroValue(testDescription),
+		IamRoleArn:                    pointer.ToOrNilIfZeroValue(testIamRoleARN),
+		NodeIdsToRemove:               []*string{pointer.ToOrNilIfZeroValue(testNodeIDToRemove), pointer.ToOrNilIfZeroValue(testOtherNodeIDToRemove)},
+		NodeType:                      pointer.ToOrNilIfZeroValue(testNodeType),
 		Nodes: []*dax.Node{
 			{
-				AvailabilityZone:     awsclient.String(testAvailabilityZone),
-				NodeId:               awsclient.String(testNodeID),
-				NodeStatus:           awsclient.String(testNodeStatus),
-				ParameterGroupStatus: awsclient.String(testParameterGroupStatus),
+				AvailabilityZone:     pointer.ToOrNilIfZeroValue(testAvailabilityZone),
+				NodeId:               pointer.ToOrNilIfZeroValue(testNodeID),
+				NodeStatus:           pointer.ToOrNilIfZeroValue(testNodeStatus),
+				ParameterGroupStatus: pointer.ToOrNilIfZeroValue(testParameterGroupStatus),
 			},
 			{
-				AvailabilityZone:     awsclient.String(testOtherAvailabilityZone),
-				NodeId:               awsclient.String(testOtherNodeID),
-				NodeStatus:           awsclient.String(testOtherNodeStatus),
-				ParameterGroupStatus: awsclient.String(testOtherParameterGroupStatus),
+				AvailabilityZone:     pointer.ToOrNilIfZeroValue(testOtherAvailabilityZone),
+				NodeId:               pointer.ToOrNilIfZeroValue(testOtherNodeID),
+				NodeStatus:           pointer.ToOrNilIfZeroValue(testOtherNodeStatus),
+				ParameterGroupStatus: pointer.ToOrNilIfZeroValue(testOtherParameterGroupStatus),
 			},
 		},
 		NotificationConfiguration: &dax.NotificationConfiguration{
-			TopicArn:    awsclient.String(testTopicARN),
-			TopicStatus: awsclient.String(testTopicStatus),
+			TopicArn:    pointer.ToOrNilIfZeroValue(testTopicARN),
+			TopicStatus: pointer.ToOrNilIfZeroValue(testTopicStatus),
 		},
 		ParameterGroup: &dax.ParameterGroupStatus{
-			NodeIdsToReboot:      []*string{awsclient.String(testNodeIDToReboot)},
-			ParameterApplyStatus: awsclient.String(testParameterApplyStatus),
-			ParameterGroupName:   awsclient.String(testParameterGroupName),
+			NodeIdsToReboot:      []*string{pointer.ToOrNilIfZeroValue(testNodeIDToReboot)},
+			ParameterApplyStatus: pointer.ToOrNilIfZeroValue(testParameterApplyStatus),
+			ParameterGroupName:   pointer.ToOrNilIfZeroValue(testParameterGroupName),
 		},
-		PreferredMaintenanceWindow: awsclient.String(testPreferredMaintenanceWindow),
-		SSEDescription:             &dax.SSEDescription{Status: awsclient.String(testSSEDescriptionStatus)},
+		PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+		SSEDescription:             &dax.SSEDescription{Status: pointer.ToOrNilIfZeroValue(testSSEDescriptionStatus)},
 		SecurityGroups: []*dax.SecurityGroupMembership{
 			{
-				SecurityGroupIdentifier: awsclient.String(testSecurityGroupIdentifier),
-				Status:                  awsclient.String(testSecurityGroupStatus),
+				SecurityGroupIdentifier: pointer.ToOrNilIfZeroValue(testSecurityGroupIdentifier),
+				Status:                  pointer.ToOrNilIfZeroValue(testSecurityGroupStatus),
 			},
 		},
-		Status:      awsclient.String(testStatus),
-		SubnetGroup: awsclient.String(testSubnetGroup),
-		TotalNodes:  awsclient.Int64(2),
+		Status:      pointer.ToOrNilIfZeroValue(testStatus),
+		SubnetGroup: pointer.ToOrNilIfZeroValue(testSubnetGroup),
+		TotalNodes:  pointer.ToIntAsInt64(2),
 	}
 }
 
@@ -273,71 +272,71 @@ func baseClusterParameters() svcapitypes.ClusterParameters {
 	return svcapitypes.ClusterParameters{
 		Region: "",
 		AvailabilityZones: []*string{
-			awsclient.String(testAvailabilityZone),
-			awsclient.String(testOtherAvailabilityZone),
+			pointer.ToOrNilIfZeroValue(testAvailabilityZone),
+			pointer.ToOrNilIfZeroValue(testOtherAvailabilityZone),
 		},
-		ClusterEndpointEncryptionType: awsclient.String(testClusterEndpointEncryptionType),
-		Description:                   awsclient.String(testDescription),
-		NodeType:                      awsclient.String(testNodeType),
-		PreferredMaintenanceWindow:    awsclient.String(testPreferredMaintenanceWindow),
-		ReplicationFactor:             awsclient.Int64(testReplicationFactor),
-		SSESpecification:              &svcapitypes.SSESpecification{Enabled: awsclient.Bool(testSSESpecificationEnabled)},
-		Tags:                          []*svcapitypes.Tag{{Key: awsclient.String(testTagKey), Value: awsclient.String(testTagValue)}},
+		ClusterEndpointEncryptionType: pointer.ToOrNilIfZeroValue(testClusterEndpointEncryptionType),
+		Description:                   pointer.ToOrNilIfZeroValue(testDescription),
+		NodeType:                      pointer.ToOrNilIfZeroValue(testNodeType),
+		PreferredMaintenanceWindow:    pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+		ReplicationFactor:             pointer.ToIntAsInt64(testReplicationFactor),
+		SSESpecification:              &svcapitypes.SSESpecification{Enabled: pointer.ToOrNilIfZeroValue(testSSESpecificationEnabled)},
+		Tags:                          []*svcapitypes.Tag{{Key: pointer.ToOrNilIfZeroValue(testTagKey), Value: pointer.ToOrNilIfZeroValue(testTagValue)}},
 		CustomClusterParameters: svcapitypes.CustomClusterParameters{
-			NotificationTopicARN: awsclient.String(testTopicARN),
-			IAMRoleARN:           awsclient.String(testIamRoleARN),
-			ParameterGroupName:   awsclient.String(testParameterGroupName),
-			SubnetGroupName:      awsclient.String(testSubnetGroupName),
-			SecurityGroupIDs:     []*string{awsclient.String(testSecurityGroupIdentifier)},
+			NotificationTopicARN: pointer.ToOrNilIfZeroValue(testTopicARN),
+			IAMRoleARN:           pointer.ToOrNilIfZeroValue(testIamRoleARN),
+			ParameterGroupName:   pointer.ToOrNilIfZeroValue(testParameterGroupName),
+			SubnetGroupName:      pointer.ToOrNilIfZeroValue(testSubnetGroupName),
+			SecurityGroupIDs:     []*string{pointer.ToOrNilIfZeroValue(testSecurityGroupIdentifier)},
 		},
 	}
 }
 
 func baseClusterObservation() svcapitypes.ClusterObservation {
 	return svcapitypes.ClusterObservation{
-		ActiveNodes: awsclient.Int64(testActiveNodes),
-		ClusterARN:  awsclient.String(testClusterARN),
+		ActiveNodes: pointer.ToIntAsInt64(testActiveNodes),
+		ClusterARN:  pointer.ToOrNilIfZeroValue(testClusterARN),
 		ClusterDiscoveryEndpoint: &svcapitypes.Endpoint{
-			Address: awsclient.String(testEndpointAddress),
-			Port:    awsclient.Int64(testEndpointPort),
-			URL:     awsclient.String(testEndpointURL),
+			Address: pointer.ToOrNilIfZeroValue(testEndpointAddress),
+			Port:    pointer.ToIntAsInt64(testEndpointPort),
+			URL:     pointer.ToOrNilIfZeroValue(testEndpointURL),
 		},
-		ClusterName:     awsclient.String(testClusterName),
-		IAMRoleARN:      awsclient.String(testIamRoleARN),
-		NodeIDsToRemove: []*string{awsclient.String(testNodeIDToRemove), awsclient.String(testOtherNodeIDToRemove)},
+		ClusterName:     pointer.ToOrNilIfZeroValue(testClusterName),
+		IAMRoleARN:      pointer.ToOrNilIfZeroValue(testIamRoleARN),
+		NodeIDsToRemove: []*string{pointer.ToOrNilIfZeroValue(testNodeIDToRemove), pointer.ToOrNilIfZeroValue(testOtherNodeIDToRemove)},
 		Nodes: []*svcapitypes.Node{
 			{
-				AvailabilityZone:     awsclient.String(testAvailabilityZone),
-				NodeID:               awsclient.String(testNodeID),
-				NodeStatus:           awsclient.String(testNodeStatus),
-				ParameterGroupStatus: awsclient.String(testParameterGroupStatus),
+				AvailabilityZone:     pointer.ToOrNilIfZeroValue(testAvailabilityZone),
+				NodeID:               pointer.ToOrNilIfZeroValue(testNodeID),
+				NodeStatus:           pointer.ToOrNilIfZeroValue(testNodeStatus),
+				ParameterGroupStatus: pointer.ToOrNilIfZeroValue(testParameterGroupStatus),
 			},
 			{
-				AvailabilityZone:     awsclient.String(testOtherAvailabilityZone),
-				NodeID:               awsclient.String(testOtherNodeID),
-				NodeStatus:           awsclient.String(testOtherNodeStatus),
-				ParameterGroupStatus: awsclient.String(testOtherParameterGroupStatus),
+				AvailabilityZone:     pointer.ToOrNilIfZeroValue(testOtherAvailabilityZone),
+				NodeID:               pointer.ToOrNilIfZeroValue(testOtherNodeID),
+				NodeStatus:           pointer.ToOrNilIfZeroValue(testOtherNodeStatus),
+				ParameterGroupStatus: pointer.ToOrNilIfZeroValue(testOtherParameterGroupStatus),
 			},
 		},
 		NotificationConfiguration: &svcapitypes.NotificationConfiguration{
-			TopicARN:    awsclient.String(testTopicARN),
-			TopicStatus: awsclient.String(testTopicStatus),
+			TopicARN:    pointer.ToOrNilIfZeroValue(testTopicARN),
+			TopicStatus: pointer.ToOrNilIfZeroValue(testTopicStatus),
 		},
 		ParameterGroup: &svcapitypes.ParameterGroupStatus_SDK{
-			NodeIDsToReboot:      []*string{awsclient.String(testNodeIDToReboot)},
-			ParameterApplyStatus: awsclient.String(testParameterApplyStatus),
-			ParameterGroupName:   awsclient.String(testParameterGroupName),
+			NodeIDsToReboot:      []*string{pointer.ToOrNilIfZeroValue(testNodeIDToReboot)},
+			ParameterApplyStatus: pointer.ToOrNilIfZeroValue(testParameterApplyStatus),
+			ParameterGroupName:   pointer.ToOrNilIfZeroValue(testParameterGroupName),
 		},
-		SSEDescription: &svcapitypes.SSEDescription{Status: awsclient.String(testSSEDescriptionStatus)},
+		SSEDescription: &svcapitypes.SSEDescription{Status: pointer.ToOrNilIfZeroValue(testSSEDescriptionStatus)},
 		SecurityGroups: []*svcapitypes.SecurityGroupMembership{
 			{
-				SecurityGroupIdentifier: awsclient.String(testSecurityGroupIdentifier),
-				Status:                  awsclient.String(testSecurityGroupStatus),
+				SecurityGroupIdentifier: pointer.ToOrNilIfZeroValue(testSecurityGroupIdentifier),
+				Status:                  pointer.ToOrNilIfZeroValue(testSecurityGroupStatus),
 			},
 		},
-		Status:      awsclient.String(testStatus),
-		SubnetGroup: awsclient.String(testSubnetGroup),
-		TotalNodes:  awsclient.Int64(2),
+		Status:      pointer.ToOrNilIfZeroValue(testStatus),
+		SubnetGroup: pointer.ToOrNilIfZeroValue(testSubnetGroup),
+		TotalNodes:  pointer.ToIntAsInt64(2),
 	}
 }
 
@@ -856,7 +855,7 @@ func TestObserve(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -880,7 +879,7 @@ func TestUpdate(t *testing.T) {
 				dax: &fake.MockDaxClient{
 					MockUpdateClusterWithContext: func(c context.Context, uci *dax.UpdateClusterInput, o []request.Option) (*dax.UpdateClusterOutput, error) {
 						return &dax.UpdateClusterOutput{Cluster: &dax.Cluster{
-							ClusterName: awsclient.String(testClusterName),
+							ClusterName: pointer.ToOrNilIfZeroValue(testClusterName),
 						}}, nil
 					},
 				},
@@ -900,8 +899,8 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.UpdateClusterInput{
-								ClusterName: awsclient.String(testClusterName),
-								Description: awsclient.String(testDescription),
+								ClusterName: pointer.ToOrNilIfZeroValue(testClusterName),
+								Description: pointer.ToOrNilIfZeroValue(testDescription),
 							},
 						},
 					},
@@ -913,7 +912,7 @@ func TestUpdate(t *testing.T) {
 				dax: &fake.MockDaxClient{
 					MockUpdateClusterWithContext: func(c context.Context, uci *dax.UpdateClusterInput, o []request.Option) (*dax.UpdateClusterOutput, error) {
 						return &dax.UpdateClusterOutput{Cluster: &dax.Cluster{
-							ClusterName: awsclient.String(testClusterName),
+							ClusterName: pointer.ToOrNilIfZeroValue(testClusterName),
 						}}, nil
 					},
 				},
@@ -933,12 +932,12 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.UpdateClusterInput{
-								ClusterName:                awsclient.String(testClusterName),
-								Description:                awsclient.String(testDescription),
-								NotificationTopicArn:       awsclient.String(testTopicARN),
-								ParameterGroupName:         awsclient.String(testParameterGroupName),
-								PreferredMaintenanceWindow: awsclient.String(testPreferredMaintenanceWindow),
-								SecurityGroupIds:           []*string{awsclient.String(testSecurityGroupIdentifier)},
+								ClusterName:                pointer.ToOrNilIfZeroValue(testClusterName),
+								Description:                pointer.ToOrNilIfZeroValue(testDescription),
+								NotificationTopicArn:       pointer.ToOrNilIfZeroValue(testTopicARN),
+								ParameterGroupName:         pointer.ToOrNilIfZeroValue(testParameterGroupName),
+								PreferredMaintenanceWindow: pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+								SecurityGroupIds:           []*string{pointer.ToOrNilIfZeroValue(testSecurityGroupIdentifier)},
 							},
 						},
 					},
@@ -950,7 +949,7 @@ func TestUpdate(t *testing.T) {
 				dax: &fake.MockDaxClient{
 					MockUpdateClusterWithContext: func(c context.Context, uci *dax.UpdateClusterInput, o []request.Option) (*dax.UpdateClusterOutput, error) {
 						return &dax.UpdateClusterOutput{Cluster: &dax.Cluster{
-							ClusterName: awsclient.String(testClusterName),
+							ClusterName: pointer.ToOrNilIfZeroValue(testClusterName),
 						}}, nil
 					},
 				},
@@ -970,8 +969,8 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.UpdateClusterInput{
-								ClusterName:      awsclient.String(testClusterName),
-								SecurityGroupIds: []*string{awsclient.String(testOtherSecurityGroupIdentifier)},
+								ClusterName:      pointer.ToOrNilIfZeroValue(testClusterName),
+								SecurityGroupIds: []*string{pointer.ToOrNilIfZeroValue(testOtherSecurityGroupIdentifier)},
 							},
 						},
 					},
@@ -1000,7 +999,7 @@ func TestUpdate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.UpdateClusterInput{
-								ClusterName: awsclient.String(testClusterName),
+								ClusterName: pointer.ToOrNilIfZeroValue(testClusterName),
 							},
 						},
 					},
@@ -1023,7 +1022,7 @@ func TestUpdate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -1068,22 +1067,22 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.CreateClusterInput{
-								AvailabilityZones:             []*string{awsclient.String(testAvailabilityZone), awsclient.String(testOtherAvailabilityZone)},
-								ClusterEndpointEncryptionType: awsclient.String(testClusterEndpointEncryptionType),
-								ClusterName:                   awsclient.String(testClusterName),
-								Description:                   awsclient.String(testDescription),
-								IamRoleArn:                    awsclient.String(testIamRoleARN),
-								NodeType:                      awsclient.String(testNodeType),
-								NotificationTopicArn:          awsclient.String(testTopicARN),
-								ParameterGroupName:            awsclient.String(testParameterGroupName),
-								PreferredMaintenanceWindow:    awsclient.String(testPreferredMaintenanceWindow),
-								ReplicationFactor:             awsclient.Int64(testReplicationFactor),
-								SSESpecification:              &dax.SSESpecification{Enabled: awsclient.Bool(testSSESpecificationEnabled)},
-								SecurityGroupIds:              []*string{awsclient.String(testSecurityGroupIdentifier)},
-								SubnetGroupName:               awsclient.String(testSubnetGroupName),
+								AvailabilityZones:             []*string{pointer.ToOrNilIfZeroValue(testAvailabilityZone), pointer.ToOrNilIfZeroValue(testOtherAvailabilityZone)},
+								ClusterEndpointEncryptionType: pointer.ToOrNilIfZeroValue(testClusterEndpointEncryptionType),
+								ClusterName:                   pointer.ToOrNilIfZeroValue(testClusterName),
+								Description:                   pointer.ToOrNilIfZeroValue(testDescription),
+								IamRoleArn:                    pointer.ToOrNilIfZeroValue(testIamRoleARN),
+								NodeType:                      pointer.ToOrNilIfZeroValue(testNodeType),
+								NotificationTopicArn:          pointer.ToOrNilIfZeroValue(testTopicARN),
+								ParameterGroupName:            pointer.ToOrNilIfZeroValue(testParameterGroupName),
+								PreferredMaintenanceWindow:    pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+								ReplicationFactor:             pointer.ToIntAsInt64(testReplicationFactor),
+								SSESpecification:              &dax.SSESpecification{Enabled: pointer.ToOrNilIfZeroValue(testSSESpecificationEnabled)},
+								SecurityGroupIds:              []*string{pointer.ToOrNilIfZeroValue(testSecurityGroupIdentifier)},
+								SubnetGroupName:               pointer.ToOrNilIfZeroValue(testSubnetGroupName),
 								Tags: []*dax.Tag{{
-									Key:   awsclient.String(testTagKey),
-									Value: awsclient.String(testTagValue),
+									Key:   pointer.ToOrNilIfZeroValue(testTagKey),
+									Value: pointer.ToOrNilIfZeroValue(testTagValue),
 								}},
 							},
 						},
@@ -1117,22 +1116,22 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.CreateClusterInput{
-								AvailabilityZones:             []*string{awsclient.String(testAvailabilityZone), awsclient.String(testOtherAvailabilityZone)},
-								ClusterEndpointEncryptionType: awsclient.String(testClusterEndpointEncryptionType),
-								ClusterName:                   awsclient.String(testClusterName),
-								Description:                   awsclient.String(testDescription),
-								IamRoleArn:                    awsclient.String(testIamRoleARN),
-								NodeType:                      awsclient.String(testNodeType),
-								NotificationTopicArn:          awsclient.String(testTopicARN),
-								ParameterGroupName:            awsclient.String(testParameterGroupName),
-								PreferredMaintenanceWindow:    awsclient.String(testPreferredMaintenanceWindow),
-								ReplicationFactor:             awsclient.Int64(testReplicationFactor),
-								SSESpecification:              &dax.SSESpecification{Enabled: awsclient.Bool(testSSESpecificationEnabled)},
-								SecurityGroupIds:              []*string{awsclient.String(testSecurityGroupIdentifier)},
-								SubnetGroupName:               awsclient.String(testSubnetGroupName),
+								AvailabilityZones:             []*string{pointer.ToOrNilIfZeroValue(testAvailabilityZone), pointer.ToOrNilIfZeroValue(testOtherAvailabilityZone)},
+								ClusterEndpointEncryptionType: pointer.ToOrNilIfZeroValue(testClusterEndpointEncryptionType),
+								ClusterName:                   pointer.ToOrNilIfZeroValue(testClusterName),
+								Description:                   pointer.ToOrNilIfZeroValue(testDescription),
+								IamRoleArn:                    pointer.ToOrNilIfZeroValue(testIamRoleARN),
+								NodeType:                      pointer.ToOrNilIfZeroValue(testNodeType),
+								NotificationTopicArn:          pointer.ToOrNilIfZeroValue(testTopicARN),
+								ParameterGroupName:            pointer.ToOrNilIfZeroValue(testParameterGroupName),
+								PreferredMaintenanceWindow:    pointer.ToOrNilIfZeroValue(testPreferredMaintenanceWindow),
+								ReplicationFactor:             pointer.ToIntAsInt64(testReplicationFactor),
+								SSESpecification:              &dax.SSESpecification{Enabled: pointer.ToOrNilIfZeroValue(testSSESpecificationEnabled)},
+								SecurityGroupIds:              []*string{pointer.ToOrNilIfZeroValue(testSecurityGroupIdentifier)},
+								SubnetGroupName:               pointer.ToOrNilIfZeroValue(testSubnetGroupName),
 								Tags: []*dax.Tag{{
-									Key:   awsclient.String(testTagKey),
-									Value: awsclient.String(testTagValue),
+									Key:   pointer.ToOrNilIfZeroValue(testTagKey),
+									Value: pointer.ToOrNilIfZeroValue(testTagValue),
 								}},
 							},
 						},
@@ -1157,7 +1156,7 @@ func TestCreate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -1196,7 +1195,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.DeleteClusterInput{
-								ClusterName: awsclient.String(testClusterName),
+								ClusterName: pointer.ToOrNilIfZeroValue(testClusterName),
 							},
 						},
 					},
@@ -1225,7 +1224,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &dax.DeleteClusterInput{
-								ClusterName: awsclient.String(testClusterName),
+								ClusterName: pointer.ToOrNilIfZeroValue(testClusterName),
 							},
 						},
 					},
@@ -1238,7 +1237,7 @@ func TestDelete(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			opts := []option{setupExternal}
 			e := newExternal(tc.args.kube, tc.args.dax, opts)
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
@@ -1246,7 +1245,7 @@ func TestDelete(t *testing.T) {
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.dax, tc.args.dax.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

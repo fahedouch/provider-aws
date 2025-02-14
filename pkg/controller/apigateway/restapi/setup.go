@@ -33,8 +33,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/apigateway/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	apigwclient "github.com/crossplane-contrib/provider-aws/pkg/clients/apigateway"
+	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupRestAPI adds a controller that reconciles RestAPI.
@@ -54,17 +57,30 @@ func SetupRestAPI(mgr ctrl.Manager, o controller.Options) error {
 			e.preUpdate = c.preUpdate
 		},
 	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.RestAPIGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.RestAPI{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.RestAPIGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithInitializers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name)))))
+		Complete(r)
 }
 
 type custom struct {
@@ -72,7 +88,7 @@ type custom struct {
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.RestAPI, obj *svcsdk.GetRestApiInput) error {
-	obj.RestApiId = aws.String(meta.GetExternalName(cr))
+	obj.RestApiId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -90,13 +106,13 @@ func postCreate(_ context.Context, cr *svcapitypes.RestAPI, resp *svcsdk.RestApi
 		return managed.ExternalCreation{}, err
 	}
 
-	meta.SetExternalName(cr, aws.StringValue(resp.Id))
+	meta.SetExternalName(cr, pointer.StringValue(resp.Id))
 	return cre, nil
 }
 
 func (c *custom) preUpdate(ctx context.Context, cr *svcapitypes.RestAPI, obj *svcsdk.UpdateRestApiInput) error {
 
-	rapi, err := c.Client.GetRestAPIByID(ctx, aws.String(meta.GetExternalName(cr)))
+	rapi, err := c.Client.GetRestAPIByID(ctx, pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)))
 	if err != nil {
 		return errors.Wrap(err, "cannot get rest api")
 	}
@@ -121,17 +137,17 @@ func (c *custom) preUpdate(ctx context.Context, cr *svcapitypes.RestAPI, obj *sv
 	}
 
 	obj.PatchOperations = pOps
-	obj.RestApiId = aws.String(meta.GetExternalName(cr))
+	obj.RestApiId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 
 	return nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.RestAPI, obj *svcsdk.DeleteRestApiInput) (bool, error) {
-	obj.RestApiId = aws.String(meta.GetExternalName(cr))
+	obj.RestApiId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
-func isUpToDate(cr *svcapitypes.RestAPI, cur *svcsdk.RestApi) (bool, error) {
+func isUpToDate(_ context.Context, cr *svcapitypes.RestAPI, cur *svcsdk.RestApi) (bool, string, error) {
 	s := &svcapitypes.RestAPIParameters{
 		Name:   cur.Name,
 		Region: cr.Spec.ForProvider.Region,
@@ -140,38 +156,39 @@ func isUpToDate(cr *svcapitypes.RestAPI, cur *svcsdk.RestApi) (bool, error) {
 	var err error
 
 	if err = lateInitialize(s, cur); err != nil {
-		return false, errors.Wrap(err, "cannot lateinit")
+		return false, "", errors.Wrap(err, "cannot lateinit")
 	}
 
-	patchJSON, err := aws.CreateJSONPatch(cr.Spec.ForProvider, &s)
+	patchJSON, err := jsonpatch.CreateJSONPatch(cr.Spec.ForProvider, &s)
 	if err != nil {
-		return false, errors.Wrap(err, "error checking up to date")
+		return false, "", errors.Wrap(err, "error checking up to date")
 	}
 
 	patch := &svcapitypes.RestAPIParameters{}
 	if err := json.Unmarshal(patchJSON, patch); err != nil {
-		return false, errors.Wrap(err, "error checking up to date")
+		return false, "", errors.Wrap(err, "error checking up to date")
 	}
 
-	return cmp.Equal(&svcapitypes.RestAPIParameters{}, patch,
+	diff := cmp.Diff(&svcapitypes.RestAPIParameters{}, patch,
 		cmpopts.IgnoreTypes([]xpv1.Reference{}, []xpv1.Selector{}),
 		cmpopts.IgnoreFields(svcapitypes.RestAPIParameters{}, "Region"),
-	), nil
+	)
+	return diff == "", diff, nil
 }
 
 func lateInitialize(in *svcapitypes.RestAPIParameters, cur *svcsdk.RestApi) error {
-	in.APIKeySource = aws.LateInitializeStringPtr(in.APIKeySource, cur.ApiKeySource)
-	in.BinaryMediaTypes = aws.LateInitializeStringPtrSlice(in.BinaryMediaTypes, cur.BinaryMediaTypes)
-	in.Description = aws.LateInitializeStringPtr(in.Description, cur.Description)
-	in.DisableExecuteAPIEndpoint = aws.LateInitializeBoolPtr(in.DisableExecuteAPIEndpoint, cur.DisableExecuteApiEndpoint)
-	in.MinimumCompressionSize = aws.LateInitializeInt64Ptr(in.MinimumCompressionSize, cur.MinimumCompressionSize)
+	in.APIKeySource = pointer.LateInitialize(in.APIKeySource, cur.ApiKeySource)
+	in.BinaryMediaTypes = pointer.LateInitializeSlice(in.BinaryMediaTypes, cur.BinaryMediaTypes)
+	in.Description = pointer.LateInitialize(in.Description, cur.Description)
+	in.DisableExecuteAPIEndpoint = pointer.LateInitialize(in.DisableExecuteAPIEndpoint, cur.DisableExecuteApiEndpoint)
+	in.MinimumCompressionSize = pointer.LateInitialize(in.MinimumCompressionSize, cur.MinimumCompressionSize)
 
 	if cur.EndpointConfiguration != nil {
 		if in.EndpointConfiguration == nil {
 			in.EndpointConfiguration = &svcapitypes.EndpointConfiguration{}
 		}
-		in.EndpointConfiguration.Types = aws.LateInitializeStringPtrSlice(in.EndpointConfiguration.Types, cur.EndpointConfiguration.Types)
-		in.EndpointConfiguration.VPCEndpointIDs = aws.LateInitializeStringPtrSlice(in.EndpointConfiguration.VPCEndpointIDs, cur.EndpointConfiguration.VpcEndpointIds)
+		in.EndpointConfiguration.Types = pointer.LateInitializeSlice(in.EndpointConfiguration.Types, cur.EndpointConfiguration.Types)
+		in.EndpointConfiguration.VPCEndpointIDs = pointer.LateInitializeSlice(in.EndpointConfiguration.VPCEndpointIDs, cur.EndpointConfiguration.VpcEndpointIds)
 	}
 
 	return lateInitializePolicies(in, cur)
@@ -211,7 +228,7 @@ func lateInitializePolicies(in *svcapitypes.RestAPIParameters, cur *svcsdk.RestA
 			return err
 		}
 	}
-	in.Policy = aws.LateInitializeStringPtr(in.Policy, cur.Policy)
+	in.Policy = pointer.LateInitialize(in.Policy, cur.Policy)
 
 	return err
 }

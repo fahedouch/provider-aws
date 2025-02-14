@@ -31,15 +31,15 @@ type StageParameters struct {
 	Region string `json:"region"`
 	// Whether cache clustering is enabled for the stage.
 	CacheClusterEnabled *bool `json:"cacheClusterEnabled,omitempty"`
-	// The stage's cache cluster size.
+	// The stage's cache capacity in GB. For more information about choosing a cache
+	// size, see Enabling API caching to enhance responsiveness (https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-caching.html).
 	CacheClusterSize *string `json:"cacheClusterSize,omitempty"`
 	// The description of the Stage resource.
 	Description *string `json:"description,omitempty"`
 	// The version of the associated API documentation.
 	DocumentationVersion *string `json:"documentationVersion,omitempty"`
-	// [Required] The name for the Stage resource. Stage names can only contain
-	// alphanumeric characters, hyphens, and underscores. Maximum length is 128
-	// characters.
+	// The name for the Stage resource. Stage names can only contain alphanumeric
+	// characters, hyphens, and underscores. Maximum length is 128 characters.
 	// +kubebuilder:validation:Required
 	StageName *string `json:"stageName"`
 	// The key-value map of strings. The valid character set is [a-zA-Z+-=._:/].
@@ -84,6 +84,8 @@ type StageObservation struct {
 	MethodSettings map[string]*MethodSetting `json:"methodSettings,omitempty"`
 	// The ARN of the WebAcl associated with the Stage.
 	WebACLARN *string `json:"webACLARN,omitempty"`
+
+	CustomStageObservation `json:",inline"`
 }
 
 // StageStatus defines the observed state of Stage.
@@ -98,6 +100,7 @@ type StageStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

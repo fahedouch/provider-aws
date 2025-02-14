@@ -29,10 +29,10 @@ type UsagePlanKeyParameters struct {
 	// Region is which region the UsagePlanKey will be created.
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
-	// [Required] The identifier of a UsagePlanKey resource for a plan customer.
+	// The identifier of a UsagePlanKey resource for a plan customer.
 	// +kubebuilder:validation:Required
 	KeyID *string `json:"keyID"`
-	// [Required] The type of a UsagePlanKey resource for a plan customer.
+	// The type of a UsagePlanKey resource for a plan customer.
 	// +kubebuilder:validation:Required
 	KeyType                      *string `json:"keyType"`
 	CustomUsagePlanKeyParameters `json:",inline"`
@@ -54,6 +54,8 @@ type UsagePlanKeyObservation struct {
 	Type *string `json:"type_,omitempty"`
 	// The value of a usage plan key.
 	Value *string `json:"value,omitempty"`
+
+	CustomUsagePlanKeyObservation `json:",inline"`
 }
 
 // UsagePlanKeyStatus defines the observed state of UsagePlanKey.
@@ -68,6 +70,7 @@ type UsagePlanKeyStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

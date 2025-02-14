@@ -47,6 +47,39 @@ type DescribedAccess struct {
 }
 
 // +kubebuilder:skipversion
+type DescribedAgreement struct {
+	AccessRole *string `json:"accessRole,omitempty"`
+
+	ARN *string `json:"arn,omitempty"`
+
+	BaseDirectory *string `json:"baseDirectory,omitempty"`
+
+	ServerID *string `json:"serverID,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DescribedCertificate struct {
+	ARN *string `json:"arn,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DescribedConnector struct {
+	AccessRole *string `json:"accessRole,omitempty"`
+
+	ARN *string `json:"arn,omitempty"`
+
+	LoggingRole *string `json:"loggingRole,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+
+	URL *string `json:"url,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type DescribedExecution struct {
 	ExecutionRole *string `json:"executionRole,omitempty"`
 	// The full POSIX identity, including user ID (Uid), group ID (Gid), and any
@@ -55,6 +88,24 @@ type DescribedExecution struct {
 	// and directories in your file system determine the level of access your users
 	// get when transferring files into and out of your Amazon EFS file systems.
 	PosixProfile *PosixProfile `json:"posixProfile,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DescribedHostKey struct {
+	ARN *string `json:"arn,omitempty"`
+
+	DateImported *metav1.Time `json:"dateImported,omitempty"`
+
+	HostKeyFingerprint *string `json:"hostKeyFingerprint,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type DescribedProfile struct {
+	ARN *string `json:"arn,omitempty"`
+
+	Tags []*Tag `json:"tags,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -91,12 +142,24 @@ type DescribedServer struct {
 	// use for a file transfer protocol-enabled server's users. A server can have
 	// only one method of authentication.
 	IdentityProviderDetails *IdentityProviderDetails `json:"identityProviderDetails,omitempty"`
-	// Returns information related to the type of user authentication that is in
-	// use for a file transfer protocol-enabled server's users. For AWS_DIRECTORY_SERVICE
-	// or SERVICE_MANAGED authentication, the Secure Shell (SSH) public keys are
-	// stored with a user on the server instance. For API_GATEWAY authentication,
-	// your custom authentication method is implemented by using an API call. The
-	// server can have only one method of authentication.
+	// The mode of authentication for a server. The default value is SERVICE_MANAGED,
+	// which allows you to store and access user credentials within the Transfer
+	// Family service.
+	//
+	// Use AWS_DIRECTORY_SERVICE to provide access to Active Directory groups in
+	// Directory Service for Microsoft Active Directory or Microsoft Active Directory
+	// in your on-premises environment or in Amazon Web Services using AD Connector.
+	// This option also requires you to provide a Directory ID by using the IdentityProviderDetails
+	// parameter.
+	//
+	// Use the API_GATEWAY value to integrate with an identity provider of your
+	// choosing. The API_GATEWAY setting requires you to provide an Amazon API Gateway
+	// endpoint URL to call for authentication by using the IdentityProviderDetails
+	// parameter.
+	//
+	// Use the AWS_LAMBDA value to directly use an Lambda function as your identity
+	// provider. If you choose this value, you must specify the ARN for the Lambda
+	// function in the Function parameter for the IdentityProviderDetails data type.
 	IdentityProviderType *string `json:"identityProviderType,omitempty"`
 
 	LoggingRole *string `json:"loggingRole,omitempty"`
@@ -123,6 +186,8 @@ type DescribedServer struct {
 	// conditions, it can take a couple of minutes for the server to be completely
 	// operational. Both START_FAILED and STOP_FAILED are error conditions.
 	State *string `json:"state,omitempty"`
+
+	StructuredLogDestinations []*string `json:"structuredLogDestinations,omitempty"`
 
 	Tags []*Tag `json:"tags,omitempty"`
 
@@ -196,6 +261,8 @@ type IdentityProviderDetails struct {
 
 	InvocationRole *string `json:"invocationRole,omitempty"`
 
+	SftpAuthenticationMethods *string `json:"sftpAuthenticationMethods,omitempty"`
+
 	URL *string `json:"url,omitempty"`
 }
 
@@ -209,18 +276,63 @@ type ListedAccess struct {
 }
 
 // +kubebuilder:skipversion
+type ListedAgreement struct {
+	ARN *string `json:"arn,omitempty"`
+
+	ServerID *string `json:"serverID,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ListedCertificate struct {
+	ARN *string `json:"arn,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ListedConnector struct {
+	ARN *string `json:"arn,omitempty"`
+
+	URL *string `json:"url,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ListedHostKey struct {
+	ARN *string `json:"arn,omitempty"`
+
+	DateImported *metav1.Time `json:"dateImported,omitempty"`
+
+	Fingerprint *string `json:"fingerprint,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ListedProfile struct {
+	ARN *string `json:"arn,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type ListedServer struct {
 	ARN *string `json:"arn,omitempty"`
 
 	Domain *string `json:"domain,omitempty"`
 
 	EndpointType *string `json:"endpointType,omitempty"`
-	// Returns information related to the type of user authentication that is in
-	// use for a file transfer protocol-enabled server's users. For AWS_DIRECTORY_SERVICE
-	// or SERVICE_MANAGED authentication, the Secure Shell (SSH) public keys are
-	// stored with a user on the server instance. For API_GATEWAY authentication,
-	// your custom authentication method is implemented by using an API call. The
-	// server can have only one method of authentication.
+	// The mode of authentication for a server. The default value is SERVICE_MANAGED,
+	// which allows you to store and access user credentials within the Transfer
+	// Family service.
+	//
+	// Use AWS_DIRECTORY_SERVICE to provide access to Active Directory groups in
+	// Directory Service for Microsoft Active Directory or Microsoft Active Directory
+	// in your on-premises environment or in Amazon Web Services using AD Connector.
+	// This option also requires you to provide a Directory ID by using the IdentityProviderDetails
+	// parameter.
+	//
+	// Use the API_GATEWAY value to integrate with an identity provider of your
+	// choosing. The API_GATEWAY setting requires you to provide an Amazon API Gateway
+	// endpoint URL to call for authentication by using the IdentityProviderDetails
+	// parameter.
+	//
+	// Use the AWS_LAMBDA value to directly use an Lambda function as your identity
+	// provider. If you choose this value, you must specify the ARN for the Lambda
+	// function in the Function parameter for the IdentityProviderDetails data type.
 	IdentityProviderType *string `json:"identityProviderType,omitempty"`
 
 	LoggingRole *string `json:"loggingRole,omitempty"`
@@ -279,7 +391,11 @@ type PosixProfile struct {
 
 // +kubebuilder:skipversion
 type ProtocolDetails struct {
+	As2Transports []*string `json:"as2Transports,omitempty"`
+
 	PassiveIP *string `json:"passiveIP,omitempty"`
+
+	SetStatOption *string `json:"setStatOption,omitempty"`
 
 	TLSSessionResumptionMode *string `json:"tlsSessionResumptionMode,omitempty"`
 }
@@ -316,5 +432,7 @@ type WorkflowDetail struct {
 
 // +kubebuilder:skipversion
 type WorkflowDetails struct {
+	OnPartialUpload []*WorkflowDetail `json:"onPartialUpload,omitempty"`
+
 	OnUpload []*WorkflowDetail `json:"onUpload,omitempty"`
 }

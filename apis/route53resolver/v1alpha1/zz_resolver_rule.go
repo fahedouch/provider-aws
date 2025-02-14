@@ -60,7 +60,8 @@ type ResolverRuleParameters struct {
 	// A list of the tag keys and values that you want to associate with the endpoint.
 	Tags []*Tag `json:"tags,omitempty"`
 	// The IPs that you want Resolver to forward DNS queries to. You can specify
-	// only IPv4 addresses. Separate IP addresses with a space.
+	// either Ipv4 or Ipv6 addresses but not both in the same rule. Separate IP
+	// addresses with a space.
 	//
 	// TargetIps is available only when the value of Rule type is FORWARD.
 	TargetIPs                    []*TargetAddress `json:"targetIPs,omitempty"`
@@ -100,6 +101,8 @@ type ResolverRuleObservation struct {
 	Status *string `json:"status,omitempty"`
 	// A detailed description of the status of a Resolver rule.
 	StatusMessage *string `json:"statusMessage,omitempty"`
+
+	CustomResolverRuleObservation `json:",inline"`
 }
 
 // ResolverRuleStatus defines the observed state of ResolverRule.
@@ -114,6 +117,7 @@ type ResolverRuleStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

@@ -2,12 +2,8 @@ package broker
 
 import (
 	"context"
+	"strings"
 	"time"
-
-	"github.com/pkg/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcsdk "github.com/aws/aws-sdk-go/service/mq"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/mq/mqiface"
@@ -18,12 +14,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/mq/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/mq"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupBroker adds a controller that reconciles Broker.
@@ -46,18 +48,30 @@ func SetupBroker(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithInitializers(),
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.BrokerGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Broker{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.BrokerGroupVersionKind),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient())),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type custom struct {
@@ -67,16 +81,16 @@ type custom struct {
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Broker, obj *svcsdk.DescribeBrokerInput) error {
-	obj.BrokerId = awsclients.String(meta.GetExternalName(cr))
+	obj.BrokerId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (e *custom) postObserve(ctx context.Context, cr *svcapitypes.Broker, obj *svcsdk.DescribeBrokerResponse, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) {
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	switch awsclients.StringValue(obj.BrokerState) {
+	switch pointer.StringValue(obj.BrokerState) {
 	case string(svcapitypes.BrokerState_RUNNING):
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.BrokerState_CREATION_IN_PROGRESS):
@@ -114,9 +128,9 @@ func (e *custom) postObserve(ctx context.Context, cr *svcapitypes.Broker, obj *s
 	}
 
 	obs.ConnectionDetails = managed.ConnectionDetails{
-		"BrokerID": []byte(awsclients.StringValue(cr.Status.AtProvider.BrokerID)),
-		"Region":   []byte(awsclients.StringValue(&cr.Spec.ForProvider.Region)),
-		"Username": []byte(awsclients.StringValue(cr.Spec.ForProvider.CustomUsers[0].Username)),
+		"BrokerID": []byte(pointer.StringValue(cr.Status.AtProvider.BrokerID)),
+		"Region":   []byte(pointer.StringValue(&cr.Spec.ForProvider.Region)),
+		"Username": []byte(pointer.StringValue(cr.Spec.ForProvider.CustomUsers[0].Username)),
 		"Password": []byte(pw),
 	}
 
@@ -125,13 +139,13 @@ func (e *custom) postObserve(ctx context.Context, cr *svcapitypes.Broker, obj *s
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Broker, obj *svcsdk.DeleteBrokerInput) (bool, error) {
-	obj.BrokerId = awsclients.String(meta.GetExternalName(cr))
+	obj.BrokerId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
 func (e *custom) preCreate(ctx context.Context, cr *svcapitypes.Broker, obj *svcsdk.CreateBrokerRequest) error {
 
-	obj.BrokerName = awsclients.String(cr.Name)
+	obj.BrokerName = pointer.ToOrNilIfZeroValue(cr.Name)
 
 	pw, _, err := mq.GetPassword(ctx, e.kube, &cr.Spec.ForProvider.CustomUsers[0].PasswordSecretRef, cr.Spec.WriteConnectionSecretToReference)
 	if resource.IgnoreNotFound(err) != nil || pw == "" {
@@ -144,10 +158,16 @@ func (e *custom) preCreate(ctx context.Context, cr *svcapitypes.Broker, obj *svc
 	obj.Users = []*svcsdk.User{
 		{
 			Username:      cr.Spec.ForProvider.CustomUsers[0].Username,
-			Password:      awsclients.String(pw),
+			Password:      pointer.ToOrNilIfZeroValue(pw),
 			ConsoleAccess: cr.Spec.ForProvider.CustomUsers[0].ConsoleAccess,
 			Groups:        cr.Spec.ForProvider.CustomUsers[0].Groups,
 		},
+	}
+
+	// EncryptionOptions are not supported for RabbitMQ.
+	// See https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-amazonmq-broker-encryptionoptions.html
+	if strings.ToLower(ptr.Deref(obj.EngineType, "")) == "rabbitmq" {
+		obj.EncryptionOptions = nil
 	}
 
 	return nil
@@ -158,20 +178,21 @@ func postCreate(_ context.Context, cr *svcapitypes.Broker, obj *svcsdk.CreateBro
 		return managed.ExternalCreation{}, err
 	}
 
-	meta.SetExternalName(cr, awsclients.StringValue(obj.BrokerId))
+	meta.SetExternalName(cr, pointer.StringValue(obj.BrokerId))
 	return cre, nil
 }
 
 // LateInitialize fills the empty fields in *svcapitypes.BrokerParameters with
 // the values seen in svcsdk.DescribeBrokerResponse.
-// nolint:gocyclo
+//
+//nolint:gocyclo
 func LateInitialize(cr *svcapitypes.BrokerParameters, obj *svcsdk.DescribeBrokerResponse) error {
 	if cr.AuthenticationStrategy == nil && obj.AuthenticationStrategy != nil {
-		cr.AuthenticationStrategy = awsclients.LateInitializeStringPtr(cr.AuthenticationStrategy, obj.AuthenticationStrategy)
+		cr.AuthenticationStrategy = pointer.LateInitialize(cr.AuthenticationStrategy, obj.AuthenticationStrategy)
 	}
 
 	if cr.AutoMinorVersionUpgrade == nil && obj.AutoMinorVersionUpgrade != nil {
-		cr.AutoMinorVersionUpgrade = awsclients.LateInitializeBoolPtr(cr.AutoMinorVersionUpgrade, obj.AutoMinorVersionUpgrade)
+		cr.AutoMinorVersionUpgrade = pointer.LateInitialize(cr.AutoMinorVersionUpgrade, obj.AutoMinorVersionUpgrade)
 	}
 
 	if cr.EncryptionOptions == nil && obj.EncryptionOptions != nil {
@@ -197,7 +218,7 @@ func LateInitialize(cr *svcapitypes.BrokerParameters, obj *svcsdk.DescribeBroker
 	}
 
 	if cr.PubliclyAccessible == nil && obj.PubliclyAccessible != nil {
-		cr.PubliclyAccessible = awsclients.LateInitializeBoolPtr(cr.PubliclyAccessible, obj.PubliclyAccessible)
+		cr.PubliclyAccessible = pointer.LateInitialize(cr.PubliclyAccessible, obj.PubliclyAccessible)
 	}
 
 	return nil

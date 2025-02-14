@@ -21,11 +21,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -33,12 +28,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	route53v1alpha1 "github.com/crossplane-contrib/provider-aws/apis/route53/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/resourcerecordset"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -60,19 +61,31 @@ func SetupResourceRecordSet(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: resourcerecordset.NewClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(route53v1alpha1.ResourceRecordSetGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&route53v1alpha1.ResourceRecordSet{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(route53v1alpha1.ResourceRecordSetGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: resourcerecordset.NewClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -81,7 +94,7 @@ type connector struct {
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, awsclient.GlobalRegion)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, connectaws.GlobalRegion)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +117,7 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		// Either there is err and retry. Or Resource does not exist.
 		return managed.ExternalObservation{
 			ResourceExists: false,
-		}, awsclient.Wrap(resource.Ignore(resourcerecordset.IsNotFound, err), errList)
+		}, errorutils.Wrap(resource.Ignore(resourcerecordset.IsNotFound, err), errList)
 	}
 
 	current := cr.Spec.ForProvider.DeepCopy()
@@ -138,7 +151,7 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	input := resourcerecordset.GenerateChangeResourceRecordSetsInput(meta.GetExternalName(cr), cr.Spec.ForProvider, route53types.ChangeActionUpsert)
 	_, err := e.client.ChangeResourceRecordSets(ctx, input)
 
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 }
 
 func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
@@ -148,13 +161,13 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 	input := resourcerecordset.GenerateChangeResourceRecordSetsInput(meta.GetExternalName(cr), cr.Spec.ForProvider, route53types.ChangeActionUpsert)
 	_, err := e.client.ChangeResourceRecordSets(ctx, input)
-	return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+	return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 }
 
-func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*route53v1alpha1.ResourceRecordSet)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
@@ -164,5 +177,10 @@ func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
 
 	// There is no way to confirm 404 (from response) when deleting a recordset
 	// which isn't present using ChangeResourceRecordSetRequest.
-	return awsclient.Wrap(resource.Ignore(resourcerecordset.IsNotFound, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(resourcerecordset.IsNotFound, err), errDelete)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

@@ -25,16 +25,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/redshift"
 	redshifttypes "github.com/aws/aws-sdk-go-v2/service/redshift/types"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/redshift/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // Client defines Redshift client operations
@@ -52,47 +52,47 @@ func NewClient(cfg aws.Config) Client {
 
 // LateInitialize fills the empty fields in *v1alpha1.ClusterParameters with
 // the values seen in redshift.Cluster.
-func LateInitialize(in *v1alpha1.ClusterParameters, cl *redshifttypes.Cluster) { // nolint:gocyclo
+func LateInitialize(in *v1alpha1.ClusterParameters, cl *redshifttypes.Cluster) { //nolint:gocyclo
 	if cl == nil {
 		return
 	}
-	in.AllowVersionUpgrade = awsclients.LateInitializeBoolPtr(in.AllowVersionUpgrade, &cl.AllowVersionUpgrade)
-	in.AutomatedSnapshotRetentionPeriod = awsclients.LateInitializeInt32Ptr(in.AutomatedSnapshotRetentionPeriod, &cl.AutomatedSnapshotRetentionPeriod)
-	in.AvailabilityZone = awsclients.LateInitializeStringPtr(in.AvailabilityZone, cl.AvailabilityZone)
-	in.ClusterVersion = awsclients.LateInitializeStringPtr(in.ClusterVersion, cl.ClusterVersion)
-	in.ClusterSubnetGroupName = awsclients.LateInitializeStringPtr(in.ClusterSubnetGroupName, cl.ClusterSubnetGroupName)
-	in.DBName = awsclients.LateInitializeStringPtr(in.DBName, cl.DBName)
-	in.Encrypted = awsclients.LateInitializeBoolPtr(in.Encrypted, &cl.Encrypted)
-	in.EnhancedVPCRouting = awsclients.LateInitializeBoolPtr(in.EnhancedVPCRouting, &cl.EnhancedVpcRouting)
-	in.KMSKeyID = awsclients.LateInitializeStringPtr(in.KMSKeyID, cl.KmsKeyId)
-	in.MaintenanceTrackName = awsclients.LateInitializeStringPtr(in.MaintenanceTrackName, cl.MaintenanceTrackName)
-	in.ManualSnapshotRetentionPeriod = awsclients.LateInitializeInt32Ptr(in.ManualSnapshotRetentionPeriod, &cl.ManualSnapshotRetentionPeriod)
-	in.MasterUsername = awsclients.LateInitializeString(in.MasterUsername, cl.MasterUsername)
-	in.NodeType = awsclients.LateInitializeString(in.NodeType, cl.NodeType)
-	in.NumberOfNodes = awsclients.LateInitializeInt32Ptr(in.NumberOfNodes, &cl.NumberOfNodes)
-	in.PreferredMaintenanceWindow = awsclients.LateInitializeStringPtr(in.PreferredMaintenanceWindow, cl.PreferredMaintenanceWindow)
-	in.PubliclyAccessible = awsclients.LateInitializeBoolPtr(in.PubliclyAccessible, &cl.PubliclyAccessible)
-	in.SnapshotScheduleIdentifier = awsclients.LateInitializeStringPtr(in.SnapshotScheduleIdentifier, cl.SnapshotScheduleIdentifier)
+	in.AllowVersionUpgrade = pointer.LateInitialize(in.AllowVersionUpgrade, cl.AllowVersionUpgrade)
+	in.AutomatedSnapshotRetentionPeriod = pointer.LateInitialize(in.AutomatedSnapshotRetentionPeriod, cl.AutomatedSnapshotRetentionPeriod)
+	in.AvailabilityZone = pointer.LateInitialize(in.AvailabilityZone, cl.AvailabilityZone)
+	in.ClusterVersion = pointer.LateInitialize(in.ClusterVersion, cl.ClusterVersion)
+	in.ClusterSubnetGroupName = pointer.LateInitialize(in.ClusterSubnetGroupName, cl.ClusterSubnetGroupName)
+	in.DBName = pointer.LateInitialize(in.DBName, cl.DBName)
+	in.Encrypted = pointer.LateInitialize(in.Encrypted, cl.Encrypted)
+	in.EnhancedVPCRouting = pointer.LateInitialize(in.EnhancedVPCRouting, cl.EnhancedVpcRouting)
+	in.KMSKeyID = pointer.LateInitialize(in.KMSKeyID, cl.KmsKeyId)
+	in.MaintenanceTrackName = pointer.LateInitialize(in.MaintenanceTrackName, cl.MaintenanceTrackName)
+	in.ManualSnapshotRetentionPeriod = pointer.LateInitialize(in.ManualSnapshotRetentionPeriod, cl.ManualSnapshotRetentionPeriod)
+	in.MasterUsername = pointer.LateInitializeValueFromPtr(in.MasterUsername, cl.MasterUsername)
+	in.NodeType = pointer.LateInitializeValueFromPtr(in.NodeType, cl.NodeType)
+	in.NumberOfNodes = pointer.LateInitialize(in.NumberOfNodes, cl.NumberOfNodes)
+	in.PreferredMaintenanceWindow = pointer.LateInitialize(in.PreferredMaintenanceWindow, cl.PreferredMaintenanceWindow)
+	in.PubliclyAccessible = pointer.LateInitialize(in.PubliclyAccessible, cl.PubliclyAccessible)
+	in.SnapshotScheduleIdentifier = pointer.LateInitialize(in.SnapshotScheduleIdentifier, cl.SnapshotScheduleIdentifier)
 
 	// If ClusterType is not provided by the user then set it to it's default value.
 	// As redshift.Cluster type doesn't hold this info.
 	if in.ClusterType == nil {
-		if cl.NumberOfNodes > 1 {
+		numNodes := ptr.Deref(cl.NumberOfNodes, 0)
+		if numNodes > 1 {
 			in.ClusterType = aws.String("multi-node")
-		}
-		if cl.NumberOfNodes == 1 {
+		} else if numNodes == 1 {
 			in.ClusterType = aws.String("single-node")
 		}
 	}
 	if cl.Endpoint != nil {
-		in.Port = awsclients.LateInitializeInt32Ptr(in.Port, &cl.Endpoint.Port)
+		in.Port = pointer.LateInitialize(in.Port, cl.Endpoint.Port)
 	}
 	if cl.HsmStatus != nil {
-		in.HSMClientCertificateIdentifier = awsclients.LateInitializeStringPtr(in.HSMClientCertificateIdentifier, cl.HsmStatus.HsmClientCertificateIdentifier)
-		in.HSMConfigurationIdentifier = awsclients.LateInitializeStringPtr(in.HSMConfigurationIdentifier, cl.HsmStatus.HsmConfigurationIdentifier)
+		in.HSMClientCertificateIdentifier = pointer.LateInitialize(in.HSMClientCertificateIdentifier, cl.HsmStatus.HsmClientCertificateIdentifier)
+		in.HSMConfigurationIdentifier = pointer.LateInitialize(in.HSMConfigurationIdentifier, cl.HsmStatus.HsmConfigurationIdentifier)
 	}
 	if cl.ElasticIpStatus != nil {
-		in.ElasticIP = awsclients.LateInitializeStringPtr(in.ElasticIP, cl.ElasticIpStatus.ElasticIp)
+		in.ElasticIP = pointer.LateInitialize(in.ElasticIP, cl.ElasticIpStatus.ElasticIp)
 	}
 
 	if len(cl.ClusterSecurityGroups) != 0 {
@@ -129,7 +129,7 @@ func LateInitialize(in *v1alpha1.ClusterParameters, cl *redshifttypes.Cluster) {
 }
 
 // IsUpToDate checks whether there is a change in any of the modifiable fields.
-func IsUpToDate(p v1alpha1.ClusterParameters, cl redshifttypes.Cluster) (bool, error) { // nolint:gocyclo
+func IsUpToDate(p v1alpha1.ClusterParameters, cl redshifttypes.Cluster) (bool, error) {
 	// We need to check it explicitly as redshift.Cluster can have multiple ClusterParameterGroups
 	found := isClusterParameterGroupNameUpdated(p.ClusterParameterGroupName, cl.ClusterParameterGroups)
 
@@ -139,10 +139,11 @@ func IsUpToDate(p v1alpha1.ClusterParameters, cl redshifttypes.Cluster) (bool, e
 	}
 
 	// Since redshift.Cluster doesn't have a ClusterType field therefore determine its value based upon number of nodes.
-	if cl.NumberOfNodes > 1 && aws.ToString(p.ClusterType) != "multi-node" {
+	numNodes := ptr.Deref(cl.NumberOfNodes, 0)
+	if numNodes > 1 && aws.ToString(p.ClusterType) != "multi-node" {
 		return false, nil
 	}
-	if cl.NumberOfNodes == 1 && aws.ToString(p.ClusterType) != "single-node" {
+	if numNodes == 1 && aws.ToString(p.ClusterType) != "single-node" {
 		return false, nil
 	}
 
@@ -174,7 +175,7 @@ func CreatePatch(target *v1alpha1.ClusterParameters, in *redshifttypes.Cluster) 
 	initializeModifyandDeleteParameters(target, currentParams)
 	LateInitialize(currentParams, in)
 
-	jsonPatch, err := awsclients.CreateJSONPatch(currentParams, target)
+	jsonPatch, err := jsonpatch.CreateJSONPatch(currentParams, target)
 	if err != nil {
 		return nil, err
 	}
@@ -322,13 +323,13 @@ func GenerateDeleteClusterInput(p *v1alpha1.ClusterParameters, cid *string) *red
 		ClusterIdentifier:                   cid,
 		FinalClusterSnapshotIdentifier:      p.FinalClusterSnapshotIdentifier,
 		FinalClusterSnapshotRetentionPeriod: p.FinalClusterSnapshotRetentionPeriod,
-		SkipFinalClusterSnapshot:            aws.ToBool(p.SkipFinalClusterSnapshot),
+		SkipFinalClusterSnapshot:            p.SkipFinalClusterSnapshot,
 	}
 }
 
 // GenerateObservation is used to produce v1alpha1.ClusterObservation from
 // redshift.Cluster.
-func GenerateObservation(in redshifttypes.Cluster) v1alpha1.ClusterObservation { // nolint:gocyclo
+func GenerateObservation(in redshifttypes.Cluster) v1alpha1.ClusterObservation { //nolint:gocyclo
 	o := v1alpha1.ClusterObservation{
 		ClusterPublicKey:                       aws.ToString(in.ClusterPublicKey),
 		ClusterRevisionNumber:                  aws.ToString(in.ClusterRevisionNumber),
@@ -410,19 +411,19 @@ func GenerateObservation(in redshifttypes.Cluster) v1alpha1.ClusterObservation {
 	if in.ClusterSnapshotCopyStatus != nil {
 		o.ClusterSnapshotCopyStatus = v1alpha1.ClusterSnapshotCopyStatus{
 			DestinationRegion:             aws.ToString(in.ClusterSnapshotCopyStatus.DestinationRegion),
-			ManualSnapshotRetentionPeriod: in.ClusterSnapshotCopyStatus.ManualSnapshotRetentionPeriod,
-			RetentionPeriod:               in.ClusterSnapshotCopyStatus.RetentionPeriod,
+			ManualSnapshotRetentionPeriod: ptr.Deref(in.ClusterSnapshotCopyStatus.ManualSnapshotRetentionPeriod, 0),
+			RetentionPeriod:               ptr.Deref(in.ClusterSnapshotCopyStatus.RetentionPeriod, 0),
 			SnapshotCopyGrantName:         aws.ToString(in.ClusterSnapshotCopyStatus.SnapshotCopyGrantName),
 		}
 	}
 	if in.DataTransferProgress != nil {
 		o.DataTransferProgress = v1alpha1.DataTransferProgress{
 			CurrentRateInMegaBytesPerSecond:    int(aws.ToFloat64(in.DataTransferProgress.CurrentRateInMegaBytesPerSecond)),
-			DataTransferredInMegaBytes:         in.DataTransferProgress.DataTransferredInMegaBytes,
+			DataTransferredInMegaBytes:         ptr.Deref(in.DataTransferProgress.DataTransferredInMegaBytes, 0),
 			ElapsedTimeInSeconds:               aws.ToInt64(in.DataTransferProgress.ElapsedTimeInSeconds),
 			EstimatedTimeToCompletionInSeconds: aws.ToInt64(in.DataTransferProgress.EstimatedTimeToCompletionInSeconds),
 			Status:                             aws.ToString(in.DataTransferProgress.Status),
-			TotalDataInMegaBytes:               in.DataTransferProgress.TotalDataInMegaBytes,
+			TotalDataInMegaBytes:               ptr.Deref(in.DataTransferProgress.TotalDataInMegaBytes, 0),
 		}
 	}
 	if in.ElasticIpStatus != nil {
@@ -434,7 +435,7 @@ func GenerateObservation(in redshifttypes.Cluster) v1alpha1.ClusterObservation {
 	if in.Endpoint != nil {
 		o.Endpoint = v1alpha1.Endpoint{
 			Address: aws.ToString(in.Endpoint.Address),
-			Port:    in.Endpoint.Port,
+			Port:    ptr.Deref(in.Endpoint.Port, 0),
 		}
 	}
 	if in.HsmStatus != nil {

@@ -59,19 +59,43 @@ func TestCreatePatch(t *testing.T) {
 				patch: &v1alpha1.ResourceRecordSetParameters{},
 			},
 		},
+		"SameFieldsWithMultiValueAnswer": {
+			args: args{
+				rrSet: route53types.ResourceRecordSet{
+					Name:             &resourceRecordSetName,
+					TTL:              &ttl,
+					MultiValueAnswer: aws.Bool(true),
+					SetIdentifier:    aws.String("id"),
+				},
+				p: v1alpha1.ResourceRecordSetParameters{
+					TTL:              &ttl,
+					MultiValueAnswer: aws.Bool(true),
+					SetIdentifier:    aws.String("id"),
+				},
+			},
+			want: want{
+				patch: &v1alpha1.ResourceRecordSetParameters{},
+			},
+		},
 		"DifferentFields": {
 			args: args{
 				rrSet: route53types.ResourceRecordSet{
-					Name: &resourceRecordSetName,
-					TTL:  &ttl,
+					Name:             &resourceRecordSetName,
+					TTL:              &ttl,
+					MultiValueAnswer: aws.Bool(true),
+					SetIdentifier:    aws.String("id"),
 				},
 				p: v1alpha1.ResourceRecordSetParameters{
-					TTL: &ttl2,
+					TTL:              &ttl2,
+					MultiValueAnswer: aws.Bool(false),
+					SetIdentifier:    aws.String("id2"),
 				},
 			},
 			want: want{
 				patch: &v1alpha1.ResourceRecordSetParameters{
-					TTL: &ttl2,
+					TTL:              &ttl2,
+					MultiValueAnswer: aws.Bool(false),
+					SetIdentifier:    aws.String("id2"),
 				},
 			},
 		},
@@ -183,6 +207,76 @@ func TestIsUpToDate(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			got, _ := IsUpToDate(tc.args.p, tc.args.rrSet)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("r: -want, +got:\n%s", diff)
+			}
+		})
+	}
+
+}
+
+func TestLateInitialize(t *testing.T) {
+	type args struct {
+		rrSet route53types.ResourceRecordSet
+		p     v1alpha1.ResourceRecordSetParameters
+		wantP v1alpha1.ResourceRecordSetParameters
+	}
+
+	cases := map[string]struct {
+		args args
+		want bool
+	}{
+		"KeepOriginAliasTarget": {
+			args: args{
+				rrSet: route53types.ResourceRecordSet{
+					Name: aws.String("test.com."),
+					AliasTarget: &route53types.AliasTarget{
+						HostedZoneId:         aws.String("other"),
+						DNSName:              aws.String("other"),
+						EvaluateTargetHealth: true,
+					},
+				},
+				p: v1alpha1.ResourceRecordSetParameters{
+					AliasTarget: &v1alpha1.AliasTarget{
+						HostedZoneID:         "Z18D5FSROUN6",
+						DNSName:              "dualstack.test.elb.us-west-2.amazonaws.com.",
+						EvaluateTargetHealth: true,
+					},
+				},
+				wantP: v1alpha1.ResourceRecordSetParameters{
+					AliasTarget: &v1alpha1.AliasTarget{
+						HostedZoneID:         "Z18D5FSROUN6",
+						DNSName:              "dualstack.test.elb.us-west-2.amazonaws.com.",
+						EvaluateTargetHealth: true,
+					},
+				},
+			},
+		},
+		"FillAliasTarget": {
+			args: args{
+				rrSet: route53types.ResourceRecordSet{
+					Name: aws.String("test.com."),
+					AliasTarget: &route53types.AliasTarget{
+						HostedZoneId:         aws.String("Z18D5FSROUN6"),
+						DNSName:              aws.String("dualstack.test.elb.us-west-2.amazonaws.com."),
+						EvaluateTargetHealth: true,
+					},
+				},
+				p: v1alpha1.ResourceRecordSetParameters{},
+				wantP: v1alpha1.ResourceRecordSetParameters{
+					AliasTarget: &v1alpha1.AliasTarget{
+						HostedZoneID:         "Z18D5FSROUN6",
+						DNSName:              "dualstack.test.elb.us-west-2.amazonaws.com.",
+						EvaluateTargetHealth: true,
+					},
+				},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			LateInitialize(&tc.args.p, &tc.args.rrSet)
+			if diff := cmp.Diff(tc.args.wantP, tc.args.p); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

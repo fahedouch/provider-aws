@@ -45,6 +45,8 @@ type AttributeDefinition struct {
 
 // +kubebuilder:skipversion
 type AutoScalingSettingsDescription struct {
+	AutoScalingDisabled *bool `json:"autoScalingDisabled,omitempty"`
+
 	AutoScalingRoleARN *string `json:"autoScalingRoleARN,omitempty"`
 
 	MaximumUnits *int64 `json:"maximumUnits,omitempty"`
@@ -54,9 +56,21 @@ type AutoScalingSettingsDescription struct {
 
 // +kubebuilder:skipversion
 type AutoScalingSettingsUpdate struct {
+	AutoScalingDisabled *bool `json:"autoScalingDisabled,omitempty"`
+
 	MaximumUnits *int64 `json:"maximumUnits,omitempty"`
 
 	MinimumUnits *int64 `json:"minimumUnits,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type AutoScalingTargetTrackingScalingPolicyConfigurationDescription struct {
+	DisableScaleIn *bool `json:"disableScaleIn,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type AutoScalingTargetTrackingScalingPolicyConfigurationUpdate struct {
+	DisableScaleIn *bool `json:"disableScaleIn,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -204,8 +218,11 @@ type DeleteReplicationGroupMemberAction struct {
 // +kubebuilder:skipversion
 type Endpoint struct {
 	Address *string `json:"address,omitempty"`
+}
 
-	CachePeriodInMinutes *int64 `json:"cachePeriodInMinutes,omitempty"`
+// +kubebuilder:skipversion
+type ExpectedAttributeValue struct {
+	Exists *bool `json:"exists,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -326,6 +343,20 @@ type GlobalTable_SDK struct {
 }
 
 // +kubebuilder:skipversion
+type ImportSummary struct {
+	TableARN *string `json:"tableARN,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ImportTableDescription struct {
+	ProcessedSizeBytes *int64 `json:"processedSizeBytes,omitempty"`
+
+	TableARN *string `json:"tableARN,omitempty"`
+
+	TableID *string `json:"tableID,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type KeySchemaElement struct {
 	AttributeName *string `json:"attributeName,omitempty"`
 
@@ -383,6 +414,11 @@ type PointInTimeRecoveryDescription struct {
 	EarliestRestorableDateTime *metav1.Time `json:"earliestRestorableDateTime,omitempty"`
 
 	LatestRestorableDateTime *metav1.Time `json:"latestRestorableDateTime,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type PointInTimeRecoverySpecification struct {
+	PointInTimeRecoveryEnabled *bool `json:"pointInTimeRecoveryEnabled,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -510,7 +546,12 @@ type ReplicaGlobalSecondaryIndexSettingsUpdate struct {
 // +kubebuilder:skipversion
 type ReplicaSettingsDescription struct {
 	RegionName *string `json:"regionName,omitempty"`
-	// Contains the details for the read/write capacity mode.
+	// Contains the details for the read/write capacity mode. This page talks about
+	// PROVISIONED and PAY_PER_REQUEST billing modes. For more information about
+	// these modes, see Read/write capacity mode (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadWriteCapacityMode.html).
+	//
+	// You may need to switch to on-demand mode at least once in order to return
+	// a BillingModeSummary response.
 	ReplicaBillingModeSummary *BillingModeSummary `json:"replicaBillingModeSummary,omitempty"`
 
 	ReplicaProvisionedReadCapacityUnits *int64 `json:"replicaProvisionedReadCapacityUnits,omitempty"`
@@ -641,15 +682,44 @@ type TableClassSummary struct {
 }
 
 // +kubebuilder:skipversion
+type TableCreationParameters struct {
+	AttributeDefinitions []*AttributeDefinition `json:"attributeDefinitions,omitempty"`
+
+	BillingMode *string `json:"billingMode,omitempty"`
+
+	GlobalSecondaryIndexes []*GlobalSecondaryIndex `json:"globalSecondaryIndexes,omitempty"`
+
+	KeySchema []*KeySchemaElement `json:"keySchema,omitempty"`
+	// Represents the provisioned throughput settings for a specified table or index.
+	// The settings can be modified using the UpdateTable operation.
+	//
+	// For current minimum and maximum provisioned throughput values, see Service,
+	// Account, and Table Quotas (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Limits.html)
+	// in the Amazon DynamoDB Developer Guide.
+	ProvisionedThroughput *ProvisionedThroughput `json:"provisionedThroughput,omitempty"`
+	// Represents the settings used to enable server-side encryption.
+	SSESpecification *SSESpecification `json:"sseSpecification,omitempty"`
+
+	TableName *string `json:"tableName,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type TableDescription struct {
 	// Contains details of a table archival operation.
 	ArchivalSummary *ArchivalSummary `json:"archivalSummary,omitempty"`
 
 	AttributeDefinitions []*AttributeDefinition `json:"attributeDefinitions,omitempty"`
-	// Contains the details for the read/write capacity mode.
+	// Contains the details for the read/write capacity mode. This page talks about
+	// PROVISIONED and PAY_PER_REQUEST billing modes. For more information about
+	// these modes, see Read/write capacity mode (https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadWriteCapacityMode.html).
+	//
+	// You may need to switch to on-demand mode at least once in order to return
+	// a BillingModeSummary response.
 	BillingModeSummary *BillingModeSummary `json:"billingModeSummary,omitempty"`
 
 	CreationDateTime *metav1.Time `json:"creationDateTime,omitempty"`
+
+	DeletionProtectionEnabled *bool `json:"deletionProtectionEnabled,omitempty"`
 
 	GlobalSecondaryIndexes []*GlobalSecondaryIndexDescription `json:"globalSecondaryIndexes,omitempty"`
 

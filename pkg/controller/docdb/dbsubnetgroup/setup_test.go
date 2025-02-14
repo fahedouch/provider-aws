@@ -20,21 +20,20 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/docdb"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/docdb/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/docdb/fake"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -74,13 +73,13 @@ func withExternalName(value string) docDBModifier {
 
 func withDBSubnetGroupName(value string) docDBModifier {
 	return func(o *svcapitypes.DBSubnetGroup) {
-		o.Status.AtProvider.DBSubnetGroupName = awsclient.String(value)
+		o.Status.AtProvider.DBSubnetGroupName = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
 func withDescription(value string) docDBModifier {
 	return func(o *svcapitypes.DBSubnetGroup) {
-		o.Spec.ForProvider.DBSubnetGroupDescription = awsclient.String(value)
+		o.Spec.ForProvider.DBSubnetGroupDescription = pointer.ToOrNilIfZeroValue(value)
 	}
 }
 
@@ -88,7 +87,7 @@ func withSubnetIds(values ...string) docDBModifier {
 	return func(o *svcapitypes.DBSubnetGroup) {
 		strArr := make([]*string, len(values))
 		for i, val := range values {
-			strArr[i] = awsclient.String(val)
+			strArr[i] = pointer.ToOrNilIfZeroValue(val)
 		}
 		o.Spec.ForProvider.SubnetIDs = strArr
 	}
@@ -99,7 +98,7 @@ func withSubnetIDStatus(values ...string) docDBModifier {
 		subnetArr := make([]*svcapitypes.Subnet, len(values))
 		for i, val := range values {
 			subnetArr[i] = &svcapitypes.Subnet{
-				SubnetIdentifier: awsclient.String(val),
+				SubnetIdentifier: pointer.ToOrNilIfZeroValue(val),
 			}
 		}
 		o.Status.AtProvider.Subnets = subnetArr
@@ -131,7 +130,7 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBSubnetGroupsOutput{
 							DBSubnetGroups: []*docdb.DBSubnetGroup{
 								{
-									DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+									DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 								},
 							},
 						}, nil
@@ -160,7 +159,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBSubnetGroupsInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -179,8 +178,8 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBSubnetGroupsOutput{
 							DBSubnetGroups: []*docdb.DBSubnetGroup{
 								{
-									DBSubnetGroupName:        awsclient.String(testDBSubnetGroupName),
-									DBSubnetGroupDescription: awsclient.String(testDescription),
+									DBSubnetGroupName:        pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
+									DBSubnetGroupDescription: pointer.ToOrNilIfZeroValue(testDescription),
 								},
 							},
 						}, nil
@@ -208,7 +207,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBSubnetGroupsInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -222,9 +221,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBSubnetGroupsOutput{
 							DBSubnetGroups: []*docdb.DBSubnetGroup{
 								{
-									DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+									DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 									Subnets: []*docdb.Subnet{
-										{SubnetIdentifier: awsclient.String(testSubnetID)},
+										{SubnetIdentifier: pointer.ToOrNilIfZeroValue(testSubnetID)},
 									},
 								},
 							},
@@ -257,7 +256,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBSubnetGroupsInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -276,9 +275,9 @@ func TestObserve(t *testing.T) {
 						return &docdb.DescribeDBSubnetGroupsOutput{
 							DBSubnetGroups: []*docdb.DBSubnetGroup{
 								{
-									DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+									DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 									Subnets: []*docdb.Subnet{
-										{SubnetIdentifier: awsclient.String(testSubnetID)},
+										{SubnetIdentifier: pointer.ToOrNilIfZeroValue(testSubnetID)},
 									},
 								},
 							},
@@ -308,7 +307,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBSubnetGroupsInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -339,7 +338,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBSubnetGroupsInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -374,7 +373,7 @@ func TestObserve(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DescribeDBSubnetGroupsInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -398,7 +397,7 @@ func TestObserve(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -423,7 +422,7 @@ func TestCreate(t *testing.T) {
 					MockCreateDBSubnetGroupWithContext: func(c context.Context, cdgi *docdb.CreateDBSubnetGroupInput, o []request.Option) (*docdb.CreateDBSubnetGroupOutput, error) {
 						return &docdb.CreateDBSubnetGroupOutput{
 							DBSubnetGroup: &docdb.DBSubnetGroup{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						}, nil
 					},
@@ -445,7 +444,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.CreateDBSubnetGroupInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -477,7 +476,7 @@ func TestCreate(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.CreateDBSubnetGroupInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -501,7 +500,7 @@ func TestCreate(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, o); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -542,7 +541,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DeleteDBSubnetGroupInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -573,7 +572,7 @@ func TestDelete(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.DeleteDBSubnetGroupInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -586,7 +585,7 @@ func TestDelete(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			opts := []option{setupExternal}
 			e := newExternal(tc.args.kube, tc.args.docdb, opts)
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
@@ -594,7 +593,7 @@ func TestDelete(t *testing.T) {
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})
@@ -619,7 +618,7 @@ func TestModify(t *testing.T) {
 					MockModifyDBSubnetGroupWithContext: func(c context.Context, mdgi *docdb.ModifyDBSubnetGroupInput, o []request.Option) (*docdb.ModifyDBSubnetGroupOutput, error) {
 						return &docdb.ModifyDBSubnetGroupOutput{
 							DBSubnetGroup: &docdb.DBSubnetGroup{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						}, nil
 					},
@@ -646,8 +645,8 @@ func TestModify(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBSubnetGroupInput{
-								DBSubnetGroupName:        awsclient.String(testDBSubnetGroupName),
-								DBSubnetGroupDescription: awsclient.String(testDescription),
+								DBSubnetGroupName:        pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
+								DBSubnetGroupDescription: pointer.ToOrNilIfZeroValue(testDescription),
 							},
 						},
 					},
@@ -665,9 +664,9 @@ func TestModify(t *testing.T) {
 					MockModifyDBSubnetGroupWithContext: func(c context.Context, mdgi *docdb.ModifyDBSubnetGroupInput, o []request.Option) (*docdb.ModifyDBSubnetGroupOutput, error) {
 						return &docdb.ModifyDBSubnetGroupOutput{
 							DBSubnetGroup: &docdb.DBSubnetGroup{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 								Subnets: []*docdb.Subnet{
-									{SubnetIdentifier: awsclient.String(testSubnetID)},
+									{SubnetIdentifier: pointer.ToOrNilIfZeroValue(testSubnetID)},
 								},
 							},
 						}, nil
@@ -695,9 +694,9 @@ func TestModify(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBSubnetGroupInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 								SubnetIds: []*string{
-									awsclient.String(testSubnetID),
+									pointer.ToOrNilIfZeroValue(testSubnetID),
 								},
 							},
 						},
@@ -734,7 +733,7 @@ func TestModify(t *testing.T) {
 						{
 							Ctx: context.Background(),
 							I: &docdb.ModifyDBSubnetGroupInput{
-								DBSubnetGroupName: awsclient.String(testDBSubnetGroupName),
+								DBSubnetGroupName: pointer.ToOrNilIfZeroValue(testDBSubnetGroupName),
 							},
 						},
 					},
@@ -758,7 +757,7 @@ func TestModify(t *testing.T) {
 			if diff := cmp.Diff(tc.want.result, res, test.EquateConditions()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called); diff != "" {
+			if diff := cmp.Diff(tc.want.docdb, tc.args.docdb.Called, cmpopts.IgnoreInterfaces(struct{ context.Context }{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

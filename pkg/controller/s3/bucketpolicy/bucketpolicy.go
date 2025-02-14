@@ -22,23 +22,25 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/s3/v1alpha3"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/s3"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -60,19 +62,31 @@ func SetupBucketPolicy(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(),
+			newClientFn: s3.NewBucketPolicyClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1alpha3.BucketPolicyGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1alpha3.BucketPolicy{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1alpha3.BucketPolicyGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(),
-				newClientFn: s3.NewBucketPolicyClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -85,7 +99,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.Parameters.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.Parameters.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -110,13 +124,13 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		if s3.IsErrorBucketNotFound(err) {
 			return managed.ExternalObservation{}, nil
 		}
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(s3.IsErrorPolicyNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(s3.IsErrorPolicyNotFound, err), errGet)
 	}
 
 	policyData, err := e.formatBucketPolicy(cr)
 
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(s3.IsErrorPolicyNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(s3.IsErrorPolicyNotFound, err), errGet)
 	}
 
 	cr.SetConditions(xpv1.Available())
@@ -162,12 +176,12 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 
 	policyData, err := e.formatBucketPolicy(cr)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errAttach)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errAttach)
 	}
 
 	policyString := *policyData
-	_, err = e.client.PutBucketPolicy(ctx, &awss3.PutBucketPolicyInput{Bucket: cr.Spec.Parameters.BucketName, Policy: awsclient.String(policyString)})
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errAttach)
+	_, err = e.client.PutBucketPolicy(ctx, &awss3.PutBucketPolicyInput{Bucket: cr.Spec.Parameters.BucketName, Policy: pointer.ToOrNilIfZeroValue(policyString)})
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errAttach)
 }
 
 // Update patches the existing policy for the bucket with the policy in the request body
@@ -179,24 +193,29 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 
 	policyData, err := e.formatBucketPolicy(cr)
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
-	_, err = e.client.PutBucketPolicy(ctx, &awss3.PutBucketPolicyInput{Bucket: cr.Spec.Parameters.BucketName, Policy: awsclient.String(*policyData)})
-	return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+	_, err = e.client.PutBucketPolicy(ctx, &awss3.PutBucketPolicyInput{Bucket: cr.Spec.Parameters.BucketName, Policy: pointer.ToOrNilIfZeroValue(*policyData)})
+	return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 }
 
 // Delete removes the existing policy for a bucket
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1alpha3.BucketPolicy)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 	cr.SetConditions(xpv1.Deleting())
 	_, err := e.client.DeleteBucketPolicy(ctx, &awss3.DeleteBucketPolicyInput{Bucket: cr.Spec.Parameters.BucketName})
 	if s3.IsErrorBucketNotFound(err) {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 
-	return awsclient.Wrap(resource.Ignore(s3.IsErrorPolicyNotFound, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(s3.IsErrorPolicyNotFound, err), errDelete)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

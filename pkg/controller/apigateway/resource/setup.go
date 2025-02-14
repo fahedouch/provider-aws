@@ -33,8 +33,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/apigateway/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	apigwclient "github.com/crossplane-contrib/provider-aws/pkg/clients/apigateway"
+	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupResource adds a controller that reconciles Resource.
@@ -55,17 +58,30 @@ func SetupResource(mgr ctrl.Manager, o controller.Options) error {
 			e.preCreate = c.preCreate
 		},
 	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.ResourceGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Resource{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.ResourceGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithInitializers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name)))))
+		Complete(r)
 }
 
 type custom struct {
@@ -89,7 +105,7 @@ func (c *custom) preCreate(ctx context.Context, cr *svcapitypes.Resource, obj *s
 func (c *custom) preUpdate(ctx context.Context, cr *svcapitypes.Resource, obj *svcsdk.UpdateResourceInput) error {
 	in := &svcsdk.GetResourceInput{
 		RestApiId:  cr.Spec.ForProvider.RestAPIID,
-		ResourceId: aws.String(meta.GetExternalName(cr)),
+		ResourceId: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	}
 
 	cur := &svcapitypes.ResourceParameters{
@@ -115,7 +131,7 @@ func (c *custom) preUpdate(ctx context.Context, cr *svcapitypes.Resource, obj *s
 
 func preObserve(_ context.Context, cr *svcapitypes.Resource, obj *svcsdk.GetResourceInput) error {
 	obj.RestApiId = cr.Spec.ForProvider.RestAPIID
-	obj.ResourceId = aws.String(meta.GetExternalName(cr))
+	obj.ResourceId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -132,36 +148,37 @@ func postCreate(_ context.Context, cr *svcapitypes.Resource, resp *svcsdk.Resour
 		return managed.ExternalCreation{}, err
 	}
 
-	meta.SetExternalName(cr, aws.StringValue(resp.Id))
+	meta.SetExternalName(cr, pointer.StringValue(resp.Id))
 	return cre, nil
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Resource, obj *svcsdk.DeleteResourceInput) (bool, error) {
-	obj.ResourceId = aws.String(meta.GetExternalName(cr))
+	obj.ResourceId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.RestApiId = cr.Spec.ForProvider.RestAPIID
 
 	return false, nil
 }
 
 func lateInitialize(cr *svcapitypes.ResourceParameters, cur *svcsdk.Resource) error {
-	cr.PathPart = aws.LateInitializeStringPtr(cr.PathPart, cur.PathPart)
-	cr.ParentResourceID = aws.LateInitializeStringPtr(cr.ParentResourceID, cur.ParentId)
+	cr.PathPart = pointer.LateInitialize(cr.PathPart, cur.PathPart)
+	cr.ParentResourceID = pointer.LateInitialize(cr.ParentResourceID, cur.ParentId)
 	return nil
 }
 
-func isUpToDate(cr *svcapitypes.Resource, cur *svcsdk.Resource) (bool, error) {
-	patchJSON, err := aws.CreateJSONPatch(cr.Spec.ForProvider, cur)
+func isUpToDate(_ context.Context, cr *svcapitypes.Resource, cur *svcsdk.Resource) (bool, string, error) {
+	patchJSON, err := jsonpatch.CreateJSONPatch(cr.Spec.ForProvider, cur)
 	if err != nil {
-		return true, errors.Wrap(err, "error checking up to date")
+		return true, "", errors.Wrap(err, "error checking up to date")
 	}
 
 	patch := &svcapitypes.ResourceParameters{}
 	if err := json.Unmarshal(patchJSON, &patch); err != nil {
-		return true, errors.Wrap(err, "error checking up to date")
+		return true, "", errors.Wrap(err, "error checking up to date")
 	}
 
-	return cmp.Equal(&svcapitypes.ResourceParameters{}, patch,
+	diff := cmp.Diff(&svcapitypes.ResourceParameters{}, patch,
 		cmpopts.IgnoreTypes([]xpv1.Reference{}, []xpv1.Selector{}),
 		cmpopts.IgnoreFields(svcapitypes.ResourceParameters{}, "Region"),
-	), nil
+	)
+	return diff == "", diff, nil
 }

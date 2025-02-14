@@ -18,9 +18,6 @@ import (
 
 	svcsdk "github.com/aws/aws-sdk-go/service/kinesis"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/kinesis/kinesisiface"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -28,11 +25,14 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/kinesis/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupStream adds a controller that reconciles Stream.
@@ -56,27 +56,41 @@ func SetupStream(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.StreamGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.Stream{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.StreamGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.Stream, obj *svcsdk.DeleteStreamInput) (bool, error) {
 	obj.EnforceConsumerDeletion = cr.Spec.ForProvider.EnforceConsumerDeletion
-	obj.StreamName = awsclients.String(meta.GetExternalName(cr))
+	obj.StreamName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Stream, obj *svcsdk.DescribeStreamInput) error {
-	obj.StreamName = awsclients.String(meta.GetExternalName(cr))
+	obj.StreamName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -85,7 +99,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Stream, obj *svcsdk.Describe
 		return managed.ExternalObservation{}, err
 	}
 
-	switch awsclients.StringValue(obj.StreamDescription.StreamStatus) {
+	switch pointer.StringValue(obj.StreamDescription.StreamStatus) {
 	case string(svcapitypes.StreamStatus_SDK_ACTIVE):
 		cr.SetConditions(xpv1.Available())
 	case string(svcapitypes.StreamStatus_SDK_CREATING):
@@ -97,7 +111,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Stream, obj *svcsdk.Describe
 	cr.Status.AtProvider = GenerateObservation(obj.StreamDescription)
 
 	obs.ConnectionDetails = managed.ConnectionDetails{
-		"arn":  []byte(awsclients.StringValue(obj.StreamDescription.StreamARN)),
+		"arn":  []byte(pointer.StringValue(obj.StreamDescription.StreamARN)),
 		"name": []byte(meta.GetExternalName(cr)),
 	}
 
@@ -105,7 +119,7 @@ func postObserve(_ context.Context, cr *svcapitypes.Stream, obj *svcsdk.Describe
 }
 
 func preCreate(_ context.Context, cr *svcapitypes.Stream, obj *svcsdk.CreateStreamInput) error {
-	obj.StreamName = awsclients.String(meta.GetExternalName(cr))
+	obj.StreamName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -113,34 +127,33 @@ func postCreate(_ context.Context, cr *svcapitypes.Stream, obj *svcsdk.CreateStr
 	if err != nil {
 		return managed.ExternalCreation{}, err
 	}
-	meta.SetExternalName(cr, cr.Name)
-	return managed.ExternalCreation{ExternalNameAssigned: true}, nil
+	return managed.ExternalCreation{}, nil
 }
 
 type updater struct {
 	client svcsdkapi.KinesisAPI
 }
 
-func (u *updater) isUpToDate(cr *svcapitypes.Stream, obj *svcsdk.DescribeStreamOutput) (bool, error) { // nolint:gocyclo
+func (u *updater) isUpToDate(_ context.Context, cr *svcapitypes.Stream, obj *svcsdk.DescribeStreamOutput) (bool, string, error) { //nolint:gocyclo
 
 	// ResourceInUseException: Stream example-stream not ACTIVE, instead in state CREATING
-	if awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+	if pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 		// filter activeShards
 		number, err := u.ActiveShards(cr)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
 
-		if awsclients.Int64Value(cr.Spec.ForProvider.ShardCount) != number {
-			return false, nil
+		if pointer.Int64Value(cr.Spec.ForProvider.ShardCount) != number {
+			return false, "", nil
 		}
 
-		if awsclients.Int64Value(cr.Spec.ForProvider.RetentionPeriodHours) != awsclients.Int64Value(obj.StreamDescription.RetentionPeriodHours) {
-			return false, nil
+		if pointer.Int64Value(cr.Spec.ForProvider.RetentionPeriodHours) != pointer.Int64Value(obj.StreamDescription.RetentionPeriodHours) {
+			return false, "", nil
 		}
 
-		if awsclients.StringValue(cr.Spec.ForProvider.KMSKeyARN) != awsclients.StringValue(obj.StreamDescription.KeyId) {
-			return false, nil
+		if pointer.StringValue(cr.Spec.ForProvider.KMSKeyARN) != pointer.StringValue(obj.StreamDescription.KeyId) {
+			return false, "", nil
 		}
 
 		// Prevent an out of range panic when enhanced metrics
@@ -151,100 +164,95 @@ func (u *updater) isUpToDate(cr *svcapitypes.Stream, obj *svcsdk.DescribeStreamO
 
 		createKey, deleteKey := DifferenceShardLevelMetrics(cr.Spec.ForProvider.EnhancedMetrics[0].ShardLevelMetrics, obj.StreamDescription.EnhancedMonitoring[0].ShardLevelMetrics)
 		if len(createKey) != 0 || len(deleteKey) != 0 {
-			return false, nil
+			return false, "", nil
 		}
 
 		objTags, err := u.ListTags(cr)
 		if err != nil &&
 			objTags == nil {
-			return false, err
+			return false, "", err
 		}
 		addTags, removeTags := DiffTags(cr.Spec.ForProvider.Tags, objTags.Tags)
 
 		if len(addTags) != 0 || len(removeTags) != 0 {
-			return false, nil
+			return false, "", nil
 		}
 
 	}
 
-	return true, nil
+	return true, "", nil
 }
 
-func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) { // nolint:gocyclo
-	cr, ok := mg.(*svcapitypes.Stream)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
-
+func (u *updater) update(ctx context.Context, cr *svcapitypes.Stream) (managed.ExternalUpdate, error) { //nolint:gocyclo
 	// we need information from stream for decisions
 	obj, err := u.client.DescribeStreamWithContext(ctx, &svcsdk.DescribeStreamInput{
-		StreamName: &cr.Name,
+		StreamName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclients.Wrap(err, errCreate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errCreate)
 	}
 
 	// we need information about activeShards for decision
 	number, err := u.ActiveShards(cr)
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
-	if awsclients.Int64Value(cr.Spec.ForProvider.ShardCount) != number &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+	if pointer.Int64Value(cr.Spec.ForProvider.ShardCount) != number &&
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 		scalingType := svcsdk.ScalingTypeUniformScaling
 		if _, err := u.client.UpdateShardCountWithContext(ctx, &svcsdk.UpdateShardCountInput{
-			StreamName:       awsclients.String(meta.GetExternalName(cr)),
+			StreamName:       pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			TargetShardCount: cr.Spec.ForProvider.ShardCount,
 			ScalingType:      &scalingType,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
 	}
 
-	if awsclients.Int64Value(cr.Spec.ForProvider.RetentionPeriodHours) > awsclients.Int64Value(obj.StreamDescription.RetentionPeriodHours) &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+	if pointer.Int64Value(cr.Spec.ForProvider.RetentionPeriodHours) > pointer.Int64Value(obj.StreamDescription.RetentionPeriodHours) &&
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 		if _, err := u.client.IncreaseStreamRetentionPeriodWithContext(ctx, &svcsdk.IncreaseStreamRetentionPeriodInput{
-			StreamName:           awsclients.String(meta.GetExternalName(cr)),
+			StreamName:           pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			RetentionPeriodHours: cr.Spec.ForProvider.RetentionPeriodHours,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
 	}
 
-	if awsclients.Int64Value(cr.Spec.ForProvider.RetentionPeriodHours) < awsclients.Int64Value(obj.StreamDescription.RetentionPeriodHours) &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+	if pointer.Int64Value(cr.Spec.ForProvider.RetentionPeriodHours) < pointer.Int64Value(obj.StreamDescription.RetentionPeriodHours) &&
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 		if _, err := u.client.DecreaseStreamRetentionPeriodWithContext(ctx, &svcsdk.DecreaseStreamRetentionPeriodInput{
-			StreamName:           awsclients.String(meta.GetExternalName(cr)),
+			StreamName:           pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			RetentionPeriodHours: cr.Spec.ForProvider.RetentionPeriodHours,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
 	}
 
 	if cr.Spec.ForProvider.KMSKeyARN != nil &&
-		awsclients.StringValue(obj.StreamDescription.EncryptionType) == svcsdk.EncryptionTypeNone &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+		pointer.StringValue(obj.StreamDescription.EncryptionType) == svcsdk.EncryptionTypeNone &&
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 		kmsType := svcsdk.EncryptionTypeKms
 		if _, err := u.client.StartStreamEncryptionWithContext(ctx, &svcsdk.StartStreamEncryptionInput{
 			EncryptionType: &kmsType,
 			KeyId:          cr.Spec.ForProvider.KMSKeyARN,
-			StreamName:     awsclients.String(meta.GetExternalName(cr)),
+			StreamName:     pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
 	}
 
 	if cr.Spec.ForProvider.KMSKeyARN == nil &&
-		awsclients.StringValue(obj.StreamDescription.EncryptionType) == svcsdk.EncryptionTypeKms &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+		pointer.StringValue(obj.StreamDescription.EncryptionType) == svcsdk.EncryptionTypeKms &&
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 		// The quirk about this API is that, when we are disabling the StreamEncryption
 		// We need to pass in that old KMS Key Id that was being used for Encryption and
 		// We also need to pass in the type of Encryption we were using - i.e. KMS as that
@@ -256,9 +264,9 @@ func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.Exte
 		if _, err := u.client.StopStreamEncryptionWithContext(ctx, &svcsdk.StopStreamEncryptionInput{
 			EncryptionType: obj.StreamDescription.EncryptionType,
 			KeyId:          obj.StreamDescription.KeyId,
-			StreamName:     awsclients.String(meta.GetExternalName(cr)),
+			StreamName:     pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
@@ -272,26 +280,26 @@ func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.Exte
 
 	enableMetrics, disableMetrics := DifferenceShardLevelMetrics(cr.Spec.ForProvider.EnhancedMetrics[0].ShardLevelMetrics, obj.StreamDescription.EnhancedMonitoring[0].ShardLevelMetrics)
 	if len(enableMetrics) != 0 &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 
 		if _, err := u.client.EnableEnhancedMonitoringWithContext(ctx, &svcsdk.EnableEnhancedMonitoringInput{
 			ShardLevelMetrics: cr.Spec.ForProvider.EnhancedMetrics[0].ShardLevelMetrics,
-			StreamName:        awsclients.String(meta.GetExternalName(cr)),
+			StreamName:        pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
 	}
 
 	if len(disableMetrics) != 0 &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 
 		if _, err := u.client.DisableEnhancedMonitoringWithContext(ctx, &svcsdk.DisableEnhancedMonitoringInput{
 			ShardLevelMetrics: obj.StreamDescription.EnhancedMonitoring[0].ShardLevelMetrics,
-			StreamName:        awsclients.String(meta.GetExternalName(cr)),
+			StreamName:        pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
@@ -300,29 +308,29 @@ func (u *updater) update(ctx context.Context, mg resource.Managed) (managed.Exte
 	objTags, err := u.ListTags(cr)
 	if err != nil &&
 		objTags == nil {
-		return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 	addTags, removeTags := DiffTags(cr.Spec.ForProvider.Tags, objTags.Tags)
 
 	if len(addTags) != 0 &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 		if _, err := u.client.AddTagsToStreamWithContext(ctx, &svcsdk.AddTagsToStreamInput{
-			StreamName: awsclients.String(meta.GetExternalName(cr)),
+			StreamName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			Tags:       addTags,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
 	}
 
 	if len(removeTags) != 0 &&
-		awsclients.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
+		pointer.StringValue(obj.StreamDescription.StreamStatus) == svcsdk.StreamStatusActive {
 		if _, err := u.client.RemoveTagsFromStreamWithContext(ctx, &svcsdk.RemoveTagsFromStreamInput{
-			StreamName: awsclients.String(meta.GetExternalName(cr)),
+			StreamName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			TagKeys:    removeTags,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclients.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 		// You can't make other updates to the data stream while it is being updated.
 		return managed.ExternalUpdate{}, nil
@@ -365,7 +373,7 @@ func (u *updater) ActiveShards(cr *svcapitypes.Stream) (int64, error) {
 	var count int64
 
 	shards, err := u.client.ListShards(&svcsdk.ListShardsInput{
-		StreamName: &cr.Name,
+		StreamName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
 		return count, err
@@ -384,7 +392,7 @@ func (u *updater) ActiveShards(cr *svcapitypes.Stream) (int64, error) {
 func (u *updater) ListTags(cr *svcapitypes.Stream) (*svcsdk.ListTagsForStreamOutput, error) {
 
 	tags, err := u.client.ListTagsForStream(&svcsdk.ListTagsForStreamInput{
-		StreamName: &cr.Name,
+		StreamName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil {
 		return nil, err
@@ -403,11 +411,11 @@ func DiffTags(local []svcapitypes.CustomTag, remote []*svcsdk.Tag) (add map[stri
 
 	removeMap := map[string]struct{}{}
 	for _, t := range remote {
-		if addMap[awsclients.StringValue(t.Key)] == awsclients.StringValue(t.Value) {
-			delete(addMap, awsclients.StringValue(t.Key))
+		if addMap[pointer.StringValue(t.Key)] == pointer.StringValue(t.Value) {
+			delete(addMap, pointer.StringValue(t.Key))
 			continue
 		}
-		removeMap[awsclients.StringValue(t.Key)] = struct{}{}
+		removeMap[pointer.StringValue(t.Key)] = struct{}{}
 	}
 
 	addTag := make([]svcsdk.Tag, 0)
@@ -434,7 +442,7 @@ func DiffTags(local []svcapitypes.CustomTag, remote []*svcsdk.Tag) (add map[stri
 
 // GenerateObservation is used to produce v1beta1.ClusterObservation from
 // ekstypes.Cluster.
-func GenerateObservation(obj *svcsdk.StreamDescription) svcapitypes.StreamObservation { // nolint:gocyclo
+func GenerateObservation(obj *svcsdk.StreamDescription) svcapitypes.StreamObservation { //nolint:gocyclo
 	if obj == nil {
 		return svcapitypes.StreamObservation{}
 	}

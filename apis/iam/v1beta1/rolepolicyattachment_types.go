@@ -17,9 +17,8 @@ limitations under the License.
 package v1beta1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // RolePolicyAttachmentParameters define the desired state of an AWS IAM
@@ -33,11 +32,11 @@ type RolePolicyAttachmentParameters struct {
 	// +crossplane:generate:reference:extractor=PolicyARN()
 	PolicyARN string `json:"policyArn,omitempty"`
 
-	// PolicyARNRef references an Policy to retrieve its Policy ARN.
+	// PolicyARNRef references a Policy to retrieve its Policy ARN.
 	// +optional
 	PolicyARNRef *xpv1.Reference `json:"policyArnRef,omitempty"`
 
-	// PolicyARNSelector selects a reference to an Policy to retrieve its
+	// PolicyARNSelector selects a reference to a Policy to retrieve its
 	// Policy ARN
 	// +optional
 	PolicyARNSelector *xpv1.Selector `json:"policyArnSelector,omitempty"`
@@ -47,16 +46,16 @@ type RolePolicyAttachmentParameters struct {
 	// +crossplane:generate:reference:type=Role
 	RoleName string `json:"roleName,omitempty"`
 
-	// RoleNameRef references an Role to retrieve its Name
+	// RoleNameRef references a Role to retrieve its Name
 	// +optional
 	RoleNameRef *xpv1.Reference `json:"roleNameRef,omitempty"`
 
-	// RoleNameSelector selects a reference to an Role to retrieve its Name
+	// RoleNameSelector selects a reference to a Role to retrieve its Name
 	// +optional
 	RoleNameSelector *xpv1.Selector `json:"roleNameSelector,omitempty"`
 }
 
-// An RolePolicyAttachmentSpec defines the desired state of an
+// A RolePolicyAttachmentSpec defines the desired state of an
 // RolePolicyAttachment.
 type RolePolicyAttachmentSpec struct {
 	xpv1.ResourceSpec `json:",inline"`
@@ -70,7 +69,7 @@ type RolePolicyAttachmentExternalStatus struct {
 	AttachedPolicyARN string `json:"attachedPolicyArn"`
 }
 
-// An RolePolicyAttachmentStatus represents the observed state of an
+// A RolePolicyAttachmentStatus represents the observed state of an
 // RolePolicyAttachment.
 type RolePolicyAttachmentStatus struct {
 	xpv1.ResourceStatus `json:",inline"`
@@ -79,7 +78,7 @@ type RolePolicyAttachmentStatus struct {
 
 // +kubebuilder:object:root=true
 
-// An RolePolicyAttachment is a managed resource that represents an AWS IAM
+// A RolePolicyAttachment is a managed resource that represents an AWS IAM
 // Role policy attachment.
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"

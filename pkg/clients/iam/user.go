@@ -8,7 +8,7 @@ import (
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // UserClient is the external client used for IAM User Custom Resource
@@ -17,6 +17,8 @@ type UserClient interface {
 	CreateUser(ctx context.Context, input *iam.CreateUserInput, opts ...func(*iam.Options)) (*iam.CreateUserOutput, error)
 	DeleteUser(ctx context.Context, input *iam.DeleteUserInput, opts ...func(*iam.Options)) (*iam.DeleteUserOutput, error)
 	UpdateUser(ctx context.Context, input *iam.UpdateUserInput, opts ...func(*iam.Options)) (*iam.UpdateUserOutput, error)
+	PutUserPermissionsBoundary(ctx context.Context, params *iam.PutUserPermissionsBoundaryInput, optFns ...func(*iam.Options)) (*iam.PutUserPermissionsBoundaryOutput, error)
+	DeleteUserPermissionsBoundary(ctx context.Context, params *iam.DeleteUserPermissionsBoundaryInput, optFns ...func(*iam.Options)) (*iam.DeleteUserPermissionsBoundaryOutput, error)
 	TagUser(ctx context.Context, params *iam.TagUserInput, opts ...func(*iam.Options)) (*iam.TagUserOutput, error)
 	UntagUser(ctx context.Context, params *iam.UntagUserInput, opts ...func(*iam.Options)) (*iam.UntagUserOutput, error)
 }
@@ -33,9 +35,9 @@ func LateInitializeUser(in *v1beta1.UserParameters, user *iamtypes.User) {
 		return
 	}
 
-	in.Path = awsclients.LateInitializeStringPtr(in.Path, user.Path)
+	in.Path = pointer.LateInitialize(in.Path, user.Path)
 	if user.PermissionsBoundary != nil {
-		in.PermissionsBoundary = awsclients.LateInitializeStringPtr(in.PermissionsBoundary, user.PermissionsBoundary.PermissionsBoundaryArn)
+		in.PermissionsBoundary = pointer.LateInitialize(in.PermissionsBoundary, user.PermissionsBoundary.PermissionsBoundaryArn)
 	}
 
 	if in.Tags == nil && user.Tags != nil {

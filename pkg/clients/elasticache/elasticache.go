@@ -22,25 +22,28 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/elasticache"
+	elasticachetypes "github.com/aws/aws-sdk-go-v2/service/elasticache/types"
 	"github.com/aws/smithy-go/document"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/mitchellh/copystructure"
 	"github.com/pkg/errors"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/elasticache"
-	elasticachetypes "github.com/aws/aws-sdk-go-v2/service/elasticache/types"
+	"k8s.io/utils/ptr"
 
 	cachev1alpha1 "github.com/crossplane-contrib/provider-aws/apis/cache/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/cache/v1beta1"
-	clients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/clients/elasticache/convert"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	tagutils "github.com/crossplane-contrib/provider-aws/pkg/utils/tags"
 )
 
-const errCheckUpToDate = "unable to determine if external resource is up to date"
+const (
+	errCheckUpToDate = "unable to determine if external resource is up to date"
+	errVersionInput  = "unable to parse version number"
+)
 
 // A Client handles CRUD operations for ElastiCache resources.
 type Client interface {
@@ -96,17 +99,17 @@ func NewCreateReplicationGroupInput(g v1beta1.ReplicationGroupParameters, id str
 		EngineVersion:              g.EngineVersion,
 		MultiAZEnabled:             g.MultiAZEnabled,
 		NotificationTopicArn:       g.NotificationTopicARN,
-		NumCacheClusters:           clients.Int32Address(g.NumCacheClusters),
-		NumNodeGroups:              clients.Int32Address(g.NumNodeGroups),
-		Port:                       clients.Int32Address(g.Port),
+		NumCacheClusters:           pointer.ToIntAsInt32Ptr(g.NumCacheClusters),
+		NumNodeGroups:              pointer.ToIntAsInt32Ptr(g.NumNodeGroups),
+		Port:                       pointer.ToIntAsInt32Ptr(g.Port),
 		PreferredCacheClusterAZs:   g.PreferredCacheClusterAZs,
 		PreferredMaintenanceWindow: g.PreferredMaintenanceWindow,
 		PrimaryClusterId:           g.PrimaryClusterID,
-		ReplicasPerNodeGroup:       clients.Int32Address(g.ReplicasPerNodeGroup),
+		ReplicasPerNodeGroup:       pointer.ToIntAsInt32Ptr(g.ReplicasPerNodeGroup),
 		SecurityGroupIds:           g.SecurityGroupIDs,
 		SnapshotArns:               g.SnapshotARNs,
 		SnapshotName:               g.SnapshotName,
-		SnapshotRetentionLimit:     clients.Int32Address(g.SnapshotRetentionLimit),
+		SnapshotRetentionLimit:     pointer.ToIntAsInt32Ptr(g.SnapshotRetentionLimit),
 		SnapshotWindow:             g.SnapshotWindow,
 		TransitEncryptionEnabled:   g.TransitEncryptionEnabled,
 	}
@@ -114,8 +117,8 @@ func NewCreateReplicationGroupInput(g v1beta1.ReplicationGroupParameters, id str
 		c.Tags = make([]elasticachetypes.Tag, len(g.Tags))
 		for i, tag := range g.Tags {
 			c.Tags[i] = elasticachetypes.Tag{
-				Key:   clients.String(tag.Key),
-				Value: clients.String(tag.Value),
+				Key:   pointer.ToOrNilIfZeroValue(tag.Key),
+				Value: pointer.ToOrNilIfZeroValue(tag.Value),
 			}
 		}
 	}
@@ -125,7 +128,7 @@ func NewCreateReplicationGroupInput(g v1beta1.ReplicationGroupParameters, id str
 			c.NodeGroupConfiguration[i] = elasticachetypes.NodeGroupConfiguration{
 				PrimaryAvailabilityZone:  cfg.PrimaryAvailabilityZone,
 				ReplicaAvailabilityZones: cfg.ReplicaAvailabilityZones,
-				ReplicaCount:             clients.Int32Address(cfg.ReplicaCount),
+				ReplicaCount:             pointer.ToIntAsInt32Ptr(cfg.ReplicaCount),
 				Slots:                    cfg.Slots,
 			}
 		}
@@ -138,7 +141,7 @@ func NewCreateReplicationGroupInput(g v1beta1.ReplicationGroupParameters, id str
 func NewModifyReplicationGroupInput(g v1beta1.ReplicationGroupParameters, id string) *elasticache.ModifyReplicationGroupInput {
 	return &elasticache.ModifyReplicationGroupInput{
 		ReplicationGroupId:          aws.String(id),
-		ApplyImmediately:            g.ApplyModificationsImmediately,
+		ApplyImmediately:            &g.ApplyModificationsImmediately,
 		AutomaticFailoverEnabled:    g.AutomaticFailoverEnabled,
 		CacheNodeType:               aws.String(g.CacheNodeType),
 		CacheParameterGroupName:     g.CacheParameterGroupName,
@@ -151,7 +154,7 @@ func NewModifyReplicationGroupInput(g v1beta1.ReplicationGroupParameters, id str
 		PrimaryClusterId:            g.PrimaryClusterID,
 		ReplicationGroupDescription: aws.String(g.ReplicationGroupDescription),
 		SecurityGroupIds:            g.SecurityGroupIDs,
-		SnapshotRetentionLimit:      clients.Int32Address(g.SnapshotRetentionLimit),
+		SnapshotRetentionLimit:      pointer.ToIntAsInt32Ptr(g.SnapshotRetentionLimit),
 		SnapshotWindow:              g.SnapshotWindow,
 		SnapshottingClusterId:       g.SnapshottingClusterID,
 	}
@@ -161,15 +164,15 @@ func NewModifyReplicationGroupInput(g v1beta1.ReplicationGroupParameters, id str
 // shard configuration modification input suitable for use with the AWS API.
 func NewModifyReplicationGroupShardConfigurationInput(g v1beta1.ReplicationGroupParameters, id string, rg elasticachetypes.ReplicationGroup) *elasticache.ModifyReplicationGroupShardConfigurationInput {
 	input := &elasticache.ModifyReplicationGroupShardConfigurationInput{
-		ApplyImmediately:   g.ApplyModificationsImmediately,
-		NodeGroupCount:     int32(*g.NumNodeGroups),
+		ApplyImmediately:   &g.ApplyModificationsImmediately,
+		NodeGroupCount:     pointer.ToIntAsInt32Ptr(g.NumNodeGroups),
 		ReplicationGroupId: aws.String(id),
 	}
 
 	// For scale down we must name the nodes. This code picks the oldest rg
 	// now, but there might be a better algorithm, such as the one with least
 	// data
-	remove := len(rg.NodeGroups) - int(input.NodeGroupCount)
+	remove := len(rg.NodeGroups) - int(ptr.Deref(input.NodeGroupCount, 0))
 	for i := 0; i < remove; i++ {
 		input.NodeGroupsToRemove = append(input.NodeGroupsToRemove, aws.ToString(rg.NodeGroups[i].NodeGroupId))
 	}
@@ -205,7 +208,7 @@ func NewListTagsForResourceInput(arn *string) *elasticache.ListTagsForResourceIn
 // the number of replicaGroup cache clusters
 func NewDecreaseReplicaCountInput(replicationGroupID string, newReplicaCount *int32) *elasticache.DecreaseReplicaCountInput {
 	return &elasticache.DecreaseReplicaCountInput{
-		ApplyImmediately:   true, // false is not supported by the API
+		ApplyImmediately:   ptr.To(true), // false is not supported by the API
 		ReplicationGroupId: &replicationGroupID,
 		NewReplicaCount:    newReplicaCount,
 	}
@@ -216,7 +219,7 @@ func NewDecreaseReplicaCountInput(replicationGroupID string, newReplicaCount *in
 // the number of replicaGroup cache clusters
 func NewIncreaseReplicaCountInput(replicationGroupID string, newReplicaCount *int32) *elasticache.IncreaseReplicaCountInput {
 	return &elasticache.IncreaseReplicaCountInput{
-		ApplyImmediately:   true, // false is not supported by the API
+		ApplyImmediately:   ptr.To(true), // false is not supported by the API
 		ReplicationGroupId: &replicationGroupID,
 		NewReplicaCount:    newReplicaCount,
 	}
@@ -230,28 +233,28 @@ func LateInitialize(s *v1beta1.ReplicationGroupParameters, rg elasticachetypes.R
 	if s == nil {
 		return
 	}
-	s.AtRestEncryptionEnabled = clients.LateInitializeBoolPtr(s.AtRestEncryptionEnabled, rg.AtRestEncryptionEnabled)
-	s.AuthEnabled = clients.LateInitializeBoolPtr(s.AuthEnabled, rg.AuthTokenEnabled)
-	s.AutomaticFailoverEnabled = clients.LateInitializeBoolPtr(s.AutomaticFailoverEnabled, automaticFailoverEnabled(rg.AutomaticFailover))
-	s.SnapshotRetentionLimit = clients.LateInitializeIntFromInt32Ptr(s.SnapshotRetentionLimit, rg.SnapshotRetentionLimit)
-	s.SnapshotWindow = clients.LateInitializeStringPtr(s.SnapshotWindow, rg.SnapshotWindow)
-	s.SnapshottingClusterID = clients.LateInitializeStringPtr(s.SnapshottingClusterID, rg.SnapshottingClusterId)
-	s.TransitEncryptionEnabled = clients.LateInitializeBoolPtr(s.TransitEncryptionEnabled, rg.TransitEncryptionEnabled)
+	s.AtRestEncryptionEnabled = pointer.LateInitialize(s.AtRestEncryptionEnabled, rg.AtRestEncryptionEnabled)
+	s.AuthEnabled = pointer.LateInitialize(s.AuthEnabled, rg.AuthTokenEnabled)
+	s.AutomaticFailoverEnabled = pointer.LateInitialize(s.AutomaticFailoverEnabled, automaticFailoverEnabled(rg.AutomaticFailover))
+	s.SnapshotRetentionLimit = pointer.LateInitializeIntFromInt32Ptr(s.SnapshotRetentionLimit, rg.SnapshotRetentionLimit)
+	s.SnapshotWindow = pointer.LateInitialize(s.SnapshotWindow, rg.SnapshotWindow)
+	s.SnapshottingClusterID = pointer.LateInitialize(s.SnapshottingClusterID, rg.SnapshottingClusterId)
+	s.TransitEncryptionEnabled = pointer.LateInitialize(s.TransitEncryptionEnabled, rg.TransitEncryptionEnabled)
 
 	// NOTE(muvaf): ReplicationGroup managed N identical CacheCluster objects.
 	// While configuration of those CacheClusters flow through ReplicationGroup API,
 	// their statuses are fetched independently. Since we check for drifts against
 	// the current state, late-init and up-to-date checks have to be made against
 	// CacheClusters as well.
-	s.EngineVersion = clients.LateInitializeStringPtr(s.EngineVersion, cc.EngineVersion)
+	s.EngineVersion = pointer.LateInitialize(s.EngineVersion, cc.EngineVersion)
 	if cc.CacheParameterGroup != nil {
-		s.CacheParameterGroupName = clients.LateInitializeStringPtr(s.CacheParameterGroupName, cc.CacheParameterGroup.CacheParameterGroupName)
+		s.CacheParameterGroupName = pointer.LateInitialize(s.CacheParameterGroupName, cc.CacheParameterGroup.CacheParameterGroupName)
 	}
 	if cc.NotificationConfiguration != nil {
-		s.NotificationTopicARN = clients.LateInitializeStringPtr(s.NotificationTopicARN, cc.NotificationConfiguration.TopicArn)
-		s.NotificationTopicStatus = clients.LateInitializeStringPtr(s.NotificationTopicStatus, cc.NotificationConfiguration.TopicStatus)
+		s.NotificationTopicARN = pointer.LateInitialize(s.NotificationTopicARN, cc.NotificationConfiguration.TopicArn)
+		s.NotificationTopicStatus = pointer.LateInitialize(s.NotificationTopicStatus, cc.NotificationConfiguration.TopicStatus)
 	}
-	s.PreferredMaintenanceWindow = clients.LateInitializeStringPtr(s.PreferredMaintenanceWindow, cc.PreferredMaintenanceWindow)
+	s.PreferredMaintenanceWindow = pointer.LateInitialize(s.PreferredMaintenanceWindow, cc.PreferredMaintenanceWindow)
 	if len(s.SecurityGroupIDs) == 0 && len(cc.SecurityGroups) != 0 {
 		s.SecurityGroupIDs = make([]string, len(cc.SecurityGroups))
 		for i, val := range cc.SecurityGroups {
@@ -280,7 +283,7 @@ func ReplicationGroupNeedsUpdate(kube v1beta1.ReplicationGroupParameters, rg ela
 		return "AutomaticFailover"
 	case !reflect.DeepEqual(&kube.CacheNodeType, rg.CacheNodeType):
 		return "CacheNotType"
-	case !reflect.DeepEqual(kube.SnapshotRetentionLimit, clients.IntFrom32Address(rg.SnapshotRetentionLimit)):
+	case !reflect.DeepEqual(kube.SnapshotRetentionLimit, pointer.ToInt32FromIntPtr(rg.SnapshotRetentionLimit)):
 		return "SnapshotRetentionLimit"
 	case !reflect.DeepEqual(kube.SnapshotWindow, rg.SnapshotWindow):
 		return "SnapshotWindow"
@@ -345,7 +348,7 @@ func ParseVersion(ver *string) (*PartialSemanticVersion, error) {
 		minor, err := strconv.ParseInt(parts[1], 10, 64)
 		// if not a digit (i.e. .x, ignore)
 		if err != nil {
-			return p, nil
+			return p, nil //nolint:nilerr
 		}
 		p.Minor = aws.Int64(minor)
 	}
@@ -353,7 +356,7 @@ func ParseVersion(ver *string) (*PartialSemanticVersion, error) {
 	if len(parts) > 2 {
 		patch, err := strconv.ParseInt(parts[2], 10, 64)
 		if err != nil {
-			return p, nil
+			return p, nil //nolint:nilerr
 		}
 		p.Patch = aws.Int64(patch)
 	}
@@ -365,7 +368,7 @@ func ParseVersion(ver *string) (*PartialSemanticVersion, error) {
 // For versions 6, 6.2, 6.x, etc., we only need a major version
 func versionMatches(kubeVersion *string, awsVersion *string) bool { //nolint: gocyclo
 
-	if clients.StringValue(kubeVersion) == clients.StringValue(awsVersion) {
+	if pointer.StringValue(kubeVersion) == pointer.StringValue(awsVersion) {
 		return true
 	}
 
@@ -403,7 +406,7 @@ func versionMatches(kubeVersion *string, awsVersion *string) bool { //nolint: go
 	return true
 }
 
-func cacheClusterNeedsUpdate(kube v1beta1.ReplicationGroupParameters, cc elasticachetypes.CacheCluster) string { // nolint:gocyclo
+func cacheClusterNeedsUpdate(kube v1beta1.ReplicationGroupParameters, cc elasticachetypes.CacheCluster) string { //nolint:gocyclo
 	// AWS will set and return a default version if we don't specify one.
 	if !versionMatches(kube.EngineVersion, cc.EngineVersion) {
 		return "EngineVersion"
@@ -418,12 +421,12 @@ func cacheClusterNeedsUpdate(kube v1beta1.ReplicationGroupParameters, cc elastic
 		if !reflect.DeepEqual(cc.NotificationConfiguration.TopicStatus, kube.NotificationTopicStatus) {
 			return "TopicStatus"
 		}
-	} else if clients.StringValue(kube.NotificationTopicARN) != "" {
+	} else if pointer.StringValue(kube.NotificationTopicARN) != "" {
 		return "NotificationTopicARN"
 	}
 	// AWS will normalize preferred maintenance windows to lowercase
-	if !strings.EqualFold(clients.StringValue(kube.PreferredMaintenanceWindow),
-		clients.StringValue(cc.PreferredMaintenanceWindow)) {
+	if !strings.EqualFold(pointer.StringValue(kube.PreferredMaintenanceWindow),
+		pointer.StringValue(cc.PreferredMaintenanceWindow)) {
 		return "PreferredMaintainenceWindow"
 	}
 	if sgIDsNeedUpdate(kube.SecurityGroupIDs, cc.SecurityGroups) || sgNamesNeedUpdate(kube.CacheSecurityGroupNames, cc.CacheSecurityGroups) {
@@ -438,7 +441,7 @@ func sgIDsNeedUpdate(kube []string, cc []elasticachetypes.SecurityGroupMembershi
 	}
 	existingOnes := map[string]bool{}
 	for _, sg := range cc {
-		existingOnes[clients.StringValue(sg.SecurityGroupId)] = true
+		existingOnes[pointer.StringValue(sg.SecurityGroupId)] = true
 	}
 	for _, desired := range kube {
 		if !existingOnes[desired] {
@@ -454,7 +457,7 @@ func sgNamesNeedUpdate(kube []string, cc []elasticachetypes.CacheSecurityGroupMe
 	}
 	existingOnes := map[string]bool{}
 	for _, sg := range cc {
-		existingOnes[clients.StringValue(sg.CacheSecurityGroupName)] = true
+		existingOnes[pointer.StringValue(sg.CacheSecurityGroupName)] = true
 	}
 	for _, desired := range kube {
 		if !existingOnes[desired] {
@@ -488,7 +491,7 @@ func DiffTags(rgtags []v1beta1.Tag, tags []elasticachetypes.Tag) (add map[string
 		remote[aws.ToString(t.Key)] = aws.ToString(t.Value)
 	}
 
-	return clients.DiffTags(local, remote)
+	return tagutils.DiffTags(local, remote)
 }
 
 // ReplicationGroupNumCacheClustersNeedsUpdate determines if the number of Cache Clusters
@@ -505,7 +508,7 @@ func GenerateObservation(rg elasticachetypes.ReplicationGroup) v1beta1.Replicati
 		ClusterEnabled:        aws.ToBool(rg.ClusterEnabled),
 		ConfigurationEndpoint: newEndpoint(rg),
 		MemberClusters:        rg.MemberClusters,
-		Status:                clients.StringValue(rg.Status),
+		Status:                pointer.StringValue(rg.Status),
 	}
 	if len(rg.NodeGroups) != 0 {
 		o.NodeGroups = make([]v1beta1.NodeGroup, len(rg.NodeGroups))
@@ -521,23 +524,35 @@ func GenerateObservation(rg elasticachetypes.ReplicationGroup) v1beta1.Replicati
 
 func generateNodeGroup(ng elasticachetypes.NodeGroup) v1beta1.NodeGroup {
 	r := v1beta1.NodeGroup{
-		NodeGroupID: clients.StringValue(ng.NodeGroupId),
-		Slots:       clients.StringValue(ng.Slots),
-		Status:      clients.StringValue(ng.Status),
+		NodeGroupID: pointer.StringValue(ng.NodeGroupId),
+		Slots:       pointer.StringValue(ng.Slots),
+		Status:      pointer.StringValue(ng.Status),
+	}
+	if ng.ReaderEndpoint != nil {
+		r.ReaderEndpoint = v1beta1.Endpoint{
+			Address: pointer.StringValue(ng.ReaderEndpoint.Address),
+			Port:    int(ptr.Deref(ng.ReaderEndpoint.Port, 0)),
+		}
+	}
+	if ng.PrimaryEndpoint != nil {
+		r.PrimaryEndpoint = v1beta1.Endpoint{
+			Address: pointer.StringValue(ng.PrimaryEndpoint.Address),
+			Port:    int(ptr.Deref(ng.PrimaryEndpoint.Port, 0)),
+		}
 	}
 	if len(ng.NodeGroupMembers) != 0 {
 		r.NodeGroupMembers = make([]v1beta1.NodeGroupMember, len(ng.NodeGroupMembers))
 		for i, m := range ng.NodeGroupMembers {
 			r.NodeGroupMembers[i] = v1beta1.NodeGroupMember{
-				CacheClusterID:            clients.StringValue(m.CacheClusterId),
-				CacheNodeID:               clients.StringValue(m.CacheNodeId),
-				CurrentRole:               clients.StringValue(m.CurrentRole),
-				PreferredAvailabilityZone: clients.StringValue(m.PreferredAvailabilityZone),
+				CacheClusterID:            pointer.StringValue(m.CacheClusterId),
+				CacheNodeID:               pointer.StringValue(m.CacheNodeId),
+				CurrentRole:               pointer.StringValue(m.CurrentRole),
+				PreferredAvailabilityZone: pointer.StringValue(m.PreferredAvailabilityZone),
 			}
 			if m.ReadEndpoint != nil {
 				r.NodeGroupMembers[i].ReadEndpoint = v1beta1.Endpoint{
-					Address: clients.StringValue(m.ReadEndpoint.Address),
-					Port:    int(m.ReadEndpoint.Port),
+					Address: pointer.StringValue(m.ReadEndpoint.Address),
+					Port:    int(ptr.Deref(m.ReadEndpoint.Port, 0)),
 				}
 			}
 
@@ -549,12 +564,12 @@ func generateNodeGroup(ng elasticachetypes.NodeGroup) v1beta1.NodeGroup {
 func generateReplicationGroupPendingModifiedValues(in elasticachetypes.ReplicationGroupPendingModifiedValues) v1beta1.ReplicationGroupPendingModifiedValues {
 	r := v1beta1.ReplicationGroupPendingModifiedValues{
 		AutomaticFailoverStatus: string(in.AutomaticFailoverStatus),
-		PrimaryClusterID:        clients.StringValue(in.PrimaryClusterId),
+		PrimaryClusterID:        pointer.StringValue(in.PrimaryClusterId),
 	}
 	if in.Resharding != nil && in.Resharding.SlotMigration != nil {
 		r.Resharding = v1beta1.ReshardingStatus{
 			SlotMigration: v1beta1.SlotMigration{
-				ProgressPercentage: int(in.Resharding.SlotMigration.ProgressPercentage),
+				ProgressPercentage: int(ptr.Deref(in.Resharding.SlotMigration.ProgressPercentage, 0)),
 			},
 		}
 	}
@@ -566,14 +581,14 @@ func generateReplicationGroupPendingModifiedValues(in elasticachetypes.Replicati
 func newEndpoint(rg elasticachetypes.ReplicationGroup) v1beta1.Endpoint {
 	var e *elasticachetypes.Endpoint
 	switch {
-	case !aws.ToBool(rg.ClusterEnabled) && len(rg.NodeGroups) > 0:
+	case !aws.ToBool(rg.ClusterEnabled) && len(rg.NodeGroups) > 0 && rg.NodeGroups[0].PrimaryEndpoint != nil:
 		e = rg.NodeGroups[0].PrimaryEndpoint
 	case aws.ToBool(rg.ClusterEnabled) && rg.ConfigurationEndpoint != nil:
 		e = rg.ConfigurationEndpoint
 	default:
 		return v1beta1.Endpoint{}
 	}
-	return v1beta1.Endpoint{Address: clients.StringValue(e.Address), Port: int(e.Port)}
+	return v1beta1.Endpoint{Address: pointer.StringValue(e.Address), Port: int(ptr.Deref(e.Port, 0))}
 }
 
 // ConnectionEndpoint returns the connection endpoint for a Replication Group.
@@ -586,7 +601,7 @@ func ConnectionEndpoint(rg elasticachetypes.ReplicationGroup) managed.Connection
 		rg.ConfigurationEndpoint.Address != nil {
 		return managed.ConnectionDetails{
 			xpv1.ResourceCredentialsSecretEndpointKey: []byte(aws.ToString(rg.ConfigurationEndpoint.Address)),
-			xpv1.ResourceCredentialsSecretPortKey:     []byte(strconv.Itoa(int(rg.ConfigurationEndpoint.Port))),
+			xpv1.ResourceCredentialsSecretPortKey:     []byte(strconv.Itoa(int(ptr.Deref(rg.ConfigurationEndpoint.Port, 0)))),
 		}
 	}
 
@@ -594,12 +609,24 @@ func ConnectionEndpoint(rg elasticachetypes.ReplicationGroup) managed.Connection
 	// primary endpoint that should be used for write. Any node's endpoint can
 	// be used for read, but we support only a single endpoint so we return the
 	// primary's.
-	if len(rg.NodeGroups) > 0 &&
-		rg.NodeGroups[0].PrimaryEndpoint != nil &&
-		rg.NodeGroups[0].PrimaryEndpoint.Address != nil {
-		return managed.ConnectionDetails{
-			xpv1.ResourceCredentialsSecretEndpointKey: []byte(aws.ToString(rg.NodeGroups[0].PrimaryEndpoint.Address)),
-			xpv1.ResourceCredentialsSecretPortKey:     []byte(strconv.Itoa(int(rg.NodeGroups[0].PrimaryEndpoint.Port))),
+	if len(rg.NodeGroups) > 0 {
+		hasData := false
+		cd := managed.ConnectionDetails{}
+
+		if rg.NodeGroups[0].PrimaryEndpoint != nil &&
+			rg.NodeGroups[0].PrimaryEndpoint.Address != nil {
+			hasData = true
+			cd[xpv1.ResourceCredentialsSecretEndpointKey] = []byte(aws.ToString(rg.NodeGroups[0].PrimaryEndpoint.Address))
+			cd[xpv1.ResourceCredentialsSecretPortKey] = []byte(strconv.Itoa(int(ptr.Deref(rg.NodeGroups[0].PrimaryEndpoint.Port, 0))))
+		}
+		if rg.NodeGroups[0].ReaderEndpoint != nil &&
+			rg.NodeGroups[0].ReaderEndpoint.Address != nil {
+			hasData = true
+			cd["readerEndpoint"] = []byte(aws.ToString(rg.NodeGroups[0].ReaderEndpoint.Address))
+			cd["readerPort"] = []byte(strconv.Itoa(int(ptr.Deref(rg.NodeGroups[0].ReaderEndpoint.Port, 0))))
+		}
+		if hasData {
+			return cd
 		}
 	}
 
@@ -652,7 +679,7 @@ func IsSubnetGroupUpToDate(p cachev1alpha1.CacheSubnetGroupParameters, sg elasti
 }
 
 // GenerateCreateCacheClusterInput returns Cache Cluster creation input
-func GenerateCreateCacheClusterInput(p cachev1alpha1.CacheClusterParameters, id string) *elasticache.CreateCacheClusterInput {
+func GenerateCreateCacheClusterInput(p cachev1alpha1.CacheClusterParameters, id string) (*elasticache.CreateCacheClusterInput, error) {
 	c := &elasticache.CreateCacheClusterInput{
 		AZMode:                     elasticachetypes.AZMode(aws.ToString(p.AZMode)),
 		AuthToken:                  p.AZMode,
@@ -662,7 +689,6 @@ func GenerateCreateCacheClusterInput(p cachev1alpha1.CacheClusterParameters, id 
 		CacheSubnetGroupName:       p.CacheSubnetGroupName,
 		CacheSecurityGroupNames:    p.CacheSecurityGroupNames,
 		Engine:                     p.Engine,
-		EngineVersion:              p.EngineVersion,
 		NotificationTopicArn:       p.NotificationTopicARN,
 		NumCacheNodes:              aws.Int32(p.NumCacheNodes),
 		Port:                       p.Port,
@@ -677,26 +703,36 @@ func GenerateCreateCacheClusterInput(p cachev1alpha1.CacheClusterParameters, id 
 		SnapshotWindow:             p.SnapshotWindow,
 	}
 
+	if p.EngineVersion != nil {
+		version, err := getVersion(p.EngineVersion)
+		if err != nil {
+			return nil, err
+		}
+		c.EngineVersion = version
+	} else {
+		c.EngineVersion = p.EngineVersion
+	}
+
 	if len(p.Tags) != 0 {
 		c.Tags = make([]elasticachetypes.Tag, len(p.Tags))
 		for i, tag := range p.Tags {
 			c.Tags[i] = elasticachetypes.Tag{
-				Key:   clients.String(tag.Key),
+				Key:   pointer.ToOrNilIfZeroValue(tag.Key),
 				Value: tag.Value,
 			}
 		}
 	}
 
-	return c
+	return c, nil
 }
 
 // GenerateModifyCacheClusterInput returns ElastiCache Cache Cluster
 // modification input suitable for use with the AWS API.
-func GenerateModifyCacheClusterInput(p cachev1alpha1.CacheClusterParameters, id string) *elasticache.ModifyCacheClusterInput {
-	return &elasticache.ModifyCacheClusterInput{
+func GenerateModifyCacheClusterInput(p cachev1alpha1.CacheClusterParameters, id string) (*elasticache.ModifyCacheClusterInput, error) {
+	c := &elasticache.ModifyCacheClusterInput{
 		CacheClusterId:             aws.String(id),
 		AZMode:                     elasticachetypes.AZMode(aws.ToString(p.AZMode)),
-		ApplyImmediately:           aws.ToBool(p.ApplyImmediately),
+		ApplyImmediately:           p.ApplyImmediately,
 		AuthToken:                  p.AuthToken,
 		AuthTokenUpdateStrategy:    elasticachetypes.AuthTokenUpdateStrategyType(aws.ToString(p.AuthTokenUpdateStrategy)),
 		CacheNodeIdsToRemove:       p.CacheNodeIDsToRemove,
@@ -712,6 +748,18 @@ func GenerateModifyCacheClusterInput(p cachev1alpha1.CacheClusterParameters, id 
 		SnapshotRetentionLimit:     p.SnapshotRetentionLimit,
 		SnapshotWindow:             p.SnapshotWindow,
 	}
+
+	if p.EngineVersion != nil {
+		version, err := getVersion(p.EngineVersion)
+		if err != nil {
+			return nil, err
+		}
+		c.EngineVersion = version
+	} else {
+		c.EngineVersion = p.EngineVersion
+	}
+
+	return c, nil
 }
 
 // GenerateClusterObservation produces a CacheClusterObservation object out of
@@ -737,7 +785,7 @@ func GenerateClusterObservation(c elasticachetypes.CacheCluster) cachev1alpha1.C
 			if v.Endpoint != nil {
 				cacheNodes[i].Endpoint = &cachev1alpha1.Endpoint{
 					Address: aws.ToString(v.Endpoint.Address),
-					Port:    int(v.Endpoint.Port),
+					Port:    int(ptr.Deref(v.Endpoint.Port, 0)),
 				}
 			}
 		}
@@ -757,19 +805,19 @@ func IsClusterNotFound(err error) bool {
 // corresponding fields in CacheClusterParameters in order to let user
 // know the defaults and make the changes as wished on that value.
 func LateInitializeCluster(p *cachev1alpha1.CacheClusterParameters, c elasticachetypes.CacheCluster) {
-	p.SnapshotRetentionLimit = clients.LateInitializeInt32Ptr(p.SnapshotRetentionLimit, c.SnapshotRetentionLimit)
-	p.SnapshotWindow = clients.LateInitializeStringPtr(p.SnapshotWindow, c.SnapshotWindow)
-	p.CacheSubnetGroupName = clients.LateInitializeStringPtr(p.CacheSubnetGroupName, c.CacheSubnetGroupName)
-	p.EngineVersion = clients.LateInitializeStringPtr(p.EngineVersion, c.EngineVersion)
-	p.PreferredAvailabilityZone = clients.LateInitializeStringPtr(p.PreferredAvailabilityZone, c.PreferredAvailabilityZone)
-	p.PreferredMaintenanceWindow = clients.LateInitializeStringPtr(p.PreferredMaintenanceWindow, c.PreferredMaintenanceWindow)
-	p.ReplicationGroupID = clients.LateInitializeStringPtr(p.ReplicationGroupID, c.ReplicationGroupId)
+	p.SnapshotRetentionLimit = pointer.LateInitialize(p.SnapshotRetentionLimit, c.SnapshotRetentionLimit)
+	p.SnapshotWindow = pointer.LateInitialize(p.SnapshotWindow, c.SnapshotWindow)
+	p.CacheSubnetGroupName = pointer.LateInitialize(p.CacheSubnetGroupName, c.CacheSubnetGroupName)
+	p.EngineVersion = pointer.LateInitialize(p.EngineVersion, c.EngineVersion)
+	p.PreferredAvailabilityZone = pointer.LateInitialize(p.PreferredAvailabilityZone, c.PreferredAvailabilityZone)
+	p.PreferredMaintenanceWindow = pointer.LateInitialize(p.PreferredMaintenanceWindow, c.PreferredMaintenanceWindow)
+	p.ReplicationGroupID = pointer.LateInitialize(p.ReplicationGroupID, c.ReplicationGroupId)
 
 	if c.NotificationConfiguration != nil {
-		p.NotificationTopicARN = clients.LateInitializeStringPtr(p.NotificationTopicARN, c.NotificationConfiguration.TopicArn)
+		p.NotificationTopicARN = pointer.LateInitialize(p.NotificationTopicARN, c.NotificationConfiguration.TopicArn)
 	}
 	if c.CacheParameterGroup != nil {
-		p.CacheParameterGroupName = clients.LateInitializeStringPtr(p.CacheParameterGroupName, c.CacheParameterGroup.CacheParameterGroupName)
+		p.CacheParameterGroupName = pointer.LateInitialize(p.CacheParameterGroupName, c.CacheParameterGroup.CacheParameterGroupName)
 	}
 }
 
@@ -806,15 +854,43 @@ func GenerateCluster(name string, p cachev1alpha1.CacheClusterParameters, c *ela
 // IsClusterUpToDate checks whether current state is up-to-date compared to the given
 // set of parameters.
 func IsClusterUpToDate(name string, in *cachev1alpha1.CacheClusterParameters, observed *elasticachetypes.CacheCluster) (bool, error) {
-	generated, err := copystructure.Copy(observed)
-	if err != nil {
-		return true, errors.Wrap(err, errCheckUpToDate)
-	}
-	desired, ok := generated.(*elasticachetypes.CacheCluster)
-	if !ok {
-		return true, errors.New(errCheckUpToDate)
-	}
+	desired := (&convert.ConverterImpl{}).DeepCopyAWSCacheCluster(observed)
 	GenerateCluster(name, *in, desired)
 
+	if desired.EngineVersion != nil {
+		observedVersion := observed.EngineVersion
+		desiredVersion := desired.EngineVersion
+
+		observedVersionSplit := strings.Split(aws.ToString(observedVersion), ".")
+		desiredVersionSplit := strings.Split(aws.ToString(desiredVersion), ".")
+		if observedVersionSplit[0] != desiredVersionSplit[0] {
+			return false, nil
+		}
+		if len(desiredVersionSplit) > 1 {
+			if observedVersionSplit[1] != desiredVersionSplit[1] {
+				return false, nil
+			}
+		}
+		// to ignore in following equal
+		desired.EngineVersion = observed.EngineVersion
+	}
+
 	return cmp.Equal(desired, observed, cmpopts.EquateEmpty(), cmpopts.IgnoreTypes(document.NoSerde{})), nil
+}
+
+func getVersion(version *string) (*string, error) {
+	versionSplit := strings.Split(aws.ToString(version), ".")
+	version1, err := strconv.Atoi(versionSplit[0])
+	if err != nil {
+		return nil, errors.Wrap(err, errVersionInput)
+	}
+	versionOut := strconv.Itoa(version1)
+	if len(versionSplit) > 1 {
+		version2, err := strconv.Atoi(versionSplit[1])
+		if err != nil {
+			return nil, errors.Wrap(err, errVersionInput)
+		}
+		versionOut += "." + strconv.Itoa(version2)
+	}
+	return &versionOut, nil
 }

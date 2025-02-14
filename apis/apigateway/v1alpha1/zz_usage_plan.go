@@ -31,7 +31,7 @@ type UsagePlanParameters struct {
 	Region string `json:"region"`
 	// The description of the usage plan.
 	Description *string `json:"description,omitempty"`
-	// [Required] The name of the usage plan.
+	// The name of the usage plan.
 	// +kubebuilder:validation:Required
 	Name *string `json:"name"`
 	// The quota of the usage plan.
@@ -57,9 +57,11 @@ type UsagePlanObservation struct {
 	APIStages []*APIStage `json:"apiStages,omitempty"`
 	// The identifier of a UsagePlan resource.
 	ID *string `json:"id,omitempty"`
-	// The AWS Markeplace product identifier to associate with the usage plan as
-	// a SaaS product on AWS Marketplace.
+	// The Amazon Web Services Marketplace product identifier to associate with
+	// the usage plan as a SaaS product on the Amazon Web Services Marketplace.
 	ProductCode *string `json:"productCode,omitempty"`
+
+	CustomUsagePlanObservation `json:",inline"`
 }
 
 // UsagePlanStatus defines the observed state of UsagePlan.
@@ -74,6 +76,7 @@ type UsagePlanStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

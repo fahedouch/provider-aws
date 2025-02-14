@@ -21,11 +21,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -33,12 +28,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -63,20 +64,32 @@ func SetupRole(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: iam.NewRoleClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.RoleGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.Role{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.RoleGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: iam.NewRoleClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -85,7 +98,7 @@ type connector struct {
 }
 
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, awsclient.GlobalRegion)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, connectaws.GlobalRegion)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +121,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	})
 
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errGet)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errGet)
 	}
 
 	if observed.Role == nil {
@@ -136,7 +149,10 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 	return managed.ExternalObservation{
 		ResourceExists:   true,
 		ResourceUpToDate: upToDate,
-		Diff:             diff,
+		ConnectionDetails: managed.ConnectionDetails{
+			"arn": []byte(cr.Status.AtProvider.ARN),
+		},
+		Diff: diff,
 	}, nil
 }
 
@@ -149,10 +165,10 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 	cr.Status.SetConditions(xpv1.Creating())
 
 	_, err := e.client.CreateRole(ctx, iam.GenerateCreateRoleInput(meta.GetExternalName(cr), &cr.Spec.ForProvider))
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 }
 
-func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { // nolint:gocyclo
+func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) { //nolint:gocyclo
 	cr, ok := mgd.(*v1beta1.Role)
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
@@ -163,7 +179,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 	})
 
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errGet)
+		return managed.ExternalUpdate{}, errorutils.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errGet)
 	}
 	if observed.Role == nil {
 		return managed.ExternalUpdate{}, errors.New(errSDK)
@@ -180,7 +196,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			RoleName: aws.String(meta.GetExternalName(cr)),
 			TagKeys:  remove,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, "cannot untag")
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, "cannot untag")
 		}
 	}
 	if len(add) != 0 {
@@ -188,7 +204,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			RoleName: aws.String(meta.GetExternalName(cr)),
 			Tags:     add,
 		}); err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, "cannot tag")
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, "cannot tag")
 		}
 	}
 
@@ -205,7 +221,28 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 		})
 
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
+		}
+	}
+
+	boundaryArn := ""
+	if observed.Role.PermissionsBoundary != nil {
+		boundaryArn = *observed.Role.PermissionsBoundary.PermissionsBoundaryArn
+	}
+	if aws.ToString(&boundaryArn) != aws.ToString(cr.Spec.ForProvider.PermissionsBoundary) {
+		if aws.ToString(cr.Spec.ForProvider.PermissionsBoundary) == "" {
+			_, err = e.client.DeleteRolePermissionsBoundary(ctx, &awsiam.DeleteRolePermissionsBoundaryInput{
+				RoleName: aws.String(meta.GetExternalName(cr)),
+			})
+		} else {
+			_, err = e.client.PutRolePermissionsBoundary(ctx, &awsiam.PutRolePermissionsBoundaryInput{
+				PermissionsBoundary: cr.Spec.ForProvider.PermissionsBoundary,
+				RoleName:            aws.String(meta.GetExternalName(cr)),
+			})
+		}
+
+		if err != nil {
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 	}
 
@@ -215,16 +252,16 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			RoleName:       aws.String(meta.GetExternalName(cr)),
 		})
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 		}
 	}
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.Role)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
@@ -233,38 +270,10 @@ func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
 		RoleName: aws.String(meta.GetExternalName(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(iam.IsErrorNotFound, err), errDelete)
 }
 
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mgd resource.Managed) error {
-	cr, ok := mgd.(*v1beta1.Role)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-
-	added := false
-	defaultTags := resource.GetExternalTags(mgd)
-
-	for i, t := range cr.Spec.ForProvider.Tags {
-		if v, ok := defaultTags[t.Key]; ok {
-			if v != t.Value {
-				cr.Spec.ForProvider.Tags[i].Value = v
-				added = true
-			}
-			delete(defaultTags, t.Key)
-		}
-	}
-
-	for k, v := range defaultTags {
-		cr.Spec.ForProvider.Tags = append(cr.Spec.ForProvider.Tags, v1beta1.Tag{Key: k, Value: v})
-		added = true
-	}
-	if !added {
-		return nil
-	}
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

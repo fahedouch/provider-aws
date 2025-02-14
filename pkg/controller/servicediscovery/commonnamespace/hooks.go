@@ -32,7 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/servicediscovery/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -56,35 +57,24 @@ type namespace interface {
 }
 
 // NewHooks returns a new Hooks object.
-func NewHooks(kube client.Client, client servicediscoveryiface.ServiceDiscoveryAPI) *Hooks {
-	return &Hooks{
+func NewHooks[managedtype namespace](kube client.Client, client servicediscoveryiface.ServiceDiscoveryAPI) *Hooks[managedtype] {
+	return &Hooks[managedtype]{
 		client: client,
 		kube:   kube,
 	}
 }
 
 // Hooks implements common hooks so that all ServiceDiscovery Namespace resources can use.
-type Hooks struct {
+type Hooks[managedtype namespace] struct {
 	client servicediscoveryiface.ServiceDiscoveryAPI
 	kube   client.Client
 }
 
 // Observe observes any of HTTPNamespace, PrivateDNSNamespace or PublicDNSNamespace types.
-func (h *Hooks) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) { // nolint:gocyclo
-	var cr namespace
-	switch i := mg.(type) {
-	case *v1alpha1.HTTPNamespace:
-		cr = i
-	case *v1alpha1.PrivateDNSNamespace:
-		cr = i
-	case *v1alpha1.PublicDNSNamespace:
-		cr = i
-	default:
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (h *Hooks[managedtype]) Observe(ctx context.Context, cr managedtype) (managed.ExternalObservation, error) { //nolint:gocyclo
 	// Creation is still on-going.
 	if meta.GetExternalName(cr) == "" {
-		if awsclient.StringValue(cr.GetOperationID()) == "" {
+		if pointer.StringValue(cr.GetOperationID()) == "" {
 			return managed.ExternalObservation{}, nil
 		}
 		opInput := &svcsdk.GetOperationInput{
@@ -97,11 +87,11 @@ func (h *Hooks) Observe(ctx context.Context, mg cpresource.Managed) (managed.Ext
 		if opResp.Operation == nil || len(opResp.Operation.Targets) == 0 {
 			return managed.ExternalObservation{}, errors.New(errOperationResponseMalformed)
 		}
-		switch awsclient.StringValue(opResp.Operation.Status) {
+		switch pointer.StringValue(opResp.Operation.Status) {
 		case "PENDING", "SUBMITTED":
 			return managed.ExternalObservation{}, nil
 		case "FAIL":
-			cr.SetConditions(xpv1.Unavailable().WithMessage(awsclient.StringValue(opResp.Operation.ErrorMessage)))
+			cr.SetConditions(xpv1.Unavailable().WithMessage(pointer.StringValue(opResp.Operation.ErrorMessage)))
 			return managed.ExternalObservation{}, nil
 		}
 		namespaceID, ok := opResp.Operation.Targets["NAMESPACE"]
@@ -109,15 +99,15 @@ func (h *Hooks) Observe(ctx context.Context, mg cpresource.Managed) (managed.Ext
 			return managed.ExternalObservation{}, errors.New(errOperationResponseMalformed)
 		}
 
-		if meta.GetExternalName(mg) != awsclient.StringValue(namespaceID) {
+		if meta.GetExternalName(cr) != pointer.StringValue(namespaceID) {
 			// We need to make sure external name makes it to api-server no matter what.
 			err := retry.OnError(retry.DefaultRetry, cpresource.IsAPIError, func() error {
 				nn := types.NamespacedName{Name: cr.GetName()}
-				if err := h.kube.Get(ctx, nn, mg); err != nil {
+				if err := h.kube.Get(ctx, nn, cr); err != nil {
 					return err
 				}
-				meta.SetExternalName(mg, awsclient.StringValue(namespaceID))
-				return h.kube.Update(ctx, mg)
+				meta.SetExternalName(cr, pointer.StringValue(namespaceID))
+				return h.kube.Update(ctx, cr)
 			})
 			if err != nil {
 				return managed.ExternalObservation{}, errors.Wrap(err, "cannot update with external name")
@@ -126,7 +116,7 @@ func (h *Hooks) Observe(ctx context.Context, mg cpresource.Managed) (managed.Ext
 	}
 
 	nsInput := &svcsdk.GetNamespaceInput{
-		Id: awsclient.String(meta.GetExternalName(cr)),
+		Id: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	}
 	nsReqResp, err := h.client.GetNamespaceWithContext(ctx, nsInput)
 	if err != nil {
@@ -136,7 +126,7 @@ func (h *Hooks) Observe(ctx context.Context, mg cpresource.Managed) (managed.Ext
 		}
 		cr.SetConditions(xpv1.Unavailable())
 		return managed.ExternalObservation{},
-			awsclient.Wrap(cpresource.Ignore(ActualIsNotFound, err), errGetNamespace)
+			errorutils.Wrap(cpresource.Ignore(ActualIsNotFound, err), errGetNamespace)
 	}
 
 	// Deleting is still on-going.
@@ -155,7 +145,7 @@ func (h *Hooks) Observe(ctx context.Context, mg cpresource.Managed) (managed.Ext
 		return managed.ExternalObservation{
 				ResourceExists: true,
 			},
-			awsclient.Wrap(cpresource.Ignore(ActualIsNotFound, err), errListTagsForResource)
+			errorutils.Wrap(cpresource.Ignore(ActualIsNotFound, err), errListTagsForResource)
 	}
 	if !tagUpToDate {
 		// Update Tags
@@ -163,14 +153,14 @@ func (h *Hooks) Observe(ctx context.Context, mg cpresource.Managed) (managed.Ext
 	}
 
 	if cr.GetDescription() != nil && // Ignore aws value if no description are set
-		awsclient.StringValue(cr.GetDescription()) != awsclient.StringValue(nsReqResp.Namespace.Description) {
+		pointer.StringValue(cr.GetDescription()) != pointer.StringValue(nsReqResp.Namespace.Description) {
 		// Update Description
 		upToDate = false
 	}
 
 	if cr.GetTTL() != nil && // Ignore aws value if no ttl are set
 		(nsReqResp.Namespace == nil || nsReqResp.Namespace.Properties == nil || nsReqResp.Namespace.Properties.DnsProperties == nil ||
-			awsclient.Int64Value(cr.GetTTL()) != awsclient.Int64Value(nsReqResp.Namespace.Properties.DnsProperties.SOA.TTL)) {
+			pointer.Int64Value(cr.GetTTL()) != pointer.Int64Value(nsReqResp.Namespace.Properties.DnsProperties.SOA.TTL)) {
 		// Update TTL
 		upToDate = false
 	}
@@ -182,27 +172,16 @@ func (h *Hooks) Observe(ctx context.Context, mg cpresource.Managed) (managed.Ext
 }
 
 // Delete deletes any of HTTPNamespace, PrivateDNSNamespace or PublicDNSNamespace types.
-func (h *Hooks) Delete(ctx context.Context, mg cpresource.Managed) error {
-	var cr namespace
-	switch i := mg.(type) {
-	case *v1alpha1.HTTPNamespace:
-		cr = i
-	case *v1alpha1.PrivateDNSNamespace:
-		cr = i
-	case *v1alpha1.PublicDNSNamespace:
-		cr = i
-	default:
-		return errors.New(errUnexpectedObject)
-	}
+func (h *Hooks[managedtype]) Delete(ctx context.Context, cr managedtype) (managed.ExternalDelete, error) {
 	input := &svcsdk.DeleteNamespaceInput{
-		Id: awsclient.String(meta.GetExternalName(cr)),
+		Id: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	}
 	op, err := h.client.DeleteNamespaceWithContext(ctx, input)
 	if cpresource.IgnoreAny(err, ActualIsNotFound, IsDuplicateRequest) != nil {
-		return awsclient.Wrap(err, errDeleteNamespace)
+		return managed.ExternalDelete{}, errorutils.Wrap(err, errDeleteNamespace)
 	}
 	cr.SetOperationID(op.OperationId)
-	return nil
+	return managed.ExternalDelete{}, nil
 }
 
 // ActualIsNotFound reimplements IsNotFound which doesn't do it's job
@@ -235,7 +214,7 @@ func AreTagsUpToDate(client servicediscoveryiface.ServiceDiscoveryAPI, spec []*v
 func UpdateTagsForResource(client servicediscoveryiface.ServiceDiscoveryAPI, spec []*v1alpha1.Tag, cr v1.Object) error {
 
 	nsInput := &svcsdk.GetNamespaceInput{
-		Id: awsclient.String(meta.GetExternalName(cr)),
+		Id: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	}
 
 	nsReqResp, err := client.GetNamespace(nsInput)
@@ -287,35 +266,35 @@ func ListTagsForResource(client servicediscoveryiface.ServiceDiscoveryAPI, resou
 func DiffTags(spec []*v1alpha1.Tag, current []*svcsdk.Tag) (addTags []*svcsdk.Tag, removeTags []*string) {
 	currentMap := make(map[string]string, len(current))
 	for _, t := range current {
-		currentMap[awsclient.StringValue(t.Key)] = awsclient.StringValue(t.Value)
+		currentMap[pointer.StringValue(t.Key)] = pointer.StringValue(t.Value)
 	}
 
 	specMap := make(map[string]string, len(spec))
 	for _, t := range spec {
-		key := awsclient.StringValue(t.Key)
-		val := awsclient.StringValue(t.Value)
-		specMap[key] = awsclient.StringValue(t.Value)
+		key := pointer.StringValue(t.Key)
+		val := pointer.StringValue(t.Value)
+		specMap[key] = pointer.StringValue(t.Value)
 
 		if currentVal, exists := currentMap[key]; exists {
 			if currentVal != val {
 				removeTags = append(removeTags, t.Key)
 				addTags = append(addTags, &svcsdk.Tag{
-					Key:   awsclient.String(key),
-					Value: awsclient.String(val),
+					Key:   pointer.ToOrNilIfZeroValue(key),
+					Value: pointer.ToOrNilIfZeroValue(val),
 				})
 			}
 		} else {
 			addTags = append(addTags, &svcsdk.Tag{
-				Key:   awsclient.String(key),
-				Value: awsclient.String(val),
+				Key:   pointer.ToOrNilIfZeroValue(key),
+				Value: pointer.ToOrNilIfZeroValue(val),
 			})
 		}
 	}
 
 	for _, t := range current {
-		key := awsclient.StringValue(t.Key)
+		key := pointer.StringValue(t.Key)
 		if _, exists := specMap[key]; !exists {
-			removeTags = append(removeTags, awsclient.String(key))
+			removeTags = append(removeTags, pointer.ToOrNilIfZeroValue(key))
 		}
 	}
 

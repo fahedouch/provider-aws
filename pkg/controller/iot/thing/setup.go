@@ -22,9 +22,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/iot"
-	"github.com/google/go-cmp/cmp"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -32,12 +29,15 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	iottypes "github.com/crossplane-contrib/provider-aws/apis/iot/v1alpha1"
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/iot/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	aws2 "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupThing adds a controller that reconciles Thing.
@@ -60,17 +60,29 @@ func SetupThing(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(iottypes.ThingGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&iottypes.Thing{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(iottypes.ThingGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Thing, obj *svcsdk.DescribeThingInput) error {
@@ -110,18 +122,19 @@ func preDelete(_ context.Context, cr *svcapitypes.Thing, obj *svcsdk.DeleteThing
 	return false, nil
 }
 
-func isUpToDate(cr *svcapitypes.Thing, resp *svcsdk.DescribeThingOutput) (bool, error) {
+func isUpToDate(_ context.Context, cr *svcapitypes.Thing, resp *svcsdk.DescribeThingOutput) (bool, string, error) {
 	patch, err := createPatch(resp, &cr.Spec.ForProvider)
 
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
-	return cmp.Equal(&svcapitypes.ThingParameters{}, patch), nil
+	diff := cmp.Diff(&svcapitypes.ThingParameters{}, patch)
+	return diff == "", diff, nil
 }
 
 func createPatch(in *svcsdk.DescribeThingOutput, target *svcapitypes.ThingParameters) (*svcapitypes.ThingParameters, error) {
-	jsonPatch, err := aws2.CreateJSONPatch(in, target)
+	jsonPatch, err := jsonpatch.CreateJSONPatch(in, target)
 	if err != nil {
 		return nil, err
 	}

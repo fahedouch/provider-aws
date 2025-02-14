@@ -24,8 +24,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/acmpca"
 	"github.com/aws/aws-sdk-go-v2/service/acmpca/types"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/acmpca/v1beta1"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // Client defines the CertificateManager operations
@@ -47,7 +49,7 @@ func NewClient(conf *aws.Config) Client {
 // GenerateCreateCertificateAuthorityInput from certificateAuthorityParameters
 func GenerateCreateCertificateAuthorityInput(p *v1beta1.CertificateAuthorityParameters) *acmpca.CreateCertificateAuthorityInput {
 	m := &acmpca.CreateCertificateAuthorityInput{
-		CertificateAuthorityType:          p.Type,
+		CertificateAuthorityType:          types.CertificateAuthorityType(p.Type),
 		CertificateAuthorityConfiguration: GenerateCertificateAuthorityConfiguration(p.CertificateAuthorityConfiguration),
 		RevocationConfiguration:           GenerateRevocationConfiguration(p.RevocationConfiguration),
 	}
@@ -55,8 +57,8 @@ func GenerateCreateCertificateAuthorityInput(p *v1beta1.CertificateAuthorityPara
 	m.Tags = make([]types.Tag, len(p.Tags))
 	for i, val := range p.Tags {
 		m.Tags[i] = types.Tag{
-			Key:   aws.String(val.Key),
-			Value: aws.String(val.Value),
+			Key:   pointer.ToOrNilIfZeroValue(val.Key),
+			Value: pointer.ToOrNilIfZeroValue(val.Value),
 		}
 	}
 
@@ -64,27 +66,27 @@ func GenerateCreateCertificateAuthorityInput(p *v1beta1.CertificateAuthorityPara
 }
 
 // GenerateCertificateAuthorityConfiguration from CertificateAuthorityConfiguration
-func GenerateCertificateAuthorityConfiguration(p v1beta1.CertificateAuthorityConfiguration) *types.CertificateAuthorityConfiguration { // nolint:gocyclo
+func GenerateCertificateAuthorityConfiguration(p v1beta1.CertificateAuthorityConfiguration) *types.CertificateAuthorityConfiguration {
 
 	m := &types.CertificateAuthorityConfiguration{
 		Subject: &types.ASN1Subject{
-			CommonName:                 aws.String(p.Subject.CommonName),
-			Country:                    aws.String(p.Subject.Country),
+			CommonName:                 pointer.ToOrNilIfZeroValue(p.Subject.CommonName),
+			Country:                    pointer.ToOrNilIfZeroValue(p.Subject.Country),
 			DistinguishedNameQualifier: p.Subject.DistinguishedNameQualifier,
 			GenerationQualifier:        p.Subject.GenerationQualifier,
 			GivenName:                  p.Subject.GivenName,
 			Initials:                   p.Subject.Initials,
-			Locality:                   aws.String(p.Subject.Locality),
-			Organization:               aws.String(p.Subject.Organization),
-			OrganizationalUnit:         aws.String(p.Subject.OrganizationalUnit),
+			Locality:                   pointer.ToOrNilIfZeroValue(p.Subject.Locality),
+			Organization:               pointer.ToOrNilIfZeroValue(p.Subject.Organization),
+			OrganizationalUnit:         pointer.ToOrNilIfZeroValue(p.Subject.OrganizationalUnit),
 			Pseudonym:                  p.Subject.Pseudonym,
 			SerialNumber:               p.Subject.SerialNumber,
-			State:                      aws.String(p.Subject.State),
+			State:                      pointer.ToOrNilIfZeroValue(p.Subject.State),
 			Surname:                    p.Subject.Surname,
 			Title:                      p.Subject.Title,
 		},
-		SigningAlgorithm: p.SigningAlgorithm,
-		KeyAlgorithm:     p.KeyAlgorithm,
+		SigningAlgorithm: types.SigningAlgorithm(p.SigningAlgorithm),
+		KeyAlgorithm:     types.KeyAlgorithm(p.KeyAlgorithm),
 	}
 	return m
 
@@ -99,7 +101,7 @@ func GenerateRevocationConfiguration(p *v1beta1.RevocationConfiguration) *types.
 	m := &types.RevocationConfiguration{
 		CrlConfiguration: &types.CrlConfiguration{
 			CustomCname:      p.CustomCname,
-			Enabled:          p.Enabled,
+			Enabled:          &p.Enabled,
 			ExpirationInDays: p.ExpirationInDays,
 			S3BucketName:     p.S3BucketName,
 		},
@@ -110,23 +112,23 @@ func GenerateRevocationConfiguration(p *v1beta1.RevocationConfiguration) *types.
 
 // LateInitializeCertificateAuthority fills the empty fields in *v1beta1.CertificateAuthorityParameters with
 // the values seen in acmpca.CertificateAuthority.
-func LateInitializeCertificateAuthority(in *v1beta1.CertificateAuthorityParameters, certificateAuthority *types.CertificateAuthority) { // nolint:gocyclo
+func LateInitializeCertificateAuthority(in *v1beta1.CertificateAuthorityParameters, certificateAuthority *types.CertificateAuthority) { //nolint:gocyclo
 	if certificateAuthority == nil {
 		return
 	}
 
-	if string(in.Type) == "" && string(certificateAuthority.Type) != "" {
-		in.Type = certificateAuthority.Type
+	if in.Type == "" && string(certificateAuthority.Type) != "" {
+		in.Type = string(certificateAuthority.Type)
 	}
 
 	// NOTE(muvaf): Only ACTIVE and DISABLED statuses can be assigned by the user
 	// so these are the only variants we support in spec. The current status
 	// in the status.atProvider.
 	if aws.ToString(in.Status) == "" && (certificateAuthority.Status == types.CertificateAuthorityStatusActive || certificateAuthority.Status == types.CertificateAuthorityStatusDisabled) {
-		in.Status = aws.String(string(certificateAuthority.Status))
+		in.Status = pointer.ToOrNilIfZeroValue(string(certificateAuthority.Status))
 	}
 
-	if certificateAuthority.RevocationConfiguration.CrlConfiguration.Enabled {
+	if ptr.Deref(certificateAuthority.RevocationConfiguration.CrlConfiguration.Enabled, false) {
 		if in.RevocationConfiguration.ExpirationInDays == nil && certificateAuthority.RevocationConfiguration.CrlConfiguration.ExpirationInDays != nil {
 			in.RevocationConfiguration.ExpirationInDays = certificateAuthority.RevocationConfiguration.CrlConfiguration.ExpirationInDays
 		}
@@ -142,9 +144,9 @@ func LateInitializeCertificateAuthority(in *v1beta1.CertificateAuthorityParamete
 }
 
 // IsCertificateAuthorityUpToDate checks whether there is a change in any of the modifiable fields.
-func IsCertificateAuthorityUpToDate(p *v1beta1.CertificateAuthority, cd types.CertificateAuthority, tags []types.Tag) bool { // nolint:gocyclo
+func IsCertificateAuthorityUpToDate(p *v1beta1.CertificateAuthority, cd types.CertificateAuthority, tags []types.Tag) bool { //nolint:gocyclo
 
-	if cd.RevocationConfiguration.CrlConfiguration.Enabled {
+	if ptr.Deref(cd.RevocationConfiguration.CrlConfiguration.Enabled, false) {
 		if !strings.EqualFold(aws.ToString(p.Spec.ForProvider.RevocationConfiguration.CustomCname), aws.ToString(cd.RevocationConfiguration.CrlConfiguration.CustomCname)) {
 			return false
 		}
@@ -153,7 +155,7 @@ func IsCertificateAuthorityUpToDate(p *v1beta1.CertificateAuthority, cd types.Ce
 			return false
 		}
 
-		if p.Spec.ForProvider.RevocationConfiguration.Enabled != cd.RevocationConfiguration.CrlConfiguration.Enabled {
+		if p.Spec.ForProvider.RevocationConfiguration.Enabled != ptr.Deref(cd.RevocationConfiguration.CrlConfiguration.Enabled, false) {
 			return false
 		}
 

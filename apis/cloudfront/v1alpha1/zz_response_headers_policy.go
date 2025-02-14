@@ -30,7 +30,7 @@ type ResponseHeadersPolicyParameters struct {
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
 	// Contains metadata about the response headers policy, and a set of configurations
-	// that specify the response headers.
+	// that specify the HTTP headers.
 	// +kubebuilder:validation:Required
 	ResponseHeadersPolicyConfig           *ResponseHeadersPolicyConfig `json:"responseHeadersPolicyConfig"`
 	CustomResponseHeadersPolicyParameters `json:",inline"`
@@ -50,6 +50,8 @@ type ResponseHeadersPolicyObservation struct {
 	Location *string `json:"location,omitempty"`
 	// Contains a response headers policy.
 	ResponseHeadersPolicy *ResponseHeadersPolicy_SDK `json:"responseHeadersPolicy,omitempty"`
+
+	CustomResponseHeadersPolicyObservation `json:",inline"`
 }
 
 // ResponseHeadersPolicyStatus defines the observed state of ResponseHeadersPolicy.
@@ -64,6 +66,7 @@ type ResponseHeadersPolicyStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

@@ -22,64 +22,68 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/smithy-go/document"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
+	"github.com/aws/smithy-go/document"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/pkg/test"
-
 	"github.com/crossplane-contrib/provider-aws/apis/database/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 var (
-	allocatedStorage  int32 = 20
-	address                 = "address"
-	arn                     = "my:arn"
-	az                      = "az"
-	characterSetName        = "utf8"
-	cloudwatchExports       = []string{"test"}
-	clusterName             = "testCluster"
-	dbName                  = "example-name"
-	description             = "testDescription"
-	domain                  = "domain"
-	engine                  = "5.6.41"
-	falseFlag               = false
-	instanceClass           = "class"
-	kmsID                   = "kms"
-	monitoring              = 3
-	monitoring32            = int32(monitoring)
-	multiAZ                 = true
-	name                    = "testName"
-	port                    = 123
-	port32                  = int32(port)
-	resourceID              = "resource"
-	retention               = 2
-	retention32             = int32(retention)
-	status                  = "testStatus"
-	storage                 = 1
-	storage32               = int32(storage)
-	storageType             = "storageType"
-	tier                    = 4
-	tier32                  = int32(tier)
-	trueFlag                = true
-	truncEngine             = "5.6"
-	username                = "username"
-	value                   = "testValue"
-	vpc                     = "vpc"
-	window                  = "window"
-	zone                    = "zone"
+	allFieldsName                      = "allfieldsName"
+	allocatedStorage             int32 = 20
+	address                            = "address"
+	arn                                = "my:arn"
+	az                                 = "az"
+	characterSetName                   = "utf8"
+	clusterName                        = "testCluster"
+	dbName                             = "example-name"
+	dbSecurityGroups                   = []string{"test"}
+	description                        = "testDescription"
+	domain                             = "domain"
+	enableCloudwatchExports            = []string{"test"}
+	enabledCloudwatchExports           = []string{"test"}
+	enabledCloudwatchExportsNone       = []string{}
+	engine                             = "5.6.41"
+	iamRole                            = "iamRole"
+	instanceClass                      = "class"
+	kmsID                              = "kms"
+	monitoring                         = 3
+	monitoring32                       = int32(monitoring)
+	multiAZ                            = true
+	name                               = "testName"
+	port                               = 123
+	port32                             = int32(port)
+	resourceID                         = "resource"
+	restoreFromSource                  = "PointInTime"
+	retention                          = 2
+	retention32                        = int32(retention)
+	status                             = "testStatus"
+	storage                            = 1
+	storage32                          = int32(storage)
+	storageType                        = "storageType"
+	tier                               = 4
+	tier32                             = int32(tier)
+	trueFlag                           = true
+	username                           = "username"
+	value                              = "testValue"
+	vpc                                = "vpc"
+	vpcIds                             = []string{"test"}
+	window                             = "window"
+	zone                               = "zone"
 
 	secretNamespace      = "crossplane-system"
 	connectionSecretName = "my-little-secret"
@@ -107,12 +111,12 @@ func TestCreatePatch(t *testing.T) {
 		"SameFields": {
 			args: args{
 				db: &rdstypes.DBInstance{
-					AllocatedStorage: allocatedStorage,
+					AllocatedStorage: &allocatedStorage,
 					CharacterSetName: &characterSetName,
 					DBName:           &dbName,
 				},
 				p: &v1beta1.RDSInstanceParameters{
-					AllocatedStorage: awsclient.IntAddress(awsclient.Int64(20)),
+					AllocatedStorage: ptr.To(20),
 					CharacterSetName: &characterSetName,
 					DBName:           &dbName,
 				},
@@ -124,20 +128,38 @@ func TestCreatePatch(t *testing.T) {
 		"DifferentFields": {
 			args: args{
 				db: &rdstypes.DBInstance{
-					AllocatedStorage: allocatedStorage,
+					AllocatedStorage: &allocatedStorage,
 					CharacterSetName: &characterSetName,
 					DBName:           &dbName,
+					AvailabilityZone: ptr.To("az1"),
 				},
 				p: &v1beta1.RDSInstanceParameters{
-					AllocatedStorage: awsclient.IntAddress(awsclient.Int64(30)),
+					AllocatedStorage: ptr.To(30),
 					CharacterSetName: &characterSetName,
 					DBName:           &dbName,
+					AvailabilityZone: ptr.To("az2"),
 				},
 			},
 			want: want{
 				patch: &v1beta1.RDSInstanceParameters{
-					AllocatedStorage: awsclient.IntAddress(awsclient.Int64(30)),
+					AllocatedStorage: ptr.To(30),
+					AvailabilityZone: ptr.To("az2"),
 				},
+			},
+		},
+		"IgnoreDifferentAvailabilityZoneForMultiAZ": {
+			args: args{
+				db: &rdstypes.DBInstance{
+					AvailabilityZone: ptr.To("az1"),
+					MultiAZ:          ptr.To(true),
+				},
+				p: &v1beta1.RDSInstanceParameters{
+					AvailabilityZone: ptr.To("az2"),
+					MultiAZ:          ptr.To(true),
+				},
+			},
+			want: want{
+				patch: &v1beta1.RDSInstanceParameters{},
 			},
 		},
 	}
@@ -168,14 +190,14 @@ func TestIsUpToDate(t *testing.T) {
 		"SameFields": {
 			args: args{
 				db: rdstypes.DBInstance{
-					AllocatedStorage: allocatedStorage,
+					AllocatedStorage: &allocatedStorage,
 					CharacterSetName: &characterSetName,
 					DBName:           &dbName,
 				},
 				r: v1beta1.RDSInstance{
 					Spec: v1beta1.RDSInstanceSpec{
 						ForProvider: v1beta1.RDSInstanceParameters{
-							AllocatedStorage: awsclient.IntAddress(awsclient.Int64(20)),
+							AllocatedStorage: ptr.To(20),
 							CharacterSetName: &characterSetName,
 							DBName:           &dbName,
 						},
@@ -187,19 +209,19 @@ func TestIsUpToDate(t *testing.T) {
 		"IgnoreDeletionOptions": {
 			args: args{
 				db: rdstypes.DBInstance{
-					AllocatedStorage: allocatedStorage,
+					AllocatedStorage: &allocatedStorage,
 					CharacterSetName: &characterSetName,
 					DBName:           &dbName,
 				},
 				r: v1beta1.RDSInstance{
 					Spec: v1beta1.RDSInstanceSpec{
 						ForProvider: v1beta1.RDSInstanceParameters{
-							AllocatedStorage:                awsclient.IntAddress(awsclient.Int64(20)),
+							AllocatedStorage:                ptr.To(20),
 							CharacterSetName:                &characterSetName,
 							DBName:                          &dbName,
-							DeleteAutomatedBackups:          awsclient.Bool(true),
-							SkipFinalSnapshotBeforeDeletion: awsclient.Bool(true),
-							FinalDBSnapshotIdentifier:       awsclient.String("final"),
+							DeleteAutomatedBackups:          pointer.ToOrNilIfZeroValue(true),
+							SkipFinalSnapshotBeforeDeletion: pointer.ToOrNilIfZeroValue(true),
+							FinalDBSnapshotIdentifier:       pointer.ToOrNilIfZeroValue("final"),
 						},
 					},
 				},
@@ -209,14 +231,14 @@ func TestIsUpToDate(t *testing.T) {
 		"DifferentFields": {
 			args: args{
 				db: rdstypes.DBInstance{
-					AllocatedStorage: allocatedStorage,
+					AllocatedStorage: &allocatedStorage,
 					CharacterSetName: &characterSetName,
 					DBName:           &dbName,
 				},
 				r: v1beta1.RDSInstance{
 					Spec: v1beta1.RDSInstanceSpec{
 						ForProvider: v1beta1.RDSInstanceParameters{
-							AllocatedStorage: awsclient.IntAddress(awsclient.Int64(30)),
+							AllocatedStorage: ptr.To(30),
 							CharacterSetName: &characterSetName,
 							DBName:           &dbName,
 						},
@@ -237,6 +259,43 @@ func TestIsUpToDate(t *testing.T) {
 							DBName:               &dbName,
 							DBSubnetGroupName:    &dbSubnetGroupName,
 							DBSubnetGroupNameRef: &xpv1.Reference{Name: "coolgroup"},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"IgnoresDBName": {
+			args: args{
+				db: rdstypes.DBInstance{
+					DBName: nil,
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							DBName: &dbName,
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"IgnoresRestoreFrom": {
+			args: args{
+				db: rdstypes.DBInstance{
+					DBName: &dbName,
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							DBName: &dbName,
+							RestoreFrom: &v1beta1.RestoreBackupConfiguration{
+								PointInTime: &v1beta1.PointInTimeRestoreBackupConfiguration{
+									SourceDBInstanceIdentifier: &resourceID,
+									UseLatestRestorableTime:    true,
+								},
+								Source: &restoreFromSource,
+							},
 						},
 					},
 				},
@@ -343,12 +402,173 @@ func TestIsUpToDate(t *testing.T) {
 			},
 			want: false,
 		},
+		"EngineVersionUpgrade": {
+			args: args{
+				db: rdstypes.DBInstance{
+					EngineVersion: ptr.To("12.3"),
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							EngineVersion: ptr.To("12.7"),
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		"EngineVersionUpgradeMajorVersion": {
+			args: args{
+				db: rdstypes.DBInstance{
+					EngineVersion: ptr.To("12.3"),
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							EngineVersion: ptr.To("13.7"),
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		"EngineVersionMajorVersionOnly": {
+			args: args{
+				db: rdstypes.DBInstance{
+					EngineVersion: ptr.To("12.3"),
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							EngineVersion: ptr.To("12"),
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"EngineVersionDowngrade": {
+			args: args{
+				db: rdstypes.DBInstance{
+					EngineVersion: ptr.To("12.3"),
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							EngineVersion: ptr.To("12.1"),
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"NoUpdateForDifferentAvailabilityZoneWhenMultiAZ": {
+			args: args{
+				db: rdstypes.DBInstance{
+					AvailabilityZone: ptr.To("az1"),
+					MultiAZ:          ptr.To(true),
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							AvailabilityZone: ptr.To("az2"),
+							MultiAZ:          ptr.To(true),
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"SameTags": {
+			args: args{
+				db: rdstypes.DBInstance{
+					TagList: []rdstypes.Tag{
+						{Key: ptr.To("tag1")},
+						{Key: ptr.To("tag2")},
+						{Key: ptr.To("tag3")},
+					},
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							Tags: []v1beta1.Tag{
+								{Key: "tag1"},
+								{Key: "tag2"},
+								{Key: "tag3"},
+							},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"SameTagsDifferentOrder": {
+			args: args{
+				db: rdstypes.DBInstance{
+					TagList: []rdstypes.Tag{
+						{Key: ptr.To("tag1"), Value: ptr.To("val")},
+						{Key: ptr.To("tag2"), Value: ptr.To("val")},
+						{Key: ptr.To("tag3"), Value: ptr.To("val")},
+					},
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							Tags: []v1beta1.Tag{
+								{Key: "tag3", Value: "val"},
+								{Key: "tag2", Value: "val"},
+								{Key: "tag1", Value: "val"},
+							},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"DifferentTags": {
+			args: args{
+				db: rdstypes.DBInstance{
+					TagList: []rdstypes.Tag{
+						{Key: ptr.To("tag1")},
+						{Key: ptr.To("tag2")},
+						{Key: ptr.To("tag3")},
+					},
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							Tags: []v1beta1.Tag{
+								{Key: "tag1"},
+								{Key: "tag5"},
+								{Key: "tag6"},
+							},
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		"EnableCloudwatchLogExportsEmptyAndNil": {
+			args: args{
+				db: rdstypes.DBInstance{
+					EnabledCloudwatchLogsExports: nil,
+				},
+				r: v1beta1.RDSInstance{
+					Spec: v1beta1.RDSInstanceSpec{
+						ForProvider: v1beta1.RDSInstanceParameters{
+							EnableCloudwatchLogsExports: []string{},
+						},
+					},
+				},
+			},
+			want: true,
+		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			got, _, _ := IsUpToDate(ctx, tc.args.kube, &tc.args.r, tc.args.db)
+			got, _, _, _, _ := IsUpToDate(ctx, tc.args.kube, &tc.args.r, tc.args.db)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
@@ -577,7 +797,7 @@ func TestGenerateObservation(t *testing.T) {
 	endpoint := rdstypes.Endpoint{
 		Address:      &address,
 		HostedZoneId: &zone,
-		Port:         port32,
+		Port:         &port32,
 	}
 	pendingModifiedValues := rdstypes.PendingModifiedValues{
 		AllocatedStorage:        &storage32,
@@ -589,11 +809,12 @@ func TestGenerateObservation(t *testing.T) {
 		LicenseModel:            &name,
 		MultiAZ:                 &multiAZ,
 		Port:                    &port32,
+		StorageThroughput:       &storage32,
 		StorageType:             &storageType,
 	}
 	pendingCloudwatch := rdstypes.PendingCloudwatchLogsExports{
-		LogTypesToDisable: cloudwatchExports,
-		LogTypesToEnable:  cloudwatchExports,
+		LogTypesToDisable: nil,
+		LogTypesToEnable:  enableCloudwatchExports,
 	}
 	pendingModifiedValues.PendingCloudwatchLogsExports = &pendingCloudwatch
 	pendingModifiedValues.ProcessorFeatures = []rdstypes.ProcessorFeature{{
@@ -610,9 +831,11 @@ func TestGenerateObservation(t *testing.T) {
 				DBInstanceStatus:                      &status,
 				DBInstanceArn:                         &arn,
 				InstanceCreateTime:                    &createTime,
-				DbInstancePort:                        port32,
+				DbInstancePort:                        &port32,
 				DbiResourceId:                         &resourceID,
-				BackupRetentionPeriod:                 retention32,
+				BackupRetentionPeriod:                 &retention32,
+				EnabledCloudwatchLogsExports:          enabledCloudwatchExports,
+				EngineVersion:                         &engine,
 				EnhancedMonitoringResourceArn:         &arn,
 				PerformanceInsightsEnabled:            &trueFlag,
 				ReadReplicaDBClusterIdentifiers:       replicaClusters,
@@ -639,7 +862,7 @@ func TestGenerateObservation(t *testing.T) {
 					Message:    &status,
 					Status:     &status,
 					StatusType: &status,
-					Normal:     normal,
+					Normal:     &normal,
 				}},
 				VpcSecurityGroups: []rdstypes.VpcSecurityGroupMembership{{
 					Status:             &status,
@@ -669,6 +892,8 @@ func TestGenerateObservation(t *testing.T) {
 				DomainMemberships:             []v1beta1.DomainMembership{{Domain: domain, FQDN: name, IAMRoleName: name, Status: status}},
 				InstanceCreateTime:            &metav1.Time{Time: createTime},
 				Endpoint:                      v1beta1.Endpoint{Port: port, HostedZoneID: zone, Address: address},
+				EnabledCloudwatchLogsExports:  enabledCloudwatchExports,
+				EngineVersion:                 &engine,
 				EnhancedMonitoringResourceArn: arn,
 				LatestRestorableTime:          &metav1.Time{Time: lastRestoreTime},
 				OptionGroupMemberships:        []v1beta1.OptionGroupMembership{{OptionGroupName: name, Status: status}},
@@ -682,10 +907,11 @@ func TestGenerateObservation(t *testing.T) {
 					LicenseModel:            name,
 					MultiAZ:                 multiAZ,
 					Port:                    port,
+					StorageThroughput:       storage,
 					StorageType:             storageType,
 					PendingCloudwatchLogsExports: v1beta1.PendingCloudwatchLogsExports{
-						LogTypesToDisable: cloudwatchExports,
-						LogTypesToEnable:  cloudwatchExports,
+						LogTypesToDisable: nil,
+						LogTypesToEnable:  enableCloudwatchExports,
 					},
 					ProcessorFeatures: []v1beta1.ProcessorFeature{{Name: name, Value: value}},
 				},
@@ -711,7 +937,7 @@ func TestGenerateObservation(t *testing.T) {
 				DBInstanceStatus:                      &status,
 				DBInstanceArn:                         &arn,
 				InstanceCreateTime:                    &createTime,
-				DbInstancePort:                        port32,
+				DbInstancePort:                        &port32,
 				DbiResourceId:                         &resourceID,
 				EnhancedMonitoringResourceArn:         &arn,
 				PerformanceInsightsEnabled:            &trueFlag,
@@ -735,7 +961,7 @@ func TestGenerateObservation(t *testing.T) {
 					Message:    &status,
 					Status:     &status,
 					StatusType: &status,
-					Normal:     normal,
+					Normal:     &normal,
 				}},
 				VpcSecurityGroups: []rdstypes.VpcSecurityGroupMembership{{
 					Status:             &status,
@@ -839,19 +1065,19 @@ func TestLateInitialize(t *testing.T) {
 	}{
 		"AllFields": {
 			rds: rdstypes.DBInstance{
-				AllocatedStorage:                   storage32,
+				AllocatedStorage:                   &storage32,
 				DBInstanceClass:                    &instanceClass,
 				Engine:                             &engine,
-				AutoMinorVersionUpgrade:            trueFlag,
+				AutoMinorVersionUpgrade:            &trueFlag,
 				AvailabilityZone:                   &az,
-				BackupRetentionPeriod:              storage32,
+				BackupRetentionPeriod:              &storage32,
 				CACertificateIdentifier:            &name,
 				CharacterSetName:                   &name,
-				CopyTagsToSnapshot:                 trueFlag,
+				CopyTagsToSnapshot:                 &trueFlag,
 				DBClusterIdentifier:                &clusterName,
 				DBName:                             &name,
-				DeletionProtection:                 trueFlag,
-				IAMDatabaseAuthenticationEnabled:   trueFlag,
+				DeletionProtection:                 &trueFlag,
+				IAMDatabaseAuthenticationEnabled:   &trueFlag,
 				PerformanceInsightsEnabled:         &trueFlag,
 				Iops:                               &storage32,
 				KmsKeyId:                           &kmsID,
@@ -859,20 +1085,21 @@ func TestLateInitialize(t *testing.T) {
 				MasterUsername:                     &username,
 				MonitoringInterval:                 &monitoring32,
 				MonitoringRoleArn:                  &arn,
-				MultiAZ:                            multiAZ,
+				MultiAZ:                            &multiAZ,
 				PerformanceInsightsKMSKeyId:        &kmsID,
 				PerformanceInsightsRetentionPeriod: &retention32,
-				Endpoint:                           &rdstypes.Endpoint{Port: port32},
+				Endpoint:                           &rdstypes.Endpoint{Port: &port32},
 				PreferredBackupWindow:              &window,
 				PreferredMaintenanceWindow:         &window,
 				PromotionTier:                      &tier32,
-				PubliclyAccessible:                 trueFlag,
-				StorageEncrypted:                   trueFlag,
+				PubliclyAccessible:                 &trueFlag,
+				StorageEncrypted:                   &trueFlag,
+				StorageThroughput:                  &storage32,
 				StorageType:                        &storageType,
 				Timezone:                           &zone,
 				DBSecurityGroups:                   []rdstypes.DBSecurityGroupMembership{{DBSecurityGroupName: &name, Status: &status}},
 				DBSubnetGroup:                      &subnetGroup,
-				EnabledCloudwatchLogsExports:       cloudwatchExports,
+				EnabledCloudwatchLogsExports:       enabledCloudwatchExports,
 				ProcessorFeatures: []rdstypes.ProcessorFeature{{
 					Name:  &name,
 					Value: &value,
@@ -914,11 +1141,12 @@ func TestLateInitialize(t *testing.T) {
 				PromotionTier:                      &tier,
 				PubliclyAccessible:                 &trueFlag,
 				StorageEncrypted:                   &trueFlag,
+				StorageThroughput:                  &storage,
 				StorageType:                        &storageType,
 				Timezone:                           &zone,
 				DBSecurityGroups:                   []string{name},
 				DBSubnetGroupName:                  subnetGroup.DBSubnetGroupName,
-				EnableCloudwatchLogsExports:        cloudwatchExports,
+				EnableCloudwatchLogsExports:        enabledCloudwatchExports,
 				ProcessorFeatures: []v1beta1.ProcessorFeature{{
 					Name:  name,
 					Value: value,
@@ -933,15 +1161,7 @@ func TestLateInitialize(t *testing.T) {
 			},
 			params: v1beta1.RDSInstanceParameters{},
 			want: v1beta1.RDSInstanceParameters{
-				DBSubnetGroupName:               subnetGroup.DBSubnetGroupName,
-				AutoMinorVersionUpgrade:         &falseFlag,
-				BackupRetentionPeriod:           new(int),
-				CopyTagsToSnapshot:              &falseFlag,
-				DeletionProtection:              &falseFlag,
-				EnableIAMDatabaseAuthentication: &falseFlag,
-				MultiAZ:                         &falseFlag,
-				PubliclyAccessible:              &falseFlag,
-				StorageEncrypted:                &falseFlag,
+				DBSubnetGroupName: subnetGroup.DBSubnetGroupName,
 			},
 		},
 		"SubnetGroupNameNotOverwritten": {
@@ -952,15 +1172,7 @@ func TestLateInitialize(t *testing.T) {
 				DBSubnetGroupName: &existingName,
 			},
 			want: v1beta1.RDSInstanceParameters{
-				DBSubnetGroupName:               &existingName,
-				AutoMinorVersionUpgrade:         &falseFlag,
-				BackupRetentionPeriod:           new(int),
-				CopyTagsToSnapshot:              &falseFlag,
-				DeletionProtection:              &falseFlag,
-				EnableIAMDatabaseAuthentication: &falseFlag,
-				MultiAZ:                         &falseFlag,
-				PubliclyAccessible:              &falseFlag,
-				StorageEncrypted:                &falseFlag,
+				DBSubnetGroupName: &existingName,
 			},
 		},
 		"SecurityGroupNotOverwritten": {
@@ -972,35 +1184,6 @@ func TestLateInitialize(t *testing.T) {
 			},
 			want: v1beta1.RDSInstanceParameters{
 				DBSecurityGroups: []string{"newGroup"},
-
-				AutoMinorVersionUpgrade:         &falseFlag,
-				BackupRetentionPeriod:           new(int),
-				CopyTagsToSnapshot:              &falseFlag,
-				DeletionProtection:              &falseFlag,
-				EnableIAMDatabaseAuthentication: &falseFlag,
-				MultiAZ:                         &falseFlag,
-				PubliclyAccessible:              &falseFlag,
-				StorageEncrypted:                &falseFlag,
-			},
-		},
-		"CloudwatchExportsNotOverwritten": {
-			rds: rdstypes.DBInstance{
-				EnabledCloudwatchLogsExports: cloudwatchExports,
-			},
-			params: v1beta1.RDSInstanceParameters{
-				EnableCloudwatchLogsExports: []string{"newExport"},
-			},
-			want: v1beta1.RDSInstanceParameters{
-				EnableCloudwatchLogsExports: []string{"newExport"},
-
-				AutoMinorVersionUpgrade:         &falseFlag,
-				BackupRetentionPeriod:           new(int),
-				CopyTagsToSnapshot:              &falseFlag,
-				DeletionProtection:              &falseFlag,
-				EnableIAMDatabaseAuthentication: &falseFlag,
-				MultiAZ:                         &falseFlag,
-				PubliclyAccessible:              &falseFlag,
-				StorageEncrypted:                &falseFlag,
 			},
 		},
 		"ProcessorFeaturesNotOverwritten": {
@@ -1021,15 +1204,6 @@ func TestLateInitialize(t *testing.T) {
 					Name:  existingName,
 					Value: existingName,
 				}},
-
-				AutoMinorVersionUpgrade:         &falseFlag,
-				BackupRetentionPeriod:           new(int),
-				CopyTagsToSnapshot:              &falseFlag,
-				DeletionProtection:              &falseFlag,
-				EnableIAMDatabaseAuthentication: &falseFlag,
-				MultiAZ:                         &falseFlag,
-				PubliclyAccessible:              &falseFlag,
-				StorageEncrypted:                &falseFlag,
 			},
 		},
 		"VPCSecurityGroupIdsNotOverwritten": {
@@ -1050,15 +1224,6 @@ func TestLateInitialize(t *testing.T) {
 					Name:  existingName,
 					Value: existingName,
 				}},
-
-				AutoMinorVersionUpgrade:         &falseFlag,
-				BackupRetentionPeriod:           new(int),
-				CopyTagsToSnapshot:              &falseFlag,
-				DeletionProtection:              &falseFlag,
-				EnableIAMDatabaseAuthentication: &falseFlag,
-				MultiAZ:                         &falseFlag,
-				PubliclyAccessible:              &falseFlag,
-				StorageEncrypted:                &falseFlag,
 			},
 		},
 		"EngineVersion": {
@@ -1066,34 +1231,16 @@ func TestLateInitialize(t *testing.T) {
 				EngineVersion: &engine,
 			},
 			params: v1beta1.RDSInstanceParameters{
-				EngineVersion: &truncEngine,
+				EngineVersion: &engine,
 			},
 			want: v1beta1.RDSInstanceParameters{
 				EngineVersion: &engine,
-
-				AutoMinorVersionUpgrade:         &falseFlag,
-				BackupRetentionPeriod:           new(int),
-				CopyTagsToSnapshot:              &falseFlag,
-				DeletionProtection:              &falseFlag,
-				EnableIAMDatabaseAuthentication: &falseFlag,
-				MultiAZ:                         &falseFlag,
-				PubliclyAccessible:              &falseFlag,
-				StorageEncrypted:                &falseFlag,
 			},
 		},
 		"EmptyInstance": {
 			rds:    rdstypes.DBInstance{},
 			params: v1beta1.RDSInstanceParameters{},
-			want: v1beta1.RDSInstanceParameters{
-				AutoMinorVersionUpgrade:         &falseFlag,
-				BackupRetentionPeriod:           new(int),
-				CopyTagsToSnapshot:              &falseFlag,
-				DeletionProtection:              &falseFlag,
-				EnableIAMDatabaseAuthentication: &falseFlag,
-				MultiAZ:                         &falseFlag,
-				PubliclyAccessible:              &falseFlag,
-				StorageEncrypted:                &falseFlag,
-			},
+			want:   v1beta1.RDSInstanceParameters{},
 		},
 	}
 
@@ -1108,22 +1255,12 @@ func TestLateInitialize(t *testing.T) {
 }
 
 func TestGenerateModifyDBInstanceInput(t *testing.T) {
-	dbSecurityGroups := []string{name}
-	allFieldsName := "allfieldsName"
 	emptyName := "emptyProcessor"
-	iamRole := "iamRole"
-	vpcIds := []string{name}
-	rdsCloudwatchLogsExportConfig := rdstypes.CloudwatchLogsExportConfiguration{
-		DisableLogTypes: cloudwatchExports,
-		EnableLogTypes:  cloudwatchExports,
-	}
-	cloudwatchLogsExportConfig := v1beta1.CloudwatchLogsExportConfiguration{
-		DisableLogTypes: cloudwatchExports,
-		EnableLogTypes:  cloudwatchExports,
-	}
+
 	cases := map[string]struct {
 		name   string
 		params v1beta1.RDSInstanceParameters
+		db     rdstypes.DBInstance
 		want   rds.ModifyDBInstanceInput
 	}{
 		"AllFields": {
@@ -1139,7 +1276,134 @@ func TestGenerateModifyDBInstanceInput(t *testing.T) {
 				BackupRetentionPeriod:              &retention,
 				CACertificateIdentifier:            &name,
 				CharacterSetName:                   &name,
-				CloudwatchLogsExportConfiguration:  &cloudwatchLogsExportConfig,
+				CopyTagsToSnapshot:                 &trueFlag,
+				DBClusterIdentifier:                &clusterName,
+				DBName:                             &name,
+				DBParameterGroupName:               &name,
+				DeletionProtection:                 &trueFlag,
+				Domain:                             &domain,
+				DomainIAMRoleName:                  &iamRole,
+				EnableCloudwatchLogsExports:        enableCloudwatchExports,
+				EnableIAMDatabaseAuthentication:    &trueFlag,
+				EnablePerformanceInsights:          &trueFlag,
+				IOPS:                               &storage,
+				KMSKeyID:                           &kmsID,
+				LicenseModel:                       &name,
+				MasterUsername:                     &username,
+				MonitoringInterval:                 &monitoring,
+				MonitoringRoleARN:                  &arn,
+				MultiAZ:                            &multiAZ,
+				OptionGroupName:                    &name,
+				PerformanceInsightsKMSKeyID:        &kmsID,
+				PerformanceInsightsRetentionPeriod: &retention,
+				Port:                               &port,
+				PreferredBackupWindow:              &window,
+				PreferredMaintenanceWindow:         &window,
+				PromotionTier:                      &tier,
+				PubliclyAccessible:                 &trueFlag,
+				StorageEncrypted:                   &trueFlag,
+				StorageThroughput:                  &storage,
+				StorageType:                        &storageType,
+				Timezone:                           &zone,
+				DBSecurityGroups:                   dbSecurityGroups,
+				DBSubnetGroupName:                  &name,
+				ProcessorFeatures: []v1beta1.ProcessorFeature{{
+					Name:  name,
+					Value: value,
+				}},
+				VPCSecurityGroupIDs:         vpcIds,
+				EngineVersion:               &engine,
+				UseDefaultProcessorFeatures: &trueFlag,
+			},
+			db: rdstypes.DBInstance{
+				EnabledCloudwatchLogsExports: enabledCloudwatchExportsNone,
+			},
+			want: rds.ModifyDBInstanceInput{
+				DBInstanceIdentifier:     &allFieldsName,
+				AllocatedStorage:         &storage32,
+				AllowMajorVersionUpgrade: &trueFlag,
+				ApplyImmediately:         &trueFlag,
+				AutoMinorVersionUpgrade:  &trueFlag,
+				BackupRetentionPeriod:    &retention32,
+				CACertificateIdentifier:  &name,
+				CloudwatchLogsExportConfiguration: &rdstypes.CloudwatchLogsExportConfiguration{
+					DisableLogTypes: []string{},
+					EnableLogTypes:  enableCloudwatchExports,
+				},
+				CopyTagsToSnapshot:                 &trueFlag,
+				DBInstanceClass:                    &instanceClass,
+				DBParameterGroupName:               &name,
+				DBPortNumber:                       &port32,
+				DBSecurityGroups:                   dbSecurityGroups,
+				DBSubnetGroupName:                  &name,
+				DeletionProtection:                 &trueFlag,
+				Domain:                             &domain,
+				DomainIAMRoleName:                  &iamRole,
+				EnableIAMDatabaseAuthentication:    &trueFlag,
+				EnablePerformanceInsights:          &trueFlag,
+				EngineVersion:                      &engine,
+				Iops:                               &storage32,
+				LicenseModel:                       &name,
+				MonitoringInterval:                 &monitoring32,
+				MonitoringRoleArn:                  &arn,
+				MultiAZ:                            &multiAZ,
+				OptionGroupName:                    &name,
+				PerformanceInsightsRetentionPeriod: &retention32,
+				PerformanceInsightsKMSKeyId:        &kmsID,
+				PreferredBackupWindow:              &window,
+				PreferredMaintenanceWindow:         &window,
+				PromotionTier:                      &tier32,
+				PubliclyAccessible:                 &trueFlag,
+				StorageThroughput:                  &storage32,
+				StorageType:                        &storageType,
+				UseDefaultProcessorFeatures:        &trueFlag,
+				VpcSecurityGroupIds:                vpcIds,
+				ProcessorFeatures: []rdstypes.ProcessorFeature{{
+					Name:  &name,
+					Value: &value,
+				}},
+			},
+		},
+		"Empty": {
+			name:   emptyName,
+			params: v1beta1.RDSInstanceParameters{},
+			want: rds.ModifyDBInstanceInput{
+				DBInstanceIdentifier: &emptyName,
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := GenerateModifyDBInstanceInput(tc.name, &tc.params, &tc.db)
+			if diff := cmp.Diff(&tc.want, got, cmpopts.IgnoreTypes(document.NoSerde{})); diff != "" {
+				t.Errorf("r: -want, +got:\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestGenerateCreateRDSInstanceInput(t *testing.T) {
+	cases := map[string]struct {
+		name     string
+		password string
+		params   v1beta1.RDSInstanceParameters
+		want     rds.CreateDBInstanceInput
+	}{
+		"AllFields": {
+			name: allFieldsName,
+			params: v1beta1.RDSInstanceParameters{
+				AllocatedStorage:                   &storage,
+				DBInstanceClass:                    instanceClass,
+				ApplyModificationsImmediately:      &trueFlag,
+				Engine:                             engine,
+				EngineVersion:                      &engine,
+				AutoMinorVersionUpgrade:            &trueFlag,
+				AllowMajorVersionUpgrade:           &trueFlag,
+				AvailabilityZone:                   &az,
+				BackupRetentionPeriod:              &retention,
+				CACertificateIdentifier:            &name,
+				CharacterSetName:                   &name,
 				CopyTagsToSnapshot:                 &trueFlag,
 				DBClusterIdentifier:                &clusterName,
 				DBName:                             &name,
@@ -1165,73 +1429,73 @@ func TestGenerateModifyDBInstanceInput(t *testing.T) {
 				PromotionTier:                      &tier,
 				PubliclyAccessible:                 &trueFlag,
 				StorageEncrypted:                   &trueFlag,
+				StorageThroughput:                  &storage,
 				StorageType:                        &storageType,
 				Timezone:                           &zone,
 				DBSecurityGroups:                   dbSecurityGroups,
 				DBSubnetGroupName:                  &name,
-				EnableCloudwatchLogsExports:        cloudwatchExports,
+				EnableCloudwatchLogsExports:        enableCloudwatchExports,
 				ProcessorFeatures: []v1beta1.ProcessorFeature{{
 					Name:  name,
 					Value: value,
 				}},
 				VPCSecurityGroupIDs:         vpcIds,
-				EngineVersion:               &engine,
 				UseDefaultProcessorFeatures: &trueFlag,
 			},
-			want: rds.ModifyDBInstanceInput{
+			want: rds.CreateDBInstanceInput{
 				DBInstanceIdentifier:               &allFieldsName,
+				AvailabilityZone:                   &az,
 				AllocatedStorage:                   &storage32,
-				AllowMajorVersionUpgrade:           trueFlag,
-				ApplyImmediately:                   trueFlag,
 				AutoMinorVersionUpgrade:            &trueFlag,
 				BackupRetentionPeriod:              &retention32,
 				CACertificateIdentifier:            &name,
+				CharacterSetName:                   &name,
 				CopyTagsToSnapshot:                 &trueFlag,
+				DBClusterIdentifier:                &clusterName,
 				DBInstanceClass:                    &instanceClass,
+				DBName:                             &name,
 				DBParameterGroupName:               &name,
-				DBPortNumber:                       &port32,
 				DBSecurityGroups:                   dbSecurityGroups,
 				DBSubnetGroupName:                  &name,
 				DeletionProtection:                 &trueFlag,
 				Domain:                             &domain,
 				DomainIAMRoleName:                  &iamRole,
 				EnableIAMDatabaseAuthentication:    &trueFlag,
+				EnableCloudwatchLogsExports:        enableCloudwatchExports,
 				EnablePerformanceInsights:          &trueFlag,
+				Engine:                             &engine,
 				EngineVersion:                      &engine,
 				Iops:                               &storage32,
+				KmsKeyId:                           &kmsID,
 				LicenseModel:                       &name,
+				MasterUsername:                     &username,
 				MonitoringInterval:                 &monitoring32,
 				MonitoringRoleArn:                  &arn,
 				MultiAZ:                            &multiAZ,
 				OptionGroupName:                    &name,
 				PerformanceInsightsRetentionPeriod: &retention32,
 				PerformanceInsightsKMSKeyId:        &kmsID,
+				Port:                               &port32,
 				PreferredBackupWindow:              &window,
 				PreferredMaintenanceWindow:         &window,
 				PromotionTier:                      &tier32,
 				PubliclyAccessible:                 &trueFlag,
+				StorageEncrypted:                   &trueFlag,
+				StorageThroughput:                  &storage32,
 				StorageType:                        &storageType,
-				UseDefaultProcessorFeatures:        &trueFlag,
+				Timezone:                           &zone,
 				VpcSecurityGroupIds:                vpcIds,
 				ProcessorFeatures: []rdstypes.ProcessorFeature{{
 					Name:  &name,
 					Value: &value,
 				}},
-				CloudwatchLogsExportConfiguration: &rdsCloudwatchLogsExportConfig,
-			},
-		},
-		"Empty": {
-			name:   emptyName,
-			params: v1beta1.RDSInstanceParameters{},
-			want: rds.ModifyDBInstanceInput{
-				DBInstanceIdentifier: &emptyName,
 			},
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := GenerateModifyDBInstanceInput(tc.name, &tc.params)
+			got := GenerateCreateRDSInstanceInput(tc.name, tc.password, &tc.params)
 			if diff := cmp.Diff(&tc.want, got, cmpopts.IgnoreTypes(document.NoSerde{})); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}

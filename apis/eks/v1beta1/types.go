@@ -17,9 +17,8 @@ limitations under the License.
 package v1beta1
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ClusterStatusType is the status of an EKS cluster.
@@ -46,9 +45,29 @@ const (
 	LogTypeScheduler         LogType = "scheduler"
 )
 
+// AuthenticationMode specifies the authentication mode of the cluster
+type AuthenticationMode string
+
+const (
+	AuthenticationModeApi             AuthenticationMode = "API"
+	AuthenticationModeApiAndConfigMap AuthenticationMode = "API_AND_CONFIG_MAP"
+	AuthenticationModeConfigMap       AuthenticationMode = "CONFIG_MAP"
+)
+
+type AccessConfig struct {
+	// The desired authentication mode for the cluster.
+	// +kubebuilder:validation:Enum=API;API_AND_CONFIG_MAP;CONFIG_MAP
+	// +optional
+	AuthenticationMode *AuthenticationMode `json:"authenticationMode,omitempty"`
+}
+
 // ClusterParameters define the desired state of an AWS Elastic Kubernetes
 // Service cluster.
 type ClusterParameters struct {
+	// The access configuration for the cluster.
+	// +optional
+	AccessConfig *AccessConfig `json:"accessConfig,omitempty"`
+
 	// TODO(muvaf): Region is a required field but in order to keep backward compatibility
 	// with old Provider type and not bear the cost of bumping to v1beta2, we're
 	// keeping it optional for now. Reconsider before v1beta2 or v1.
@@ -341,6 +360,9 @@ type ClusterObservation struct {
 	// in the Amazon EKS User Guide.
 	ResourcesVpcConfig VpcConfigResponse `json:"resourcesVpcConfig,omitempty"`
 
+	// The access configuration for the cluster.
+	AccessConfig AccessConfigResponse `json:"accessConfig,omitempty"`
+
 	// The current status of the cluster.
 	Status ClusterStatusType `json:"status,omitempty"`
 }
@@ -443,6 +465,12 @@ type VpcConfigResponse struct {
 
 	// The VPC associated with your cluster.
 	VpcID string `json:"vpcId,omitempty"`
+}
+
+// AccessConfigResponse is the observed access configuration for a cluster.
+type AccessConfigResponse struct {
+	// The authentication mode used for the cluster.
+	AuthenticationMode AuthenticationMode `json:"authenticationMode,omitempty"`
 }
 
 // A ClusterSpec defines the desired state of an EKS Cluster.

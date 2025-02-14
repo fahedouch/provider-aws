@@ -83,6 +83,8 @@ type FileSystemParameters struct {
 	// performance mode can't be changed after the file system has been created.
 	//
 	// The maxIO mode is not supported on file systems using One Zone storage classes.
+	//
+	// Default is generalPurpose.
 	PerformanceMode *string `json:"performanceMode,omitempty"`
 	// Use to create one or more tags associated with the file system. Each tag
 	// is a user-defined key-value pair. Name your file system on creation by including
@@ -90,13 +92,12 @@ type FileSystemParameters struct {
 	// For more information, see Tagging Amazon Web Services resources (https://docs.aws.amazon.com/general/latest/gr/aws_tagging.html)
 	// in the Amazon Web Services General Reference Guide.
 	Tags []*Tag `json:"tags,omitempty"`
-	// Specifies the throughput mode for the file system, either bursting or provisioned.
-	// If you set ThroughputMode to provisioned, you must also set a value for ProvisionedThroughputInMibps.
-	// After you create the file system, you can decrease your file system's throughput
-	// in Provisioned Throughput mode or change between the throughput modes, as
-	// long as it’s been more than 24 hours since the last decrease or throughput
-	// mode change. For more information, see Specifying throughput with provisioned
-	// mode (https://docs.aws.amazon.com/efs/latest/ug/performance.html#provisioned-throughput)
+	// Specifies the throughput mode for the file system. The mode can be bursting,
+	// provisioned, or elastic. If you set ThroughputMode to provisioned, you must
+	// also set a value for ProvisionedThroughputInMibps. After you create the file
+	// system, you can decrease your file system's throughput in Provisioned Throughput
+	// mode or change between the throughput modes, with certain time restrictions.
+	// For more information, see Specifying throughput with provisioned mode (https://docs.aws.amazon.com/efs/latest/ug/performance.html#provisioned-throughput)
 	// in the Amazon EFS User Guide.
 	//
 	// Default is bursting.
@@ -135,9 +136,7 @@ type FileSystemObservation struct {
 	// The current number of mount targets that the file system has. For more information,
 	// see CreateMountTarget.
 	NumberOfMountTargets *int64 `json:"numberOfMountTargets,omitempty"`
-	// The Amazon Web Services account that created the file system. If the file
-	// system was created by an IAM user, the parent account to which the user belongs
-	// is the owner.
+	// The Amazon Web Services account that created the file system.
 	OwnerID *string `json:"ownerID,omitempty"`
 	// The latest known metered size (in bytes) of data stored in the file system,
 	// in its Value field, and the time at which that size was determined in its
@@ -149,6 +148,8 @@ type FileSystemObservation struct {
 	// a couple of hours. Otherwise, the value is not the exact size that the file
 	// system was at any point in time.
 	SizeInBytes *FileSystemSize `json:"sizeInBytes,omitempty"`
+
+	CustomFileSystemObservation `json:",inline"`
 }
 
 // FileSystemStatus defines the observed state of FileSystem.
@@ -163,6 +164,7 @@ type FileSystemStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

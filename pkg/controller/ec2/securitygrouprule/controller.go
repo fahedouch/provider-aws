@@ -7,14 +7,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-
-	"github.com/crossplane-contrib/provider-aws/apis/ec2/manualv1alpha1"
-	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
-	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
-	"github.com/crossplane-contrib/provider-aws/pkg/features"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -24,6 +16,15 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/crossplane-contrib/provider-aws/apis/ec2/manualv1alpha1"
+	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
+	"github.com/crossplane-contrib/provider-aws/pkg/clients/ec2"
+	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -41,20 +42,33 @@ func SetupSecurityGroupRule(mgr ctrl.Manager, o controller.Options) error {
 	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewSecurityGroupRuleClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithInitializers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(manualv1alpha1.SecurityGroupRuleGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&manualv1alpha1.SecurityGroupRule{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(manualv1alpha1.SecurityGroupRuleGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: ec2.NewSecurityGroupRuleClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithInitializers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -67,7 +81,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, awsclient.StringValue(cr.Spec.ForProvider.Region))
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, pointer.StringValue(cr.Spec.ForProvider.Region))
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +111,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 
 	// If err is not nil, the sgr does not exist
 	if err != nil {
-		return managed.ExternalObservation{
+		return managed.ExternalObservation{ //nolint:nilerr
 			ResourceExists: false,
 		}, nil
 	}
@@ -167,6 +181,17 @@ func (e *external) createSgr(ctx context.Context, sgr *manualv1alpha1.SecurityGr
 				}},
 			}}
 		}
+		if providerValues.PrefixListID != nil {
+			input.IpPermissions = []awsec2types.IpPermission{{
+				FromPort:   providerValues.FromPort,
+				ToPort:     providerValues.ToPort,
+				IpProtocol: providerValues.Protocol,
+				PrefixListIds: []awsec2types.PrefixListId{{
+					Description:  providerValues.Description,
+					PrefixListId: providerValues.PrefixListID,
+				}},
+			}}
+		}
 		result, err := e.client.AuthorizeSecurityGroupIngress(ctx, input)
 
 		if err != nil {
@@ -176,7 +201,7 @@ func (e *external) createSgr(ctx context.Context, sgr *manualv1alpha1.SecurityGr
 		if result != nil {
 			if len(result.SecurityGroupRules) > 0 && result.SecurityGroupRules[0].SecurityGroupRuleId != nil {
 				sgrID := result.SecurityGroupRules[0].SecurityGroupRuleId
-				meta.SetExternalName(sgr, awsclient.StringValue(sgrID))
+				meta.SetExternalName(sgr, pointer.StringValue(sgrID))
 			}
 		}
 	} else if *sgr.Spec.ForProvider.Type == egressType {
@@ -221,6 +246,17 @@ func (e *external) createSgr(ctx context.Context, sgr *manualv1alpha1.SecurityGr
 				}},
 			}}
 		}
+		if providerValues.PrefixListID != nil {
+			input.IpPermissions = []awsec2types.IpPermission{{
+				FromPort:   providerValues.FromPort,
+				ToPort:     providerValues.ToPort,
+				IpProtocol: providerValues.Protocol,
+				PrefixListIds: []awsec2types.PrefixListId{{
+					Description:  providerValues.Description,
+					PrefixListId: providerValues.PrefixListID,
+				}},
+			}}
+		}
 		result, err := e.client.AuthorizeSecurityGroupEgress(ctx, input)
 
 		if err != nil {
@@ -230,22 +266,28 @@ func (e *external) createSgr(ctx context.Context, sgr *manualv1alpha1.SecurityGr
 		if result != nil {
 			if len(result.SecurityGroupRules) > 0 && result.SecurityGroupRules[0].SecurityGroupRuleId != nil {
 				sgrID := result.SecurityGroupRules[0].SecurityGroupRuleId
-				meta.SetExternalName(sgr, awsclient.StringValue(sgrID))
+				meta.SetExternalName(sgr, pointer.StringValue(sgrID))
 			}
 		}
 	}
 	return nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*manualv1alpha1.SecurityGroupRule)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.Status.SetConditions(xpv1.Deleting())
-	return e.deleteSgr(ctx, cr)
+	return managed.ExternalDelete{}, e.deleteSgr(ctx, cr)
 }
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
+}
+
 func (e *external) deleteSgr(ctx context.Context, sgr *manualv1alpha1.SecurityGroupRule) error {
 	return e.deleteSgrForType(ctx, sgr, *sgr.Spec.ForProvider.Type)
 }
@@ -259,14 +301,14 @@ func (e *external) deleteSgrForType(ctx context.Context, sgr *manualv1alpha1.Sec
 			GroupId:              sgr.Spec.ForProvider.SecurityGroupID,
 		})
 
-		return awsclient.Wrap(resource.Ignore(ec2.IsCIDRNotFound, err), errDelete)
+		return errorutils.Wrap(resource.Ignore(ec2.IsCIDRNotFound, err), errDelete)
 	} else if sgrType == egressType {
 		_, err := e.client.RevokeSecurityGroupEgress(ctx, &awsec2.RevokeSecurityGroupEgressInput{
 			SecurityGroupRuleIds: []string{meta.GetExternalName(sgr)},
 			GroupId:              sgr.Spec.ForProvider.SecurityGroupID,
 		})
 
-		return awsclient.Wrap(resource.Ignore(ec2.IsCIDRNotFound, err), errDelete)
+		return errorutils.Wrap(resource.Ignore(ec2.IsCIDRNotFound, err), errDelete)
 	}
 	return nil
 }
@@ -309,35 +351,40 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			// We return an error to fore a recreation, as we cant create a new sgr and update externalName here
 			return managed.ExternalUpdate{}, errors.New("Update needs recreation")
 		}
-		externalName := meta.GetExternalName(cr)
-		input := &awsec2.ModifySecurityGroupRulesInput{
-			GroupId: cr.Spec.ForProvider.SecurityGroupID,
-			SecurityGroupRules: []awsec2types.SecurityGroupRuleUpdate{{
-				SecurityGroupRuleId: &externalName,
-				SecurityGroupRule: &awsec2types.SecurityGroupRuleRequest{
-					FromPort:    cr.Spec.ForProvider.FromPort,
-					ToPort:      cr.Spec.ForProvider.ToPort,
-					Description: cr.Spec.ForProvider.Description,
-					IpProtocol:  cr.Spec.ForProvider.Protocol,
-				},
-			}},
-		}
-		if cr.Spec.ForProvider.CidrBlock != nil {
-			input.SecurityGroupRules[0].SecurityGroupRule.CidrIpv4 = cr.Spec.ForProvider.CidrBlock
-		}
-		if cr.Spec.ForProvider.Ipv6CidrBlock != nil {
-			input.SecurityGroupRules[0].SecurityGroupRule.CidrIpv6 = cr.Spec.ForProvider.Ipv6CidrBlock
-		}
-		if cr.Spec.ForProvider.SourceSecurityGroupID != nil {
-			input.SecurityGroupRules[0].SecurityGroupRule.ReferencedGroupId = cr.Spec.ForProvider.SourceSecurityGroupID
-		}
-
-		_, err := e.client.ModifySecurityGroupRules(ctx, input)
-		if err != nil {
-			return managed.ExternalUpdate{}, err
-		}
+		return e.updateSgr(ctx, cr)
 	}
 	return managed.ExternalUpdate{}, nil
+}
+
+func (e *external) updateSgr(ctx context.Context, cr *manualv1alpha1.SecurityGroupRule) (managed.ExternalUpdate, error) {
+	externalName := meta.GetExternalName(cr)
+	input := &awsec2.ModifySecurityGroupRulesInput{
+		GroupId: cr.Spec.ForProvider.SecurityGroupID,
+		SecurityGroupRules: []awsec2types.SecurityGroupRuleUpdate{{
+			SecurityGroupRuleId: &externalName,
+			SecurityGroupRule: &awsec2types.SecurityGroupRuleRequest{
+				FromPort:    cr.Spec.ForProvider.FromPort,
+				ToPort:      cr.Spec.ForProvider.ToPort,
+				Description: cr.Spec.ForProvider.Description,
+				IpProtocol:  cr.Spec.ForProvider.Protocol,
+			},
+		}},
+	}
+	if cr.Spec.ForProvider.CidrBlock != nil {
+		input.SecurityGroupRules[0].SecurityGroupRule.CidrIpv4 = cr.Spec.ForProvider.CidrBlock
+	}
+	if cr.Spec.ForProvider.Ipv6CidrBlock != nil {
+		input.SecurityGroupRules[0].SecurityGroupRule.CidrIpv6 = cr.Spec.ForProvider.Ipv6CidrBlock
+	}
+	if cr.Spec.ForProvider.SourceSecurityGroupID != nil {
+		input.SecurityGroupRules[0].SecurityGroupRule.ReferencedGroupId = cr.Spec.ForProvider.SourceSecurityGroupID
+	}
+	if cr.Spec.ForProvider.PrefixListID != nil {
+		input.SecurityGroupRules[0].SecurityGroupRule.PrefixListId = cr.Spec.ForProvider.PrefixListID
+	}
+
+	_, err := e.client.ModifySecurityGroupRules(ctx, input)
+	return managed.ExternalUpdate{}, err
 }
 
 func compareSgr(desired *manualv1alpha1.SecurityGroupRuleParameters, actual *manualv1alpha1.SecurityGroupRuleParameters) (needsUpdate bool, recreate bool, typechange bool) {
@@ -345,32 +392,36 @@ func compareSgr(desired *manualv1alpha1.SecurityGroupRuleParameters, actual *man
 	needsUpdate = false
 	recreate = false
 	typechange = false
-	if awsclient.StringValue(desired.CidrBlock) != awsclient.StringValue(actual.CidrBlock) {
+	if pointer.StringValue(desired.CidrBlock) != pointer.StringValue(actual.CidrBlock) {
 		needsUpdate = true
 	}
 
-	if awsclient.StringValue(desired.Description) != awsclient.StringValue(actual.Description) {
+	if pointer.StringValue(desired.Description) != pointer.StringValue(actual.Description) {
 		needsUpdate = true
 	}
 
-	if awsclient.Int32Value(desired.FromPort) != awsclient.Int32Value(actual.FromPort) {
+	if pointer.Int32Value(desired.FromPort) != pointer.Int32Value(actual.FromPort) {
 		needsUpdate = true
 	}
 
-	if awsclient.Int32Value(desired.ToPort) != awsclient.Int32Value(actual.ToPort) {
+	if pointer.Int32Value(desired.ToPort) != pointer.Int32Value(actual.ToPort) {
 		needsUpdate = true
 	}
 
-	if awsclient.StringValue(desired.Protocol) != awsclient.StringValue(actual.Protocol) {
+	if pointer.StringValue(desired.Protocol) != pointer.StringValue(actual.Protocol) {
 		needsUpdate = true
 		recreate = true
 	}
 
-	if awsclient.StringValue(desired.SourceSecurityGroupID) != awsclient.StringValue(actual.SourceSecurityGroupID) {
+	if pointer.StringValue(desired.SourceSecurityGroupID) != pointer.StringValue(actual.SourceSecurityGroupID) {
 		needsUpdate = true
 	}
 
-	if awsclient.StringValue(desired.Type) != awsclient.StringValue(actual.Type) {
+	if pointer.StringValue(desired.PrefixListID) != pointer.StringValue(actual.PrefixListID) {
+		needsUpdate = true
+	}
+
+	if pointer.StringValue(desired.Type) != pointer.StringValue(actual.Type) {
 		needsUpdate = true
 		recreate = true
 		typechange = true
@@ -390,7 +441,7 @@ func (e *external) getExternalSgr(ctx context.Context, externalName string) (*ma
 	}
 	existingSgr := response.SecurityGroupRules[0]
 	crType := ingressType
-	if awsclient.BoolValue(existingSgr.IsEgress) {
+	if pointer.BoolValue(existingSgr.IsEgress) {
 		crType = egressType
 	}
 	cr := &manualv1alpha1.SecurityGroupRuleParameters{
@@ -401,6 +452,7 @@ func (e *external) getExternalSgr(ctx context.Context, externalName string) (*ma
 		Protocol:      existingSgr.IpProtocol,
 		CidrBlock:     existingSgr.CidrIpv4,
 		Ipv6CidrBlock: existingSgr.CidrIpv6,
+		PrefixListID:  existingSgr.PrefixListId,
 	}
 	if existingSgr.ReferencedGroupInfo != nil {
 		cr.SourceSecurityGroupID = existingSgr.ReferencedGroupInfo.GroupId

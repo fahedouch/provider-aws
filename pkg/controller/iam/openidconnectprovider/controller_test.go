@@ -20,28 +20,24 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pkg/errors"
-
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/iam/fake"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 var (
@@ -130,12 +126,6 @@ func withTags(tagMaps ...map[string]string) oidcProviderModifier {
 	}
 }
 
-func withGroupVersionKind() oidcProviderModifier {
-	return func(r *v1beta1.OpenIDConnectProvider) {
-		r.TypeMeta.SetGroupVersionKind(v1beta1.OpenIDConnectProviderGroupVersionKind)
-	}
-}
-
 func withClientIDList(l []string) oidcProviderModifier {
 	return func(r *svcapitypes.OpenIDConnectProvider) {
 		r.Spec.ForProvider.ClientIDList = l
@@ -193,7 +183,7 @@ func TestObserve(t *testing.T) {
 			want: want{
 				cr: oidcProvider(withURL(url),
 					withExternalName(providerArn)),
-				err: awsclient.Wrap(errBoom, errGet),
+				err: errorutils.Wrap(errBoom, errGet),
 			},
 		},
 		"NoExternalNameExistingResource": {
@@ -249,7 +239,7 @@ func TestObserve(t *testing.T) {
 			},
 			want: want{
 				cr:  oidcProvider(withURL(url)),
-				err: awsclient.Wrap(errBoom, errList),
+				err: errorutils.Wrap(errBoom, errList),
 				result: managed.ExternalObservation{
 					ResourceExists: false,
 				},
@@ -366,7 +356,7 @@ func TestCreate(t *testing.T) {
 			},
 			want: want{
 				cr:  oidcProvider(withURL(url)),
-				err: awsclient.Wrap(errBoom, errCreate),
+				err: errorutils.Wrap(errBoom, errCreate),
 			},
 		},
 		"ValidInput": {
@@ -476,7 +466,7 @@ func TestUpdate(t *testing.T) {
 					func(provider *svcapitypes.OpenIDConnectProvider) {
 						provider.Spec.ForProvider.ThumbprintList = []string{"a"}
 					}),
-				err: awsclient.Wrap(errBoom, errUpdateThumbprint),
+				err: errorutils.Wrap(errBoom, errUpdateThumbprint),
 			},
 		},
 		"AddClientError": {
@@ -500,7 +490,7 @@ func TestUpdate(t *testing.T) {
 					func(provider *svcapitypes.OpenIDConnectProvider) {
 						provider.Spec.ForProvider.ClientIDList = []string{"a", "b"}
 					}),
-				err: awsclient.Wrap(errBoom, errAddClientID),
+				err: errorutils.Wrap(errBoom, errAddClientID),
 			},
 		},
 		"RemoveClientError": {
@@ -526,7 +516,7 @@ func TestUpdate(t *testing.T) {
 					func(provider *svcapitypes.OpenIDConnectProvider) {
 						provider.Spec.ForProvider.ClientIDList = []string{"a"}
 					}),
-				err: awsclient.Wrap(errBoom, errRemoveClientID),
+				err: errorutils.Wrap(errBoom, errRemoveClientID),
 			},
 		},
 		"SuccessfulUpdate": {
@@ -612,7 +602,7 @@ func TestUpdate_Tags(t *testing.T) {
 			},
 			want: want{
 				cr:  oidcProvider(withTags(map[string]string{key1: value1})),
-				err: awsclient.Wrap(errBoom, errAddTags),
+				err: errorutils.Wrap(errBoom, errAddTags),
 			},
 		},
 		"AddTagsSuccess": {
@@ -688,7 +678,7 @@ func TestUpdate_Tags(t *testing.T) {
 			},
 			want: want{
 				cr:  oidcProvider(withTags(map[string]string{key1: value1})),
-				err: awsclient.Wrap(errBoom, errRemoveTags),
+				err: errorutils.Wrap(errBoom, errRemoveTags),
 			},
 		},
 		"RemoveTagsSuccess": {
@@ -775,7 +765,7 @@ func TestDelete(t *testing.T) {
 			},
 			want: want{
 				cr:  oidcProvider(withURL(url)),
-				err: awsclient.Wrap(errBoom, errDelete),
+				err: errorutils.Wrap(errBoom, errDelete),
 			},
 		},
 		"ValidInput": {
@@ -796,91 +786,12 @@ func TestDelete(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := &external{client: tc.iam}
-			err := e.Delete(context.Background(), tc.args.cr)
+			_, err := e.Delete(context.Background(), tc.args.cr)
 
 			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 			if diff := cmp.Diff(tc.want.cr, tc.args.cr, test.EquateConditions()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestInitialize(t *testing.T) {
-	type args struct {
-		cr   resource.Managed
-		kube client.Client
-	}
-	type want struct {
-		cr  *v1beta1.OpenIDConnectProvider
-		err error
-	}
-
-	cases := map[string]struct {
-		args
-		want
-	}{
-		"InvalidInput": {
-			args: args{
-				cr: unexpectedItem,
-			},
-			want: want{
-				err: errors.New(errUnexpectedObject),
-			},
-		},
-		"Successful": {
-			args: args{
-				cr:   oidcProvider(withTags(map[string]string{"foo": "bar"})),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: oidcProvider(withTags(resource.GetExternalTags(oidcProvider()), map[string]string{"foo": "bar"})),
-			},
-		},
-		"Check Tag values": {
-			args: args{
-				cr:   oidcProvider(withTags(map[string]string{"foo": "bar"}), withGroupVersionKind()),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: oidcProvider(withTags(resource.GetExternalTags(oidcProvider(withGroupVersionKind())), map[string]string{"foo": "bar"}), withGroupVersionKind()),
-			},
-		},
-		"NoChanges": {
-			args: args{
-				cr: oidcProvider(
-					withTags(map[string]string{"foo": "bar"}),
-					withGroupVersionKind()),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(nil)},
-			},
-			want: want{
-				cr: oidcProvider(
-					withTags(resource.GetExternalTags(oidcProvider(withGroupVersionKind())), map[string]string{"foo": "bar"}),
-					withGroupVersionKind()),
-			},
-		},
-		"UpdateFailed": {
-			args: args{
-				cr:   oidcProvider(),
-				kube: &test.MockClient{MockUpdate: test.NewMockUpdateFn(errBoom)},
-			},
-			want: want{
-				err: errors.Wrap(errBoom, errKubeUpdateFailed),
-			},
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			e := &tagger{kube: tc.kube}
-			err := e.Initialize(context.Background(), tc.args.cr)
-
-			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
-				t.Errorf("r: -want, +got:\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.want.cr, tc.args.cr, sortTags); err == nil && diff != "" {
 				t.Errorf("r: -want, +got:\n%s", diff)
 			}
 		})

@@ -24,11 +24,8 @@ import (
 
 	svcsdk "github.com/aws/aws-sdk-go/service/dynamodb"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
+	"github.com/aws/aws-sdk-go/service/kms"
+	"github.com/aws/aws-sdk-go/service/kms/kmsiface"
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -36,16 +33,74 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/dynamodb/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/jsonpatch"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
+)
+
+const (
+	errResolveKMSMasterKeyArn = "cannot resolve kms master key ARN"
 )
 
 // SetupTable adds a controller that reconciles Table.
 func SetupTable(mgr ctrl.Manager, o controller.Options) error {
 	name := managed.ControllerName(svcapitypes.TableGroupKind)
+
+	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
+	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
+		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
+	}
+
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&customConnector{kube: mgr.GetClient()}),
+		managed.WithInitializers(managed.NewNameAsExternalName(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.TableGroupVersionKind),
+		reconcilerOpts...)
+
+	return ctrl.NewControllerManagedBy(mgr).
+		Named(name).
+		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
+		For(&svcapitypes.Table{}).
+		Complete(r)
+}
+
+// customConnector is needed because the generated connector does not allow
+// the creation of the kms client.
+type customConnector struct {
+	kube client.Client
+}
+
+func (c *customConnector) Connect(ctx context.Context, cr *svcapitypes.Table) (managed.TypedExternalClient[*svcapitypes.Table], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
+	if err != nil {
+		return nil, errors.Wrap(err, errCreateSession)
+	}
+
+	// Custom options are created here instead of Setup because the config is
+	// needed in order to create the kms client.
 	opts := []option{
 		func(e *external) {
 			e.preObserve = preObserve
@@ -54,66 +109,80 @@ func SetupTable(mgr ctrl.Manager, o controller.Options) error {
 			e.preDelete = preDelete
 			e.postDelete = postDelete
 			e.lateInitialize = lateInitialize
-			e.isUpToDate = isUpToDate
-			u := &updateClient{client: e.client}
+			u := &updateClient{
+				client:    e.client,
+				clientkms: kms.New(sess),
+			}
 			e.preUpdate = u.preUpdate
+			e.isUpToDate = u.isUpToDate
+			e.postUpdate = u.postUpdate
 		},
 	}
+	return newExternal(c.kube, svcsdk.New(sess), opts), nil
+}
 
-	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
-	if o.Features.Enabled(features.EnableAlphaExternalSecretStores) {
-		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
+func (e *updateClient) postUpdate(_ context.Context, cr *svcapitypes.Table, obj *svcsdk.UpdateTableOutput, _ managed.ExternalUpdate, _ error) (managed.ExternalUpdate, error) {
+	cbresult, err := e.client.DescribeContinuousBackups(&svcsdk.DescribeContinuousBackupsInput{
+		TableName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+	})
+	if err != nil {
+		return managed.ExternalUpdate{}, err
+	}
+	pitrStatus := cbresult.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus
+	pitrStatusBool := pitrStatusToBool(pitrStatus)
+
+	if !isPitrUpToDate(cr, pitrStatusBool) {
+		pitrSpecEnabled := ptr.Deref(cr.Spec.ForProvider.PointInTimeRecoveryEnabled, false)
+
+		pitrInput := &svcsdk.UpdateContinuousBackupsInput{
+			TableName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+			PointInTimeRecoverySpecification: (&svcsdk.PointInTimeRecoverySpecification{
+				PointInTimeRecoveryEnabled: &pitrSpecEnabled,
+			}),
+		}
+
+		_, err := e.client.UpdateContinuousBackups(pitrInput)
+		if err != nil {
+			return managed.ExternalUpdate{}, err
+		}
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
-		Named(name).
-		WithOptions(o.ForControllerRuntime()).
-		For(&svcapitypes.Table{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.TableGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithInitializers(
-				managed.NewNameAsExternalName(mgr.GetClient()),
-				managed.NewDefaultProviderConfig(mgr.GetClient()),
-				&tagger{kube: mgr.GetClient()}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+	return managed.ExternalUpdate{}, nil
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.Table, obj *svcsdk.DescribeTableInput) error {
-	obj.TableName = aws.String(meta.GetExternalName(cr))
+	obj.TableName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
+
 	return nil
 }
 func preCreate(_ context.Context, cr *svcapitypes.Table, obj *svcsdk.CreateTableInput) error {
-	obj.TableName = aws.String(meta.GetExternalName(cr))
+	obj.TableName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 func preDelete(_ context.Context, cr *svcapitypes.Table, obj *svcsdk.DeleteTableInput) (bool, error) {
-	obj.TableName = aws.String(meta.GetExternalName(cr))
+	obj.TableName = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 
-func postDelete(_ context.Context, _ *svcapitypes.Table, _ *svcsdk.DeleteTableOutput, err error) error {
+func postDelete(_ context.Context, _ *svcapitypes.Table, _ *svcsdk.DeleteTableOutput, err error) (managed.ExternalDelete, error) {
 	if err == nil {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	// The DynamoDB API returns this error when you try to delete a table
 	// that is already being deleted. Unfortunately we're passed a v1 SDK
 	// error that has been munged by aws.Wrap, so we can't use errors.As to
 	// identify it and must fall back to string matching.
 	if strings.Contains(err.Error(), "ResourceInUseException") {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
-	return err
+	return managed.ExternalDelete{}, err
 }
 
 func postObserve(_ context.Context, cr *svcapitypes.Table, resp *svcsdk.DescribeTableOutput, obs managed.ExternalObservation, err error) (managed.ExternalObservation, error) {
 	if err != nil {
 		return managed.ExternalObservation{}, err
 	}
-	switch aws.StringValue(resp.Table.TableStatus) {
+	switch pointer.StringValue(resp.Table.TableStatus) {
 	case string(svcapitypes.TableStatus_SDK_CREATING):
 		cr.SetConditions(xpv1.Creating())
 	case string(svcapitypes.TableStatus_SDK_DELETING):
@@ -126,45 +195,15 @@ func postObserve(_ context.Context, cr *svcapitypes.Table, resp *svcsdk.Describe
 
 	obs.ConnectionDetails = managed.ConnectionDetails{
 		"tableName":         []byte(meta.GetExternalName(cr)),
-		"tableArn":          []byte(aws.StringValue(resp.Table.TableArn)),
-		"latestStreamArn":   []byte(aws.StringValue(resp.Table.LatestStreamArn)),
-		"latestStreamLabel": []byte(aws.StringValue(resp.Table.LatestStreamLabel)),
+		"tableArn":          []byte(pointer.StringValue(resp.Table.TableArn)),
+		"latestStreamArn":   []byte(pointer.StringValue(resp.Table.LatestStreamArn)),
+		"latestStreamLabel": []byte(pointer.StringValue(resp.Table.LatestStreamLabel)),
 	}
 
 	return obs, nil
 }
 
-type tagger struct {
-	kube client.Client
-}
-
-func (e *tagger) Initialize(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*svcapitypes.Table)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
-	tagMap := map[string]string{}
-	for _, t := range cr.Spec.ForProvider.Tags {
-		tagMap[aws.StringValue(t.Key)] = aws.StringValue(t.Value)
-	}
-	for k, v := range resource.GetExternalTags(cr) {
-		tagMap[k] = v
-	}
-	tags := make([]*svcapitypes.Tag, 0)
-	for k, v := range tagMap {
-		tags = append(tags, &svcapitypes.Tag{Key: aws.String(k), Value: aws.String(v)})
-	}
-	sort.Slice(tags, func(i, j int) bool {
-		return aws.StringValue(tags[i].Key) < aws.StringValue(tags[j].Key)
-	})
-	if cmp.Equal(cr.Spec.ForProvider.Tags, tags) {
-		return nil
-	}
-	cr.Spec.ForProvider.Tags = tags
-	return errors.Wrap(e.kube.Update(ctx, cr), "cannot update Table Spec")
-}
-
-func lateInitialize(in *svcapitypes.TableParameters, t *svcsdk.DescribeTableOutput) error { // nolint:gocyclo,unparam
+func lateInitialize(in *svcapitypes.TableParameters, t *svcsdk.DescribeTableOutput) error { //nolint:gocyclo
 	if t == nil {
 		return nil
 	}
@@ -193,7 +232,7 @@ func lateInitialize(in *svcapitypes.TableParameters, t *svcsdk.DescribeTableOutp
 		// in our IsUpToDate logic which would otherwise detect a diff
 		// between our desired state (PROVISIONED) and the actual state
 		// (unspecified).
-		in.BillingMode = aws.String(svcsdk.BillingModeProvisioned)
+		in.BillingMode = pointer.ToOrNilIfZeroValue(svcsdk.BillingModeProvisioned)
 		if t.Table.BillingModeSummary != nil {
 			in.BillingMode = t.Table.BillingModeSummary.BillingMode
 		}
@@ -209,7 +248,7 @@ func lateInitialize(in *svcapitypes.TableParameters, t *svcsdk.DescribeTableOutp
 			in.SSESpecification = &svcapitypes.SSESpecification{}
 		}
 		if in.SSESpecification.Enabled == nil && t.Table.SSEDescription.Status != nil {
-			in.SSESpecification.Enabled = aws.Bool(*t.Table.SSEDescription.Status == string(svcapitypes.SSEStatus_ENABLED))
+			in.SSESpecification.Enabled = pointer.ToOrNilIfZeroValue(*t.Table.SSEDescription.Status == string(svcapitypes.SSEStatus_ENABLED))
 		}
 		if in.SSESpecification.KMSMasterKeyID == nil && t.Table.SSEDescription.KMSMasterKeyArn != nil {
 			in.SSESpecification.KMSMasterKeyID = t.Table.SSEDescription.KMSMasterKeyArn
@@ -223,7 +262,7 @@ func lateInitialize(in *svcapitypes.TableParameters, t *svcsdk.DescribeTableOutp
 		// avoid IsUpToDate thinking it needs to explicitly make an
 		// update to set StreamEnabled to false. DescribeTableOutput
 		// omits StreamSpecification entirely when it's not enabled.
-		in.StreamSpecification = &svcapitypes.StreamSpecification{StreamEnabled: aws.Bool(false, aws.FieldRequired)}
+		in.StreamSpecification = &svcapitypes.StreamSpecification{StreamEnabled: ptr.To(false)}
 		if t.Table.StreamSpecification != nil {
 			in.StreamSpecification = &svcapitypes.StreamSpecification{
 				StreamEnabled:  t.Table.StreamSpecification.StreamEnabled,
@@ -306,13 +345,22 @@ func buildLocalIndexes(indexes []*svcsdk.LocalSecondaryIndexDescription) []*svca
 // createPatch creates a *svcapitypes.TableParameters that has only the changed
 // values between the target *svcapitypes.TableParameters and the current
 // *dynamodb.TableDescription
-func createPatch(in *svcsdk.DescribeTableOutput, target *svcapitypes.TableParameters) (*svcapitypes.TableParameters, error) {
+func (e *updateClient) createPatch(ctx context.Context, in *svcsdk.DescribeTableOutput, spec *svcapitypes.TableParameters) (*svcapitypes.TableParameters, error) {
+	target := spec.DeepCopy()
 	currentParams := &svcapitypes.TableParameters{}
 	if err := lateInitialize(currentParams, in); err != nil {
 		return nil, err
 	}
 
-	jsonPatch, err := aws.CreateJSONPatch(currentParams, target)
+	if target.SSESpecification != nil && target.SSESpecification.KMSMasterKeyID != nil {
+		kmsMasterKeyArn, err := e.getKMsKeyArnFromID(ctx, target.SSESpecification.KMSMasterKeyID)
+		if err != nil {
+			return nil, errors.Wrap(err, errResolveKMSMasterKeyArn)
+		}
+		target.SSESpecification.KMSMasterKeyID = kmsMasterKeyArn
+	}
+
+	jsonPatch, err := jsonpatch.CreateJSONPatch(currentParams, target)
 	if err != nil {
 		return nil, err
 	}
@@ -323,22 +371,22 @@ func createPatch(in *svcsdk.DescribeTableOutput, target *svcapitypes.TableParame
 	return patch, nil
 }
 
-func isUpToDate(cr *svcapitypes.Table, resp *svcsdk.DescribeTableOutput) (bool, error) {
-	// A table that's currently creating, deleting, or updating can't be
-	// updated, so we temporarily consider it to be up-to-date no matter
-	// what.
-	switch aws.StringValue(cr.Status.AtProvider.TableStatus) {
-	case string(svcapitypes.TableStatus_SDK_UPDATING), string(svcapitypes.TableStatus_SDK_CREATING), string(svcapitypes.TableStatus_SDK_DELETING):
-		return true, nil
+// getKMsKeyArnFromID from an arbitrary identifier. Might be ARN, ID or alias.
+func (e *updateClient) getKMsKeyArnFromID(ctx context.Context, kmsKeyId *string) (*string, error) {
+	res, err := e.clientkms.DescribeKeyWithContext(ctx, &kms.DescribeKeyInput{
+		KeyId: kmsKeyId,
+	})
+	if err != nil {
+		return nil, err
 	}
+	return res.KeyMetadata.Arn, nil
+}
 
-	// Similarly, a table that's currently updating its SSE status can't be
-	// updated, so we temporarily consider it to be up-to-date.
-	if cr.Status.AtProvider.SSEDescription != nil && aws.StringValue(cr.Status.AtProvider.SSEDescription.Status) == string(svcapitypes.SSEStatus_UPDATING) {
-		return true, nil
-	}
+func (e *updateClient) isCoreResourceUpToDate(ctx context.Context, cr *svcapitypes.Table, resp *svcsdk.DescribeTableOutput) (bool, error) {
+	// As continuous backup configuration lives in anoterh api, we extract the part of the isUpToDate logic
+	// which is concerned about the actual table-endpoint into a separate function in order to make it testable
 
-	patch, err := createPatch(resp, &cr.Spec.ForProvider)
+	patch, err := e.createPatch(ctx, resp, &cr.Spec.ForProvider)
 	if err != nil {
 		return false, err
 	}
@@ -364,19 +412,74 @@ func isUpToDate(cr *svcapitypes.Table, resp *svcsdk.DescribeTableOutput) (bool, 
 		return false, nil
 	case patch.StreamSpecification != nil:
 		return false, nil
+	case patch.SSESpecification != nil:
+		return false, nil
 	case len(diffGlobalSecondaryIndexes(GenerateGlobalSecondaryIndexDescriptions(cr.Spec.ForProvider.GlobalSecondaryIndexes), resp.Table.GlobalSecondaryIndexes)) != 0:
 		return false, nil
 	}
+
 	return true, nil
 }
 
+func isPitrUpToDate(cr *svcapitypes.Table, pitrStatusBool bool) bool {
+	// it is not up to date when either point in time recovery is set and the state doesn't match the one on aws
+	// or it is unset and it is enabled on aws
+	return !((cr.Spec.ForProvider.PointInTimeRecoveryEnabled != nil && *cr.Spec.ForProvider.PointInTimeRecoveryEnabled != pitrStatusBool) ||
+		(cr.Spec.ForProvider.PointInTimeRecoveryEnabled == nil && pitrStatusBool))
+}
+
+func (e *updateClient) isUpToDate(ctx context.Context, cr *svcapitypes.Table, resp *svcsdk.DescribeTableOutput) (bool, string, error) {
+	// A table that's currently creating, deleting, or updating can't be
+	// updated, so we temporarily consider it to be up-to-date no matter
+	// what.
+	switch pointer.StringValue(cr.Status.AtProvider.TableStatus) {
+	case string(svcapitypes.TableStatus_SDK_UPDATING), string(svcapitypes.TableStatus_SDK_CREATING), string(svcapitypes.TableStatus_SDK_DELETING):
+		return true, "", nil
+	}
+
+	// Similarly, a table that's currently updating its SSE status can't be
+	// updated, so we temporarily consider it to be up-to-date.
+	if cr.Status.AtProvider.SSEDescription != nil && pointer.StringValue(cr.Status.AtProvider.SSEDescription.Status) == string(svcapitypes.SSEStatus_UPDATING) {
+		return true, "", nil
+	}
+
+	coreUpToDate, err := e.isCoreResourceUpToDate(ctx, cr, resp)
+	if err != nil {
+		return false, "", err
+	}
+	if !coreUpToDate {
+		return false, "", nil
+	}
+
+	// point in time recovery status
+	cbresult, err := e.client.DescribeContinuousBackupsWithContext(ctx, &svcsdk.DescribeContinuousBackupsInput{
+		TableName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
+	})
+	if err != nil {
+		return false, "", err
+	}
+	pitrStatus := cbresult.ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus
+	pitrStatusBool := pitrStatusToBool(pitrStatus)
+
+	if !isPitrUpToDate(cr, pitrStatusBool) {
+		return false, "", nil
+	}
+
+	return true, "", nil
+}
+
+func pitrStatusToBool(pitrStatus *string) bool {
+	return ptr.Deref(pitrStatus, "") == string(svcapitypes.PointInTimeRecoveryStatus_ENABLED)
+}
+
 type updateClient struct {
-	client svcsdkapi.DynamoDBAPI
+	client    svcsdkapi.DynamoDBAPI
+	clientkms kmsiface.KMSAPI
 }
 
 func (e *updateClient) preUpdate(ctx context.Context, cr *svcapitypes.Table, u *svcsdk.UpdateTableInput) error {
 	filtered := &svcsdk.UpdateTableInput{
-		TableName:            aws.String(meta.GetExternalName(cr)),
+		TableName:            pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		AttributeDefinitions: u.AttributeDefinitions,
 	}
 
@@ -392,12 +495,12 @@ func (e *updateClient) preUpdate(ctx context.Context, cr *svcapitypes.Table, u *
 	// the observed state in a cache during postObserve then read it here,
 	// but we typically prefer to be as stateless as possible even if it
 	// means redundant API calls.
-	out, err := e.client.DescribeTableWithContext(ctx, &svcsdk.DescribeTableInput{TableName: aws.String(meta.GetExternalName(cr))})
+	out, err := e.client.DescribeTableWithContext(ctx, &svcsdk.DescribeTableInput{TableName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))})
 	if err != nil {
-		return aws.Wrap(err, errDescribe)
+		return errorutils.Wrap(err, errDescribe)
 	}
 
-	p, err := createPatch(out, &cr.Spec.ForProvider)
+	p, err := e.createPatch(ctx, out, &cr.Spec.ForProvider)
 	if err != nil {
 		return err
 	}
@@ -408,7 +511,7 @@ func (e *updateClient) preUpdate(ctx context.Context, cr *svcapitypes.Table, u *
 
 		// NOTE(negz): You must include provisioned throughput when
 		// updating the billing mode to PROVISIONED.
-		if aws.StringValue(u.BillingMode) == string(svcapitypes.BillingMode_PROVISIONED) {
+		if pointer.StringValue(u.BillingMode) == string(svcapitypes.BillingMode_PROVISIONED) {
 			filtered.ProvisionedThroughput = u.ProvisionedThroughput
 		}
 	case p.ProvisionedThroughput != nil:
@@ -443,14 +546,14 @@ func diffGlobalSecondaryIndexes(spec []*svcsdk.GlobalSecondaryIndexDescription, 
 	desired := map[string]*svcsdk.GlobalSecondaryIndexDescription{}
 	desiredKeys := make([]string, len(spec))
 	for i, gsi := range spec {
-		desired[aws.StringValue(gsi.IndexName)] = gsi
-		desiredKeys[i] = aws.StringValue(gsi.IndexName)
+		desired[pointer.StringValue(gsi.IndexName)] = gsi
+		desiredKeys[i] = pointer.StringValue(gsi.IndexName)
 	}
 	existing := map[string]*svcsdk.GlobalSecondaryIndexDescription{}
 	existingKeys := make([]string, len(obs))
 	for i, gsi := range obs {
-		existing[aws.StringValue(gsi.IndexName)] = gsi
-		existingKeys[i] = aws.StringValue(gsi.IndexName)
+		existing[pointer.StringValue(gsi.IndexName)] = gsi
+		existingKeys[i] = pointer.StringValue(gsi.IndexName)
 	}
 	sort.Strings(desiredKeys)
 	sort.Strings(existingKeys)
@@ -479,8 +582,8 @@ func diffGlobalSecondaryIndexes(spec []*svcsdk.GlobalSecondaryIndexDescription, 
 			return gsi
 		}
 		if desired[k].ProvisionedThroughput != nil {
-			if aws.Int64Value(desired[k].ProvisionedThroughput.WriteCapacityUnits) != aws.Int64Value(existingGSI.ProvisionedThroughput.WriteCapacityUnits) ||
-				aws.Int64Value(desired[k].ProvisionedThroughput.ReadCapacityUnits) != aws.Int64Value(existingGSI.ProvisionedThroughput.ReadCapacityUnits) {
+			if pointer.Int64Value(desired[k].ProvisionedThroughput.WriteCapacityUnits) != pointer.Int64Value(existingGSI.ProvisionedThroughput.WriteCapacityUnits) ||
+				pointer.Int64Value(desired[k].ProvisionedThroughput.ReadCapacityUnits) != pointer.Int64Value(existingGSI.ProvisionedThroughput.ReadCapacityUnits) {
 				u := &svcsdk.GlobalSecondaryIndexUpdate{
 					Update: &svcsdk.UpdateGlobalSecondaryIndexAction{
 						IndexName: desired[k].IndexName,
@@ -514,7 +617,7 @@ func diffGlobalSecondaryIndexes(spec []*svcsdk.GlobalSecondaryIndexDescription, 
 }
 
 // GenerateGlobalSecondaryIndexDescriptions generates an array of GlobalSecondaryIndexDescriptions.
-func GenerateGlobalSecondaryIndexDescriptions(p []*svcapitypes.GlobalSecondaryIndex) []*svcsdk.GlobalSecondaryIndexDescription { // nolint:gocyclo
+func GenerateGlobalSecondaryIndexDescriptions(p []*svcapitypes.GlobalSecondaryIndex) []*svcsdk.GlobalSecondaryIndexDescription { //nolint:gocyclo
 	// Linter is disabled because this is a copy-paste from generated code and
 	// very simple.
 	result := make([]*svcsdk.GlobalSecondaryIndexDescription, len(p))

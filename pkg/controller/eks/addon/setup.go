@@ -19,12 +19,9 @@ package addon
 import (
 	"context"
 
+	"github.com/aws/aws-sdk-go/aws"
 	awseks "github.com/aws/aws-sdk-go/service/eks"
 	"github.com/aws/aws-sdk-go/service/eks/eksiface"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -32,11 +29,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	eksv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/eks/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/tags"
 )
 
 const (
@@ -58,19 +62,31 @@ func SetupAddon(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithInitializers(),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(eksv1alpha1.AddonGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&eksv1alpha1.Addon{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(eksv1alpha1.AddonGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithInitializers(managed.NewDefaultProviderConfig(mgr.GetClient()), &tagger{kube: mgr.GetClient()}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func setupHooks(e *external) {
@@ -101,7 +117,7 @@ func postObserve(_ context.Context, cr *eksv1alpha1.Addon, _ *awseks.DescribeAdd
 		return managed.ExternalObservation{}, err
 	}
 
-	switch awsclients.StringValue(cr.Status.AtProvider.Status) {
+	switch pointer.StringValue(cr.Status.AtProvider.Status) {
 	case awseks.AddonStatusCreating:
 		cr.SetConditions(xpv1.Creating())
 	case awseks.AddonStatusDeleting:
@@ -120,21 +136,67 @@ func postObserve(_ context.Context, cr *eksv1alpha1.Addon, _ *awseks.DescribeAdd
 
 func lateInitialize(spec *eksv1alpha1.AddonParameters, resp *awseks.DescribeAddonOutput) error {
 	if resp.Addon != nil {
-		spec.ServiceAccountRoleARN = awsclients.LateInitializeStringPtr(spec.ServiceAccountRoleARN, resp.Addon.ServiceAccountRoleArn)
+		spec.ServiceAccountRoleARN = pointer.LateInitialize(spec.ServiceAccountRoleARN, resp.Addon.ServiceAccountRoleArn)
 	}
 	return nil
 }
 
-func (h *hooks) isUpToDate(cr *eksv1alpha1.Addon, resp *awseks.DescribeAddonOutput) (bool, error) {
+func (h *hooks) isUpToDate(_ context.Context, cr *eksv1alpha1.Addon, resp *awseks.DescribeAddonOutput) (bool, string, error) {
 	switch {
 	case resp.Addon == nil,
-		cr.Spec.ForProvider.AddonVersion != nil && awsclients.StringValue(cr.Spec.ForProvider.AddonVersion) != awsclients.StringValue(resp.Addon.AddonVersion),
-		cr.Spec.ForProvider.ServiceAccountRoleARN != nil && awsclients.StringValue(cr.Spec.ForProvider.ServiceAccountRoleARN) != awsclients.StringValue(resp.Addon.ServiceAccountRoleArn):
-		return false, nil
+		cr.Spec.ForProvider.AddonVersion != nil && pointer.StringValue(cr.Spec.ForProvider.AddonVersion) != pointer.StringValue(resp.Addon.AddonVersion),
+		cr.Spec.ForProvider.ServiceAccountRoleARN != nil && pointer.StringValue(cr.Spec.ForProvider.ServiceAccountRoleARN) != pointer.StringValue(resp.Addon.ServiceAccountRoleArn):
+		return false, "", nil
 	}
 
-	add, remove := awsclients.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, resp.Addon.Tags)
-	return len(add) == 0 && len(remove) == 0, nil
+	// AddOn Configuration Values
+	configUpToDate, configUpToDateDiff, configUpToDateErr := isUpToDateConfigurationValues(cr, resp)
+	if configUpToDateErr != nil {
+		return false, "", configUpToDateErr
+	}
+	if !configUpToDate {
+		return false, configUpToDateDiff, nil
+	}
+
+	add, remove := tags.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, resp.Addon.Tags)
+	return len(add) == 0 && len(remove) == 0, "", nil
+}
+
+func isUpToDateConfigurationValues(cr *eksv1alpha1.Addon, obj *awseks.DescribeAddonOutput) (bool, string, error) {
+	// Handle nil pointer refs
+	crConfigurationValues := aws.StringValue(cr.Spec.ForProvider.ConfigurationValues)
+	objConfigurationValues := aws.StringValue(obj.Addon.ConfigurationValues)
+	if crConfigurationValues == "" && objConfigurationValues == "" {
+		return true, "", nil
+	}
+
+	if crConfigurationValues == "" && objConfigurationValues != "" {
+		return false, "", nil
+	}
+	if crConfigurationValues != "" && objConfigurationValues == "" {
+		return false, "", nil
+	}
+
+	// Normalize the data
+	objConfigurationValuesCmp, objErr := convertConfigurationValuesToObj(objConfigurationValues)
+	if objErr != nil {
+		return false, "", objErr
+	}
+	crConfigurationValuesCmp, crErr := convertConfigurationValuesToObj(crConfigurationValues)
+	if crErr != nil {
+		return false, "", crErr
+	}
+	// Compare objects and return a diff
+	diff := cmp.Diff(objConfigurationValuesCmp, crConfigurationValuesCmp)
+	return diff == "", diff, nil
+}
+
+// convertConfigurationValuesToObj will deserialize in order to normalize and compare
+func convertConfigurationValuesToObj(configurationValues string) (map[string]interface{}, error) {
+	var objConfigurationValues map[string]interface{}
+	// Yaml parser is able to handle Unmarshal for both YAML and JSON
+	err := yaml.Unmarshal([]byte(configurationValues), &objConfigurationValues)
+	return objConfigurationValues, err
 }
 
 func preUpdate(_ context.Context, cr *eksv1alpha1.Addon, obj *awseks.UpdateAddonInput) error {
@@ -157,10 +219,10 @@ func (h *hooks) postUpdate(ctx context.Context, cr *eksv1alpha1.Addon, resp *aws
 		return managed.ExternalUpdate{}, errors.Wrap(err, errDescribe)
 	}
 
-	add, remove := awsclients.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, desc.Addon.Tags)
+	add, remove := tags.DiffTagsMapPtr(cr.Spec.ForProvider.Tags, desc.Addon.Tags)
 	if len(add) > 0 {
 		_, err := h.client.TagResourceWithContext(ctx, &awseks.TagResourceInput{
-			ResourceArn: awsclients.String(meta.GetExternalName(cr)),
+			ResourceArn: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			Tags:        add,
 		})
 		if err != nil {
@@ -169,7 +231,7 @@ func (h *hooks) postUpdate(ctx context.Context, cr *eksv1alpha1.Addon, resp *aws
 	}
 	if len(remove) > 0 {
 		_, err := h.client.UntagResourceWithContext(ctx, &awseks.UntagResourceInput{
-			ResourceArn: awsclients.String(meta.GetExternalName(cr)),
+			ResourceArn: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 			TagKeys:     remove,
 		})
 		if err != nil {
@@ -189,8 +251,8 @@ func postCreate(_ context.Context, cr *eksv1alpha1.Addon, res *awseks.CreateAddo
 		return managed.ExternalCreation{}, err
 	}
 
-	if res.Addon != nil && meta.GetExternalName(cr) != awsclients.StringValue(res.Addon.AddonArn) {
-		meta.SetExternalName(cr, awsclients.StringValue(res.Addon.AddonArn))
+	if res.Addon != nil && meta.GetExternalName(cr) != pointer.StringValue(res.Addon.AddonArn) {
+		meta.SetExternalName(cr, pointer.StringValue(res.Addon.AddonArn))
 	}
 	return cre, nil
 }
@@ -198,22 +260,4 @@ func postCreate(_ context.Context, cr *eksv1alpha1.Addon, res *awseks.CreateAddo
 func preDelete(_ context.Context, cr *eksv1alpha1.Addon, obj *awseks.DeleteAddonInput) (bool, error) {
 	obj.ClusterName = cr.Spec.ForProvider.ClusterName
 	return false, nil
-}
-
-type tagger struct {
-	kube client.Client
-}
-
-func (t *tagger) Initialize(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*eksv1alpha1.Addon)
-	if !ok {
-		return errors.New(errNotEKSCluster)
-	}
-	if cr.Spec.ForProvider.Tags == nil {
-		cr.Spec.ForProvider.Tags = map[string]*string{}
-	}
-	for k, v := range resource.GetExternalTags(mg) {
-		cr.Spec.ForProvider.Tags[k] = awsclients.String(v)
-	}
-	return errors.Wrap(t.kube.Update(ctx, cr), errKubeUpdateFailed)
 }

@@ -18,17 +18,12 @@ package dbsubnetgroup
 
 import (
 	"context"
-
 	"reflect"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsrds "github.com/aws/aws-sdk-go-v2/service/rds"
 	awsrdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -36,12 +31,17 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane-contrib/provider-aws/apis/database/v1beta1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	dbsg "github.com/crossplane-contrib/provider-aws/pkg/clients/dbsubnetgroup"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 const (
@@ -65,19 +65,31 @@ func SetupDBSubnetGroup(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: dbsg.NewClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithConnectionPublishers(),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(v1beta1.DBSubnetGroupGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&v1beta1.DBSubnetGroup{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(v1beta1.DBSubnetGroupGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: dbsg.NewClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithConnectionPublishers(),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -90,7 +102,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errUnexpectedObject)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, aws.ToString(cr.Spec.ForProvider.Region))
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, aws.ToString(cr.Spec.ForProvider.Region))
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +114,7 @@ type external struct {
 	kube   client.Client
 }
 
-func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) { // nolint:gocyclo
+func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.ExternalObservation, error) {
 	cr, ok := mgd.(*v1beta1.DBSubnetGroup)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
@@ -112,7 +124,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		DBSubnetGroupName: aws.String(meta.GetExternalName(cr)),
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(dbsg.IsDBSubnetGroupNotFoundErr, err), errDescribe)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(dbsg.IsDBSubnetGroupNotFoundErr, err), errDescribe)
 	}
 
 	// in a successful response, there should be one and only one object
@@ -140,7 +152,7 @@ func (e *external) Observe(ctx context.Context, mgd resource.Managed) (managed.E
 		ResourceName: aws.String(cr.Status.AtProvider.ARN),
 	})
 	if err != nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(err, errListTagsFailed)
+		return managed.ExternalObservation{}, errorutils.Wrap(err, errListTagsFailed)
 	}
 
 	return managed.ExternalObservation{
@@ -170,7 +182,7 @@ func (e *external) Create(ctx context.Context, mgd resource.Managed) (managed.Ex
 	}
 
 	_, err := e.client.CreateDBSubnetGroup(ctx, input)
-	return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+	return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 }
 
 func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.ExternalUpdate, error) {
@@ -186,7 +198,7 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 	})
 
 	if err != nil {
-		return managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate)
+		return managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate)
 	}
 
 	if len(cr.Spec.ForProvider.Tags) > 0 {
@@ -199,21 +211,26 @@ func (e *external) Update(ctx context.Context, mgd resource.Managed) (managed.Ex
 			Tags:         tags,
 		})
 		if err != nil {
-			return managed.ExternalUpdate{}, awsclient.Wrap(err, errAddTagsFailed)
+			return managed.ExternalUpdate{}, errorutils.Wrap(err, errAddTagsFailed)
 		}
 	}
 	return managed.ExternalUpdate{}, nil
 }
 
-func (e *external) Delete(ctx context.Context, mgd resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mgd resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mgd.(*v1beta1.DBSubnetGroup)
 	if !ok {
-		return errors.New(errUnexpectedObject)
+		return managed.ExternalDelete{}, errors.New(errUnexpectedObject)
 	}
 
 	cr.SetConditions(xpv1.Deleting())
 	_, err := e.client.DeleteDBSubnetGroup(ctx, &awsrds.DeleteDBSubnetGroupInput{
 		DBSubnetGroupName: aws.String(meta.GetExternalName(cr)),
 	})
-	return awsclient.Wrap(resource.Ignore(dbsg.IsDBSubnetGroupNotFoundErr, err), errDelete)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(dbsg.IsDBSubnetGroupNotFoundErr, err), errDelete)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

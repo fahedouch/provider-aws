@@ -3,8 +3,6 @@ package function
 import (
 	"testing"
 
-	svcapitypesv1beta1 "github.com/crossplane-contrib/provider-aws/apis/lambda/v1beta1"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/lambda"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
@@ -12,6 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/crossplane-contrib/provider-aws/apis/lambda/v1beta1"
+	svcapitypesv1beta1 "github.com/crossplane-contrib/provider-aws/apis/lambda/v1beta1"
 )
 
 type args struct {
@@ -34,8 +33,8 @@ func function(m ...functionModifier) *v1beta1.Function {
 	return cr
 }
 
-var _ managed.ExternalClient = &external{}
-var _ managed.ExternalConnecter = &connector{}
+var _ managed.TypedExternalClient[*v1beta1.Function] = &external{}
+var _ managed.TypedExternalConnecter[*v1beta1.Function] = &connector{}
 
 func TestIsUpToDateEnvironment(t *testing.T) {
 	type want struct {
@@ -622,7 +621,10 @@ func TestGenerateUpdateFunctionConfigurationInput(t *testing.T) {
 					Runtime:           aws.String("test_runtime"),
 					Timeout:           aws.Int64(128),
 					TracingConfig:     &svcsdk.TracingConfig{Mode: aws.String(svcsdk.TracingModeActive)},
-					VpcConfig:         &svcsdk.VpcConfig{SecurityGroupIds: []*string{aws.String("id1")}},
+					VpcConfig: &svcsdk.VpcConfig{
+						SecurityGroupIds: []*string{aws.String("id1")},
+						SubnetIds:        []*string{},
+					},
 				},
 			},
 		},

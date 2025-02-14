@@ -47,6 +47,24 @@ type CloudwatchLogsExportConfiguration struct {
 }
 
 // +kubebuilder:skipversion
+type ClusterPendingModifiedValues struct {
+	AllocatedStorage *int64 `json:"allocatedStorage,omitempty"`
+
+	BackupRetentionPeriod *int64 `json:"backupRetentionPeriod,omitempty"`
+
+	DBClusterIdentifier *string `json:"dbClusterIdentifier,omitempty"`
+
+	EngineVersion *string `json:"engineVersion,omitempty"`
+
+	IAMDatabaseAuthenticationEnabled *bool `json:"iamDatabaseAuthenticationEnabled,omitempty"`
+
+	IOPS *int64 `json:"iops,omitempty"`
+	// A list of the log types whose configuration is still pending. In other words,
+	// these log types are in the process of being activated or deactivated.
+	PendingCloudwatchLogsExports *PendingCloudwatchLogsExports `json:"pendingCloudwatchLogsExports,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type DBClusterEndpoint struct {
 	CustomEndpointType *string `json:"customEndpointType,omitempty"`
 
@@ -200,6 +218,8 @@ type DBCluster_SDK struct {
 
 	EngineVersion *string `json:"engineVersion,omitempty"`
 
+	GlobalClusterIdentifier *string `json:"globalClusterIdentifier,omitempty"`
+
 	HostedZoneID *string `json:"hostedZoneID,omitempty"`
 
 	IAMDatabaseAuthenticationEnabled *bool `json:"iamDatabaseAuthenticationEnabled,omitempty"`
@@ -211,6 +231,9 @@ type DBCluster_SDK struct {
 	MasterUsername *string `json:"masterUsername,omitempty"`
 
 	MultiAZ *bool `json:"multiAZ,omitempty"`
+	// This data type is used as a response element in the ModifyDBCluster operation
+	// and contains changes that will be applied during the next maintenance window.
+	PendingModifiedValues *ClusterPendingModifiedValues `json:"pendingModifiedValues,omitempty"`
 
 	PercentProgress *string `json:"percentProgress,omitempty"`
 
@@ -225,6 +248,11 @@ type DBCluster_SDK struct {
 	ReaderEndpoint *string `json:"readerEndpoint,omitempty"`
 
 	ReplicationSourceIdentifier *string `json:"replicationSourceIdentifier,omitempty"`
+	// Shows the scaling configuration for a Neptune Serverless DB cluster.
+	//
+	// For more information, see Using Amazon Neptune Serverless (https://docs.aws.amazon.com/neptune/latest/userguide/neptune-serverless-using.html)
+	// in the Amazon Neptune User Guide.
+	ServerlessV2ScalingConfiguration *ServerlessV2ScalingConfigurationInfo `json:"serverlessV2ScalingConfiguration,omitempty"`
 
 	Status *string `json:"status,omitempty"`
 
@@ -246,6 +274,8 @@ type DBEngineVersion struct {
 	EngineVersion *string `json:"engineVersion,omitempty"`
 
 	ExportableLogTypes []*string `json:"exportableLogTypes,omitempty"`
+
+	SupportsGlobalDatabases *bool `json:"supportsGlobalDatabases,omitempty"`
 
 	SupportsLogExportsToCloudwatchLogs *bool `json:"supportsLogExportsToCloudwatchLogs,omitempty"`
 
@@ -452,6 +482,32 @@ type Filter struct {
 }
 
 // +kubebuilder:skipversion
+type GlobalCluster struct {
+	DeletionProtection *bool `json:"deletionProtection,omitempty"`
+
+	Engine *string `json:"engine,omitempty"`
+
+	EngineVersion *string `json:"engineVersion,omitempty"`
+
+	GlobalClusterARN *string `json:"globalClusterARN,omitempty"`
+
+	GlobalClusterIdentifier *string `json:"globalClusterIdentifier,omitempty"`
+
+	GlobalClusterResourceID *string `json:"globalClusterResourceID,omitempty"`
+
+	Status *string `json:"status,omitempty"`
+
+	StorageEncrypted *bool `json:"storageEncrypted,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type GlobalClusterMember struct {
+	DBClusterARN *string `json:"dbClusterARN,omitempty"`
+
+	IsWriter *bool `json:"isWriter,omitempty"`
+}
+
+// +kubebuilder:skipversion
 type OptionGroupMembership struct {
 	OptionGroupName *string `json:"optionGroupName,omitempty"`
 
@@ -470,9 +526,13 @@ type OrderableDBInstanceOption struct {
 
 	MaxIOPSPerDBInstance *int64 `json:"maxIOPSPerDBInstance,omitempty"`
 
+	MaxIOPSPerGib *float64 `json:"maxIOPSPerGib,omitempty"`
+
 	MaxStorageSize *int64 `json:"maxStorageSize,omitempty"`
 
 	MinIOPSPerDBInstance *int64 `json:"minIOPSPerDBInstance,omitempty"`
+
+	MinIOPSPerGib *float64 `json:"minIOPSPerGib,omitempty"`
 
 	MinStorageSize *int64 `json:"minStorageSize,omitempty"`
 
@@ -483,6 +543,8 @@ type OrderableDBInstanceOption struct {
 	StorageType *string `json:"storageType,omitempty"`
 
 	SupportsEnhancedMonitoring *bool `json:"supportsEnhancedMonitoring,omitempty"`
+
+	SupportsGlobalDatabases *bool `json:"supportsGlobalDatabases,omitempty"`
 
 	SupportsIAMDatabaseAuthentication *bool `json:"supportsIAMDatabaseAuthentication,omitempty"`
 
@@ -561,6 +623,9 @@ type PendingModifiedValues struct {
 	MasterUserPassword *string `json:"masterUserPassword,omitempty"`
 
 	MultiAZ *bool `json:"multiAZ,omitempty"`
+	// A list of the log types whose configuration is still pending. In other words,
+	// these log types are in the process of being activated or deactivated.
+	PendingCloudwatchLogsExports *PendingCloudwatchLogsExports `json:"pendingCloudwatchLogsExports,omitempty"`
 
 	Port *int64 `json:"port,omitempty"`
 
@@ -575,6 +640,20 @@ type Range struct {
 // +kubebuilder:skipversion
 type ResourcePendingMaintenanceActions struct {
 	ResourceIdentifier *string `json:"resourceIdentifier,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ServerlessV2ScalingConfiguration struct {
+	MaxCapacity *float64 `json:"maxCapacity,omitempty"`
+
+	MinCapacity *float64 `json:"minCapacity,omitempty"`
+}
+
+// +kubebuilder:skipversion
+type ServerlessV2ScalingConfigurationInfo struct {
+	MaxCapacity *float64 `json:"maxCapacity,omitempty"`
+
+	MinCapacity *float64 `json:"minCapacity,omitempty"`
 }
 
 // +kubebuilder:skipversion
@@ -607,6 +686,8 @@ type UpgradeTarget struct {
 	EngineVersion *string `json:"engineVersion,omitempty"`
 
 	IsMajorVersionUpgrade *bool `json:"isMajorVersionUpgrade,omitempty"`
+
+	SupportsGlobalDatabases *bool `json:"supportsGlobalDatabases,omitempty"`
 }
 
 // +kubebuilder:skipversion

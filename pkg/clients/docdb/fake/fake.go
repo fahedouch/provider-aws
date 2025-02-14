@@ -43,6 +43,7 @@ type MockDocDBClient struct {
 	MockDeleteDBSubnetGroupWithContext    func(context.Context, *docdb.DeleteDBSubnetGroupInput, []request.Option) (*docdb.DeleteDBSubnetGroupOutput, error)
 
 	MockDescribeDBClusterParameters                 func(*docdb.DescribeDBClusterParametersInput) (*docdb.DescribeDBClusterParametersOutput, error)
+	MockDescribeDBClusterParametersWithContext      func(context.Context, *docdb.DescribeDBClusterParametersInput, []request.Option) (*docdb.DescribeDBClusterParametersOutput, error)
 	MockDescribeDBClusterParameterGroupsWithContext func(context.Context, *docdb.DescribeDBClusterParameterGroupsInput, []request.Option) (*docdb.DescribeDBClusterParameterGroupsOutput, error)
 	MockCreateDBClusterParameterGroupWithContext    func(context.Context, *docdb.CreateDBClusterParameterGroupInput, []request.Option) (*docdb.CreateDBClusterParameterGroupOutput, error)
 	MockModifyDBClusterParameterGroupWithContext    func(context.Context, *docdb.ModifyDBClusterParameterGroupInput, []request.Option) (*docdb.ModifyDBClusterParameterGroupOutput, error)
@@ -52,6 +53,9 @@ type MockDocDBClient struct {
 	MockCreateDBClusterWithContext    func(context.Context, *docdb.CreateDBClusterInput, []request.Option) (*docdb.CreateDBClusterOutput, error)
 	MockModifyDBClusterWithContext    func(context.Context, *docdb.ModifyDBClusterInput, []request.Option) (*docdb.ModifyDBClusterOutput, error)
 	MockDeleteDBClusterWithContext    func(context.Context, *docdb.DeleteDBClusterInput, []request.Option) (*docdb.DeleteDBClusterOutput, error)
+
+	MockRestoreDBClusterFromSnapshotWithContext  func(context.Context, *docdb.RestoreDBClusterFromSnapshotInput, []request.Option) (*docdb.RestoreDBClusterFromSnapshotOutput, error)
+	MockRestoreDBClusterToPointInTimeWithContext func(context.Context, *docdb.RestoreDBClusterToPointInTimeInput, []request.Option) (*docdb.RestoreDBClusterToPointInTimeOutput, error)
 
 	Called MockDocDBClientCall
 }
@@ -216,6 +220,20 @@ func (m *MockDocDBClient) DescribeDBClusterParameters(i *docdb.DescribeDBCluster
 	return m.MockDescribeDBClusterParameters(i)
 }
 
+// CallDescribeDBClusterParametersWithContext to log call
+type CallDescribeDBClusterParametersWithContext struct {
+	Ctx  aws.Context
+	I    *docdb.DescribeDBClusterParametersInput
+	Opts []request.Option
+}
+
+// DescribeDBClusterParametersWithContext calls MockDescribeDBClusterParametersWithContext
+func (m *MockDocDBClient) DescribeDBClusterParametersWithContext(ctx context.Context, i *docdb.DescribeDBClusterParametersInput, opts ...request.Option) (*docdb.DescribeDBClusterParametersOutput, error) {
+	m.Called.DescribeDBClusterParametersWithContext = append(m.Called.DescribeDBClusterParametersWithContext, &CallDescribeDBClusterParametersWithContext{I: i, Ctx: ctx, Opts: opts})
+
+	return m.MockDescribeDBClusterParametersWithContext(ctx, i, opts)
+}
+
 // CallDescribeDBClusterParameterGroupsWithContext to log call
 type CallDescribeDBClusterParameterGroupsWithContext struct {
 	Ctx  aws.Context
@@ -328,6 +346,34 @@ func (m *MockDocDBClient) DeleteDBClusterWithContext(ctx context.Context, i *doc
 	return m.MockDeleteDBClusterWithContext(ctx, i, opts)
 }
 
+// CallRestoreDBClusterFromSnapshotWithContext to log call
+type CallRestoreDBClusterFromSnapshotWithContext struct {
+	Ctx  aws.Context
+	I    *docdb.RestoreDBClusterFromSnapshotInput
+	Opts []request.Option
+}
+
+// RestoreDBClusterFromSnapshotWithContext calls MockRestoreDBClusterFromSnapshotWithContext
+func (m *MockDocDBClient) RestoreDBClusterFromSnapshotWithContext(ctx context.Context, i *docdb.RestoreDBClusterFromSnapshotInput, opts ...request.Option) (*docdb.RestoreDBClusterFromSnapshotOutput, error) {
+	m.Called.RestoreDBClusterFromSnapshotWithContext = append(m.Called.RestoreDBClusterFromSnapshotWithContext, &CallRestoreDBClusterFromSnapshotWithContext{Ctx: ctx, I: i, Opts: opts})
+
+	return m.MockRestoreDBClusterFromSnapshotWithContext(ctx, i, opts)
+}
+
+// CallRestoreDBClusterToPointInTimeWithContext to log call
+type CallRestoreDBClusterToPointInTimeWithContext struct {
+	Ctx  aws.Context
+	I    *docdb.RestoreDBClusterToPointInTimeInput
+	Opts []request.Option
+}
+
+// RestoreDBClusterToPointInTimeWithContext calls MockRestoreDBClusterToPointInTimeWithContext
+func (m *MockDocDBClient) RestoreDBClusterToPointInTimeWithContext(ctx context.Context, i *docdb.RestoreDBClusterToPointInTimeInput, opts ...request.Option) (*docdb.RestoreDBClusterToPointInTimeOutput, error) {
+	m.Called.RestoreDBClusterToPointInTimeWithContext = append(m.Called.RestoreDBClusterToPointInTimeWithContext, &CallRestoreDBClusterToPointInTimeWithContext{Ctx: ctx, I: i, Opts: opts})
+
+	return m.MockRestoreDBClusterToPointInTimeWithContext(ctx, i, opts)
+}
+
 // MockDocDBClientCall to log calls
 type MockDocDBClientCall struct {
 	ListTagsForResource            []*CallListTagsForResource
@@ -344,6 +390,7 @@ type MockDocDBClientCall struct {
 	DeleteDBSubnetGroupWithContext    []*CallDeleteDBSubnetGroupWithContext
 
 	DescribeDBClusterParameters                 []*CallDescribeDBClusterParameters
+	DescribeDBClusterParametersWithContext      []*CallDescribeDBClusterParametersWithContext
 	DescribeDBClusterParameterGroupsWithContext []*CallDescribeDBClusterParameterGroupsWithContext
 	CreateDBClusterParameterGroupWithContext    []*CallCreateDBClusterParameterGroupWithContext
 	ModifyDBClusterParameterGroupWithContext    []*CallModifyDBClusterParameterGroupWithContext
@@ -353,4 +400,7 @@ type MockDocDBClientCall struct {
 	CreateDBClusterWithContext    []*CallCreateDBClusterWithContext
 	ModifyDBClusterWithContext    []*CallModifyDBClusterWithContext
 	DeleteDBClusterWithContext    []*CallDeleteDBClusterWithContext
+
+	RestoreDBClusterFromSnapshotWithContext  []*CallRestoreDBClusterFromSnapshotWithContext
+	RestoreDBClusterToPointInTimeWithContext []*CallRestoreDBClusterToPointInTimeWithContext
 }

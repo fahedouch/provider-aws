@@ -4,15 +4,14 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	"github.com/google/go-cmp/cmp"
 
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	policyutils "github.com/crossplane-contrib/provider-aws/pkg/utils/policy"
 )
 
 // PolicyClient is the external client used for Policy Custom Resource
@@ -44,29 +43,37 @@ func NewSTSClient(cfg aws.Config) STSClient {
 }
 
 // IsPolicyUpToDate checks whether there is a change in any of the modifiable fields in policy.
-func IsPolicyUpToDate(in v1beta1.PolicyParameters, policy iamtypes.PolicyVersion) (bool, error) {
-	// The AWS API returns Policy Document as an escaped string.
-	// Due to differences in the methods to escape a string, the comparison result between
-	// the spec.Document and policy.Document can sometimes be false negative (due to spaces, line feeds).
-	// Escaping with a common method and then comparing is a safe way.
-
-	if *policy.Document == "" || in.Document == "" {
-		return false, nil
+func IsPolicyUpToDate(in v1beta1.PolicyParameters, policy iamtypes.PolicyVersion) (bool, string, error) {
+	externalPolicyRaw := pointer.StringValue(policy.Document)
+	if externalPolicyRaw == "" || in.Document == "" {
+		return false, "", nil
 	}
 
-	unescapedPolicy, err := url.QueryUnescape(aws.ToString(policy.Document))
+	return IsPolicyDocumentUpToDate(in.Document, policy.Document)
+}
+
+// IsPolicyDocumentUpToDate checks whether there is a change in any of the modifiable fields in policy.
+func IsPolicyDocumentUpToDate(in string, policy *string) (bool, string, error) {
+
+	unescapedPolicy, err := url.QueryUnescape(aws.ToString(policy))
 	if err != nil {
-		return false, nil
+		return false, "", err
+	}
+	externpolicy, err := policyutils.ParsePolicyString(unescapedPolicy)
+	if err != nil {
+		return false, "", err
+	}
+	specPolicy, err := policyutils.ParsePolicyString(in)
+	if err != nil {
+		return false, "", err
 	}
 
-	compactPolicy, err := awsclients.CompactAndEscapeJSON(unescapedPolicy)
-	if err != nil {
-		return false, err
-	}
-	compactSpecPolicy, err := awsclients.CompactAndEscapeJSON(in.Document)
-	if err != nil {
-		return false, err
-	}
+	areEqual, diff := policyutils.ArePoliciesEqal(&specPolicy, &externpolicy)
+	return areEqual, diff, nil
+}
 
-	return cmp.Equal(compactPolicy, compactSpecPolicy), nil
+// ValidatePolicyObject tries to parse the raw policy into a Policy object.
+func ValidatePolicyObject(policy string) error {
+	_, err := policyutils.ParsePolicyString(policy)
+	return err
 }

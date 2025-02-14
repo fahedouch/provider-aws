@@ -56,6 +56,8 @@ type PrivateDNSNamespaceObservation struct {
 	// A value that you can use to determine whether the request completed successfully.
 	// To get the status of the operation, see GetOperation (https://docs.aws.amazon.com/cloud-map/latest/api/API_GetOperation.html).
 	OperationID *string `json:"operationID,omitempty"`
+
+	CustomPrivateDNSNamespaceObservation `json:",inline"`
 }
 
 // PrivateDNSNamespaceStatus defines the observed state of PrivateDNSNamespace.
@@ -70,6 +72,7 @@ type PrivateDNSNamespaceStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

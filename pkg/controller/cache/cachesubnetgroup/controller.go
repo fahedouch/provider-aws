@@ -21,10 +21,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscache "github.com/aws/aws-sdk-go-v2/service/elasticache"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -32,12 +28,18 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cachev1alpha1 "github.com/crossplane-contrib/provider-aws/apis/cache/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/elasticache"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // Error strings.
@@ -58,18 +60,30 @@ func SetupCacheSubnetGroup(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: elasticache.NewClient}),
+		managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(cachev1alpha1.CacheSubnetGroupGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&cachev1alpha1.CacheSubnetGroup{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(cachev1alpha1.CacheSubnetGroupGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), newClientFn: elasticache.NewClient}),
-			managed.WithReferenceResolver(managed.NewAPISimpleReferenceResolver(mgr.GetClient())),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 type connector struct {
@@ -82,7 +96,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	if !ok {
 		return nil, errors.New(errNotSubnetGroup)
 	}
-	cfg, err := awsclient.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+	cfg, err := connectaws.GetConfig(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -100,16 +114,16 @@ func (e *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	}
 
 	resp, err := e.client.DescribeCacheSubnetGroups(ctx, &awscache.DescribeCacheSubnetGroupsInput{
-		CacheSubnetGroupName: awsclient.String(meta.GetExternalName(cr)),
+		CacheSubnetGroupName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 	if err != nil || resp.CacheSubnetGroups == nil {
-		return managed.ExternalObservation{}, awsclient.Wrap(resource.Ignore(elasticache.IsSubnetGroupNotFound, err), errDescribeSubnetGroup)
+		return managed.ExternalObservation{}, errorutils.Wrap(resource.Ignore(elasticache.IsSubnetGroupNotFound, err), errDescribeSubnetGroup)
 	}
 
 	sg := resp.CacheSubnetGroups[0]
 
 	cr.Status.AtProvider = cachev1alpha1.CacheSubnetGroupExternalStatus{
-		VPCID: awsclient.StringValue(sg.VpcId),
+		VPCID: pointer.StringValue(sg.VpcId),
 	}
 
 	cr.SetConditions(xpv1.Available())
@@ -129,12 +143,12 @@ func (e *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 	cr.Status.SetConditions(xpv1.Creating())
 
 	_, err := e.client.CreateCacheSubnetGroup(ctx, &awscache.CreateCacheSubnetGroupInput{
-		CacheSubnetGroupDescription: awsclient.String(cr.Spec.ForProvider.Description),
-		CacheSubnetGroupName:        awsclient.String(meta.GetExternalName(cr)),
+		CacheSubnetGroupDescription: pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.Description),
+		CacheSubnetGroupName:        pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		SubnetIds:                   cr.Spec.ForProvider.SubnetIDs,
 	})
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(resource.Ignore(elasticache.IsAlreadyExists, err), errCreateSubnetGroup)
+		return managed.ExternalCreation{}, errorutils.Wrap(resource.Ignore(elasticache.IsAlreadyExists, err), errCreateSubnetGroup)
 	}
 
 	return managed.ExternalCreation{}, nil
@@ -147,25 +161,30 @@ func (e *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 	}
 
 	_, err := e.client.ModifyCacheSubnetGroup(ctx, &awscache.ModifyCacheSubnetGroupInput{
-		CacheSubnetGroupDescription: awsclient.String(cr.Spec.ForProvider.Description),
-		CacheSubnetGroupName:        awsclient.String(meta.GetExternalName(cr)),
+		CacheSubnetGroupDescription: pointer.ToOrNilIfZeroValue(cr.Spec.ForProvider.Description),
+		CacheSubnetGroupName:        pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 		SubnetIds:                   cr.Spec.ForProvider.SubnetIDs,
 	})
 
-	return managed.ExternalUpdate{}, awsclient.Wrap(err, errModifySubnetGroup)
+	return managed.ExternalUpdate{}, errorutils.Wrap(err, errModifySubnetGroup)
 }
 
-func (e *external) Delete(ctx context.Context, mg resource.Managed) error {
+func (e *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
 	cr, ok := mg.(*cachev1alpha1.CacheSubnetGroup)
 	if !ok {
-		return errors.New(errNotSubnetGroup)
+		return managed.ExternalDelete{}, errors.New(errNotSubnetGroup)
 	}
 
 	cr.SetConditions(xpv1.Deleting())
 
 	_, err := e.client.DeleteCacheSubnetGroup(ctx, &awscache.DeleteCacheSubnetGroupInput{
-		CacheSubnetGroupName: awsclient.String(meta.GetExternalName(cr)),
+		CacheSubnetGroupName: pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr)),
 	})
 
-	return awsclient.Wrap(resource.Ignore(elasticache.IsNotFound, err), errDeleteSubnetGroup)
+	return managed.ExternalDelete{}, errorutils.Wrap(resource.Ignore(elasticache.IsNotFound, err), errDeleteSubnetGroup)
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }

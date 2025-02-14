@@ -30,17 +30,14 @@ func (mg *JobRun) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this JobRun.
+func (mg *JobRun) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this JobRun.
 func (mg *JobRun) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this JobRun.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *JobRun) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this JobRun.
@@ -63,17 +60,14 @@ func (mg *JobRun) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this JobRun.
+func (mg *JobRun) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this JobRun.
 func (mg *JobRun) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this JobRun.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *JobRun) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this JobRun.
@@ -96,17 +90,14 @@ func (mg *VirtualCluster) GetDeletionPolicy() xpv1.DeletionPolicy {
 	return mg.Spec.DeletionPolicy
 }
 
+// GetManagementPolicies of this VirtualCluster.
+func (mg *VirtualCluster) GetManagementPolicies() xpv1.ManagementPolicies {
+	return mg.Spec.ManagementPolicies
+}
+
 // GetProviderConfigReference of this VirtualCluster.
 func (mg *VirtualCluster) GetProviderConfigReference() *xpv1.Reference {
 	return mg.Spec.ProviderConfigReference
-}
-
-/*
-GetProviderReference of this VirtualCluster.
-Deprecated: Use GetProviderConfigReference.
-*/
-func (mg *VirtualCluster) GetProviderReference() *xpv1.Reference {
-	return mg.Spec.ProviderReference
 }
 
 // GetPublishConnectionDetailsTo of this VirtualCluster.
@@ -129,17 +120,14 @@ func (mg *VirtualCluster) SetDeletionPolicy(r xpv1.DeletionPolicy) {
 	mg.Spec.DeletionPolicy = r
 }
 
+// SetManagementPolicies of this VirtualCluster.
+func (mg *VirtualCluster) SetManagementPolicies(r xpv1.ManagementPolicies) {
+	mg.Spec.ManagementPolicies = r
+}
+
 // SetProviderConfigReference of this VirtualCluster.
 func (mg *VirtualCluster) SetProviderConfigReference(r *xpv1.Reference) {
 	mg.Spec.ProviderConfigReference = r
-}
-
-/*
-SetProviderReference of this VirtualCluster.
-Deprecated: Use SetProviderConfigReference.
-*/
-func (mg *VirtualCluster) SetProviderReference(r *xpv1.Reference) {
-	mg.Spec.ProviderReference = r
 }
 
 // SetPublishConnectionDetailsTo of this VirtualCluster.

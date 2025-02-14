@@ -34,7 +34,7 @@ type BasePathMappingParameters struct {
 	// across a single API. Specify '(none)' if you do not want callers to specify
 	// a base path name after the domain name.
 	BasePath *string `json:"basePath,omitempty"`
-	// [Required] The domain name of the BasePathMapping resource to create.
+	// The domain name of the BasePathMapping resource to create.
 	// +kubebuilder:validation:Required
 	DomainName *string `json:"domainName"`
 	// The name of the API's stage that you want to use for this mapping. Specify
@@ -54,6 +54,8 @@ type BasePathMappingSpec struct {
 type BasePathMappingObservation struct {
 	// The string identifier of the associated RestApi.
 	RestAPIID *string `json:"restAPIID,omitempty"`
+
+	CustomBasePathMappingObservation `json:",inline"`
 }
 
 // BasePathMappingStatus defines the observed state of BasePathMapping.
@@ -68,6 +70,7 @@ type BasePathMappingStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

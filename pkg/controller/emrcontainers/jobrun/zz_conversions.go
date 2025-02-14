@@ -69,24 +69,34 @@ func GenerateJobRun(resp *svcsdk.DescribeJobRunOutput) *svcapitypes.JobRun {
 	}
 	if resp.JobRun.JobDriver != nil {
 		f8 := &svcapitypes.JobDriver{}
+		if resp.JobRun.JobDriver.SparkSqlJobDriver != nil {
+			f8f0 := &svcapitypes.SparkSQLJobDriver{}
+			if resp.JobRun.JobDriver.SparkSqlJobDriver.EntryPoint != nil {
+				f8f0.EntryPoint = resp.JobRun.JobDriver.SparkSqlJobDriver.EntryPoint
+			}
+			if resp.JobRun.JobDriver.SparkSqlJobDriver.SparkSqlParameters != nil {
+				f8f0.SparkSQLParameters = resp.JobRun.JobDriver.SparkSqlJobDriver.SparkSqlParameters
+			}
+			f8.SparkSQLJobDriver = f8f0
+		}
 		if resp.JobRun.JobDriver.SparkSubmitJobDriver != nil {
-			f8f0 := &svcapitypes.SparkSubmitJobDriver{}
+			f8f1 := &svcapitypes.SparkSubmitJobDriver{}
 			if resp.JobRun.JobDriver.SparkSubmitJobDriver.EntryPoint != nil {
-				f8f0.EntryPoint = resp.JobRun.JobDriver.SparkSubmitJobDriver.EntryPoint
+				f8f1.EntryPoint = resp.JobRun.JobDriver.SparkSubmitJobDriver.EntryPoint
 			}
 			if resp.JobRun.JobDriver.SparkSubmitJobDriver.EntryPointArguments != nil {
-				f8f0f1 := []*string{}
-				for _, f8f0f1iter := range resp.JobRun.JobDriver.SparkSubmitJobDriver.EntryPointArguments {
-					var f8f0f1elem string
-					f8f0f1elem = *f8f0f1iter
-					f8f0f1 = append(f8f0f1, &f8f0f1elem)
+				f8f1f1 := []*string{}
+				for _, f8f1f1iter := range resp.JobRun.JobDriver.SparkSubmitJobDriver.EntryPointArguments {
+					var f8f1f1elem string
+					f8f1f1elem = *f8f1f1iter
+					f8f1f1 = append(f8f1f1, &f8f1f1elem)
 				}
-				f8f0.EntryPointArguments = f8f0f1
+				f8f1.EntryPointArguments = f8f1f1
 			}
 			if resp.JobRun.JobDriver.SparkSubmitJobDriver.SparkSubmitParameters != nil {
-				f8f0.SparkSubmitParameters = resp.JobRun.JobDriver.SparkSubmitJobDriver.SparkSubmitParameters
+				f8f1.SparkSubmitParameters = resp.JobRun.JobDriver.SparkSubmitJobDriver.SparkSubmitParameters
 			}
-			f8.SparkSubmitJobDriver = f8f0
+			f8.SparkSubmitJobDriver = f8f1
 		}
 		cr.Spec.ForProvider.JobDriver = f8
 	} else {
@@ -102,6 +112,15 @@ func GenerateJobRun(resp *svcsdk.DescribeJobRunOutput) *svcapitypes.JobRun {
 	} else {
 		cr.Spec.ForProvider.ReleaseLabel = nil
 	}
+	if resp.JobRun.RetryPolicyConfiguration != nil {
+		f11 := &svcapitypes.RetryPolicyConfiguration{}
+		if resp.JobRun.RetryPolicyConfiguration.MaxAttempts != nil {
+			f11.MaxAttempts = resp.JobRun.RetryPolicyConfiguration.MaxAttempts
+		}
+		cr.Spec.ForProvider.RetryPolicyConfiguration = f11
+	} else {
+		cr.Spec.ForProvider.RetryPolicyConfiguration = nil
+	}
 	if resp.JobRun.State != nil {
 		cr.Status.AtProvider.State = resp.JobRun.State
 	} else {
@@ -113,13 +132,13 @@ func GenerateJobRun(resp *svcsdk.DescribeJobRunOutput) *svcapitypes.JobRun {
 		cr.Status.AtProvider.StateDetails = nil
 	}
 	if resp.JobRun.Tags != nil {
-		f13 := map[string]*string{}
-		for f13key, f13valiter := range resp.JobRun.Tags {
-			var f13val string
-			f13val = *f13valiter
-			f13[f13key] = &f13val
+		f15 := map[string]*string{}
+		for f15key, f15valiter := range resp.JobRun.Tags {
+			var f15val string
+			f15val = *f15valiter
+			f15[f15key] = &f15val
 		}
-		cr.Spec.ForProvider.Tags = f13
+		cr.Spec.ForProvider.Tags = f15
 	} else {
 		cr.Spec.ForProvider.Tags = nil
 	}
@@ -141,38 +160,67 @@ func GenerateStartJobRunInput(cr *svcapitypes.JobRun) *svcsdk.StartJobRunInput {
 	}
 	if cr.Spec.ForProvider.JobDriver != nil {
 		f1 := &svcsdk.JobDriver{}
+		if cr.Spec.ForProvider.JobDriver.SparkSQLJobDriver != nil {
+			f1f0 := &svcsdk.SparkSqlJobDriver{}
+			if cr.Spec.ForProvider.JobDriver.SparkSQLJobDriver.EntryPoint != nil {
+				f1f0.SetEntryPoint(*cr.Spec.ForProvider.JobDriver.SparkSQLJobDriver.EntryPoint)
+			}
+			if cr.Spec.ForProvider.JobDriver.SparkSQLJobDriver.SparkSQLParameters != nil {
+				f1f0.SetSparkSqlParameters(*cr.Spec.ForProvider.JobDriver.SparkSQLJobDriver.SparkSQLParameters)
+			}
+			f1.SetSparkSqlJobDriver(f1f0)
+		}
 		if cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver != nil {
-			f1f0 := &svcsdk.SparkSubmitJobDriver{}
+			f1f1 := &svcsdk.SparkSubmitJobDriver{}
 			if cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.EntryPoint != nil {
-				f1f0.SetEntryPoint(*cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.EntryPoint)
+				f1f1.SetEntryPoint(*cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.EntryPoint)
 			}
 			if cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.EntryPointArguments != nil {
-				f1f0f1 := []*string{}
-				for _, f1f0f1iter := range cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.EntryPointArguments {
-					var f1f0f1elem string
-					f1f0f1elem = *f1f0f1iter
-					f1f0f1 = append(f1f0f1, &f1f0f1elem)
+				f1f1f1 := []*string{}
+				for _, f1f1f1iter := range cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.EntryPointArguments {
+					var f1f1f1elem string
+					f1f1f1elem = *f1f1f1iter
+					f1f1f1 = append(f1f1f1, &f1f1f1elem)
 				}
-				f1f0.SetEntryPointArguments(f1f0f1)
+				f1f1.SetEntryPointArguments(f1f1f1)
 			}
 			if cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.SparkSubmitParameters != nil {
-				f1f0.SetSparkSubmitParameters(*cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.SparkSubmitParameters)
+				f1f1.SetSparkSubmitParameters(*cr.Spec.ForProvider.JobDriver.SparkSubmitJobDriver.SparkSubmitParameters)
 			}
-			f1.SetSparkSubmitJobDriver(f1f0)
+			f1.SetSparkSubmitJobDriver(f1f1)
 		}
 		res.SetJobDriver(f1)
 	}
-	if cr.Spec.ForProvider.ReleaseLabel != nil {
-		res.SetReleaseLabel(*cr.Spec.ForProvider.ReleaseLabel)
+	if cr.Spec.ForProvider.JobTemplateID != nil {
+		res.SetJobTemplateId(*cr.Spec.ForProvider.JobTemplateID)
 	}
-	if cr.Spec.ForProvider.Tags != nil {
+	if cr.Spec.ForProvider.JobTemplateParameters != nil {
 		f3 := map[string]*string{}
-		for f3key, f3valiter := range cr.Spec.ForProvider.Tags {
+		for f3key, f3valiter := range cr.Spec.ForProvider.JobTemplateParameters {
 			var f3val string
 			f3val = *f3valiter
 			f3[f3key] = &f3val
 		}
-		res.SetTags(f3)
+		res.SetJobTemplateParameters(f3)
+	}
+	if cr.Spec.ForProvider.ReleaseLabel != nil {
+		res.SetReleaseLabel(*cr.Spec.ForProvider.ReleaseLabel)
+	}
+	if cr.Spec.ForProvider.RetryPolicyConfiguration != nil {
+		f5 := &svcsdk.RetryPolicyConfiguration{}
+		if cr.Spec.ForProvider.RetryPolicyConfiguration.MaxAttempts != nil {
+			f5.SetMaxAttempts(*cr.Spec.ForProvider.RetryPolicyConfiguration.MaxAttempts)
+		}
+		res.SetRetryPolicyConfiguration(f5)
+	}
+	if cr.Spec.ForProvider.Tags != nil {
+		f6 := map[string]*string{}
+		for f6key, f6valiter := range cr.Spec.ForProvider.Tags {
+			var f6val string
+			f6val = *f6valiter
+			f6[f6key] = &f6val
+		}
+		res.SetTags(f6)
 	}
 
 	return res

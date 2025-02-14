@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/apigateway/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.RestAPI)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.RestAPI) (managed.TypedExternalClient[*svcapitypes.RestAPI], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.RestAPI)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.RestAPI) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,30 +74,30 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.GetRestApiWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateRestAPI(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.RestAPI)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.RestAPI) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateRestApiInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -112,7 +105,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateRestApiWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.ApiKeySource != nil {
@@ -190,14 +183,19 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Spec.ForProvider.Policy = nil
 	}
+	if resp.RootResourceId != nil {
+		cr.Status.AtProvider.RootResourceID = resp.RootResourceId
+	} else {
+		cr.Status.AtProvider.RootResourceID = nil
+	}
 	if resp.Tags != nil {
-		f10 := map[string]*string{}
-		for f10key, f10valiter := range resp.Tags {
-			var f10val string
-			f10val = *f10valiter
-			f10[f10key] = &f10val
+		f11 := map[string]*string{}
+		for f11key, f11valiter := range resp.Tags {
+			var f11val string
+			f11val = *f11valiter
+			f11[f11key] = &f11val
 		}
-		cr.Spec.ForProvider.Tags = f10
+		cr.Spec.ForProvider.Tags = f11
 	} else {
 		cr.Spec.ForProvider.Tags = nil
 	}
@@ -207,13 +205,13 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Spec.ForProvider.Version = nil
 	}
 	if resp.Warnings != nil {
-		f12 := []*string{}
-		for _, f12iter := range resp.Warnings {
-			var f12elem string
-			f12elem = *f12iter
-			f12 = append(f12, &f12elem)
+		f13 := []*string{}
+		for _, f13iter := range resp.Warnings {
+			var f13elem string
+			f13elem = *f13iter
+			f13 = append(f13, &f13elem)
 		}
-		cr.Status.AtProvider.Warnings = f12
+		cr.Status.AtProvider.Warnings = f13
 	} else {
 		cr.Status.AtProvider.Warnings = nil
 	}
@@ -221,35 +219,32 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.RestAPI)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Update(ctx context.Context, cr *svcapitypes.RestAPI) (managed.ExternalUpdate, error) {
 	input := GenerateUpdateRestApiInput(cr)
 	if err := e.preUpdate(ctx, cr, input); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.UpdateRestApiWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.RestAPI)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.RestAPI) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteRestApiInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteRestApiWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -281,11 +276,11 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.RestAPI, *svcsdk.GetRestApiInput) error
 	postObserve    func(context.Context, *svcapitypes.RestAPI, *svcsdk.RestApi, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.RestAPIParameters, *svcsdk.RestApi) error
-	isUpToDate     func(*svcapitypes.RestAPI, *svcsdk.RestApi) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.RestAPI, *svcsdk.RestApi) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.RestAPI, *svcsdk.CreateRestApiInput) error
 	postCreate     func(context.Context, *svcapitypes.RestAPI, *svcsdk.RestApi, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.RestAPI, *svcsdk.DeleteRestApiInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.RestAPI, *svcsdk.DeleteRestApiOutput, error) error
+	postDelete     func(context.Context, *svcapitypes.RestAPI, *svcsdk.DeleteRestApiOutput, error) (managed.ExternalDelete, error)
 	preUpdate      func(context.Context, *svcapitypes.RestAPI, *svcsdk.UpdateRestApiInput) error
 	postUpdate     func(context.Context, *svcapitypes.RestAPI, *svcsdk.RestApi, managed.ExternalUpdate, error) (managed.ExternalUpdate, error)
 }
@@ -300,8 +295,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.RestAPI, _ *svcsdk.RestApi
 func nopLateInitialize(*svcapitypes.RestAPIParameters, *svcsdk.RestApi) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.RestAPI, *svcsdk.RestApi) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.RestAPI, *svcsdk.RestApi) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.RestAPI, *svcsdk.CreateRestApiInput) error {
@@ -313,8 +308,8 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.RestAPI, _ *svcsdk.RestApi,
 func nopPreDelete(context.Context, *svcapitypes.RestAPI, *svcsdk.DeleteRestApiInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.RestAPI, _ *svcsdk.DeleteRestApiOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.RestAPI, _ *svcsdk.DeleteRestApiOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
 func nopPreUpdate(context.Context, *svcapitypes.RestAPI, *svcsdk.UpdateRestApiInput) error {
 	return nil

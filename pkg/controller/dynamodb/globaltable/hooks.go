@@ -20,12 +20,9 @@ import (
 	"context"
 	"sort"
 
+	"github.com/aws/aws-sdk-go/aws"
 	svcsdk "github.com/aws/aws-sdk-go/service/dynamodb"
 	svcsdkapi "github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
@@ -33,11 +30,14 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/google/go-cmp/cmp"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/dynamodb/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	aws "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupGlobalTable adds a controller that reconciles GlobalTable.
@@ -61,17 +61,29 @@ func SetupGlobalTable(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithTypedExternalConnector(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.GlobalTableGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.GlobalTable{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.GlobalTableGroupVersionKind),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.GlobalTable, obj *svcsdk.DescribeGlobalTableInput) error {
@@ -99,7 +111,7 @@ func postObserve(_ context.Context, cr *svcapitypes.GlobalTable, resp *svcsdk.De
 	return obs, nil
 }
 
-func isUpToDate(cr *svcapitypes.GlobalTable, obj *svcsdk.DescribeGlobalTableOutput) (bool, error) {
+func isUpToDate(_ context.Context, cr *svcapitypes.GlobalTable, obj *svcsdk.DescribeGlobalTableOutput) (bool, string, error) {
 	existing := make([]string, len(obj.GlobalTableDescription.ReplicationGroup))
 	for i, r := range obj.GlobalTableDescription.ReplicationGroup {
 		existing[i] = aws.StringValue(r.RegionName)
@@ -110,7 +122,8 @@ func isUpToDate(cr *svcapitypes.GlobalTable, obj *svcsdk.DescribeGlobalTableOutp
 		desired[i] = aws.StringValue(r.RegionName)
 	}
 	sort.Strings(desired)
-	return cmp.Equal(existing, desired), nil
+	diff := cmp.Diff(existing, desired)
+	return diff == "", diff, nil
 }
 
 type updater struct {
@@ -121,7 +134,7 @@ func (u *updater) preUpdate(ctx context.Context, cr *svcapitypes.GlobalTable, ob
 	input := GenerateDescribeGlobalTableInput(cr)
 	o, err := u.client.DescribeGlobalTableWithContext(ctx, input)
 	if err != nil {
-		return aws.Wrap(err, errDescribe)
+		return errorutils.Wrap(err, errDescribe)
 	}
 	desired := map[string]bool{}
 	for _, r := range cr.Spec.ForProvider.ReplicationGroup {
@@ -155,19 +168,15 @@ type deleter struct {
 	client svcsdkapi.DynamoDBAPI
 }
 
-func (d *deleter) delete(ctx context.Context, mg resource.Managed) error {
-	cr, ok := mg.(*svcapitypes.GlobalTable)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (d *deleter) delete(ctx context.Context, cr *svcapitypes.GlobalTable) (managed.ExternalDelete, error) {
 	u := &svcsdk.UpdateGlobalTableInput{
-		GlobalTableName: aws.String(meta.GetExternalName(mg)),
+		GlobalTableName: aws.String(meta.GetExternalName(cr)),
 	}
 	for _, region := range cr.Spec.ForProvider.ReplicationGroup {
 		u.ReplicaUpdates = append(u.ReplicaUpdates, &svcsdk.ReplicaUpdate{Delete: &svcsdk.DeleteReplicaAction{RegionName: region.RegionName}})
 	}
 	if _, err := d.client.UpdateGlobalTableWithContext(ctx, u); err != nil {
-		return aws.Wrap(err, "update call for deletion failed")
+		return managed.ExternalDelete{}, errorutils.Wrap(err, "update call for deletion failed")
 	}
-	return nil
+	return managed.ExternalDelete{}, nil
 }

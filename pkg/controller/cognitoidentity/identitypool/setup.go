@@ -17,21 +17,21 @@ import (
 	"context"
 	"reflect"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	svcsdk "github.com/aws/aws-sdk-go/service/cognitoidentity"
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cognitoidentity/v1alpha1"
 	"github.com/crossplane-contrib/provider-aws/apis/v1alpha1"
-	awsclients "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/features"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
+	custommanaged "github.com/crossplane-contrib/provider-aws/pkg/utils/reconciler/managed"
 )
 
 // SetupIdentityPool adds a controller that reconciles IdentityPool.
@@ -55,22 +55,34 @@ func SetupIdentityPool(mgr ctrl.Manager, o controller.Options) error {
 		cps = append(cps, connection.NewDetailsManager(mgr.GetClient(), v1alpha1.StoreConfigGroupVersionKind))
 	}
 
+	reconcilerOpts := []managed.ReconcilerOption{
+		managed.WithInitializers(),
+		managed.WithCriticalAnnotationUpdater(custommanaged.NewRetryingCriticalAnnotationUpdater(mgr.GetClient())),
+		managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithLogger(o.Logger.WithValues("controller", name)),
+		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
+		managed.WithConnectionPublishers(cps...),
+	}
+
+	if o.Features.Enabled(features.EnableAlphaManagementPolicies) {
+		reconcilerOpts = append(reconcilerOpts, managed.WithManagementPolicies())
+	}
+
+	r := managed.NewReconciler(mgr,
+		resource.ManagedKind(svcapitypes.IdentityPoolGroupVersionKind),
+		reconcilerOpts...)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
+		WithEventFilter(resource.DesiredStateChanged()).
 		For(&svcapitypes.IdentityPool{}).
-		Complete(managed.NewReconciler(mgr,
-			resource.ManagedKind(svcapitypes.IdentityPoolGroupVersionKind),
-			managed.WithInitializers(),
-			managed.WithExternalConnecter(&connector{kube: mgr.GetClient(), opts: opts}),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithLogger(o.Logger.WithValues("controller", name)),
-			managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-			managed.WithConnectionPublishers(cps...)))
+		Complete(r)
 }
 
 func preObserve(_ context.Context, cr *svcapitypes.IdentityPool, obj *svcsdk.DescribeIdentityPoolInput) error {
-	obj.IdentityPoolId = awsclients.String(meta.GetExternalName(cr))
+	obj.IdentityPoolId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return nil
 }
 
@@ -106,12 +118,12 @@ func postCreate(_ context.Context, cr *svcapitypes.IdentityPool, obj *svcsdk.Ide
 		return managed.ExternalCreation{}, err
 	}
 
-	meta.SetExternalName(cr, awsclients.StringValue(obj.IdentityPoolId))
-	return managed.ExternalCreation{ExternalNameAssigned: true}, nil
+	meta.SetExternalName(cr, pointer.StringValue(obj.IdentityPoolId))
+	return managed.ExternalCreation{}, nil
 }
 
 func preUpdate(_ context.Context, cr *svcapitypes.IdentityPool, obj *svcsdk.IdentityPool) error {
-	obj.IdentityPoolId = awsclients.String(meta.GetExternalName(cr))
+	obj.IdentityPoolId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	obj.OpenIdConnectProviderARNs = cr.Spec.ForProvider.OpenIDConnectProviderARNs
 	if cr.Spec.ForProvider.CognitoIdentityProviders != nil {
 		providers := make([]*svcsdk.Provider, len(cr.Spec.ForProvider.CognitoIdentityProviders))
@@ -129,7 +141,7 @@ func preUpdate(_ context.Context, cr *svcapitypes.IdentityPool, obj *svcsdk.Iden
 }
 
 func preDelete(_ context.Context, cr *svcapitypes.IdentityPool, obj *svcsdk.DeleteIdentityPoolInput) (bool, error) {
-	obj.IdentityPoolId = awsclients.String(meta.GetExternalName(cr))
+	obj.IdentityPoolId = pointer.ToOrNilIfZeroValue(meta.GetExternalName(cr))
 	return false, nil
 }
 

@@ -29,7 +29,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 
 	"github.com/crossplane-contrib/provider-aws/apis/s3/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 // See - https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html#RESTErrorResponses
@@ -105,8 +105,8 @@ type BucketClient interface {
 	PutBucketNotificationConfiguration(ctx context.Context, input *s3.PutBucketNotificationConfigurationInput, opts ...func(*s3.Options)) (*s3.PutBucketNotificationConfigurationOutput, error)
 	GetBucketNotificationConfiguration(ctx context.Context, input *s3.GetBucketNotificationConfigurationInput, opts ...func(*s3.Options)) (*s3.GetBucketNotificationConfigurationOutput, error)
 
-	GetBucketAcl(ctx context.Context, input *s3.GetBucketAclInput, opts ...func(*s3.Options)) (*s3.GetBucketAclOutput, error) //nolint
-	PutBucketAcl(ctx context.Context, input *s3.PutBucketAclInput, opts ...func(*s3.Options)) (*s3.PutBucketAclOutput, error) //nolint
+	GetBucketAcl(ctx context.Context, input *s3.GetBucketAclInput, opts ...func(*s3.Options)) (*s3.GetBucketAclOutput, error)
+	PutBucketAcl(ctx context.Context, input *s3.PutBucketAclInput, opts ...func(*s3.Options)) (*s3.PutBucketAclOutput, error)
 	GetPublicAccessBlock(ctx context.Context, input *s3.GetPublicAccessBlockInput, opts ...func(*s3.Options)) (*s3.GetPublicAccessBlockOutput, error)
 	PutPublicAccessBlock(ctx context.Context, input *s3.PutPublicAccessBlockInput, opts ...func(*s3.Options)) (*s3.PutPublicAccessBlockOutput, error)
 	DeletePublicAccessBlock(ctx context.Context, input *s3.DeletePublicAccessBlockInput, opts ...func(*s3.Options)) (*s3.DeletePublicAccessBlockOutput, error)
@@ -114,6 +114,8 @@ type BucketClient interface {
 	GetBucketOwnershipControls(ctx context.Context, input *s3.GetBucketOwnershipControlsInput, opts ...func(*s3.Options)) (*s3.GetBucketOwnershipControlsOutput, error)
 	PutBucketOwnershipControls(ctx context.Context, input *s3.PutBucketOwnershipControlsInput, opts ...func(*s3.Options)) (*s3.PutBucketOwnershipControlsOutput, error)
 	DeleteBucketOwnershipControls(ctx context.Context, input *s3.DeleteBucketOwnershipControlsInput, opts ...func(*s3.Options)) (*s3.DeleteBucketOwnershipControlsOutput, error)
+
+	BucketPolicyClient
 }
 
 // NewClient returns a new client using AWS credentials as JSON encoded data.
@@ -143,7 +145,7 @@ func GenerateCreateBucketInput(name string, s v1beta1.BucketParameters) *s3.Crea
 		GrantReadACP:               s.GrantReadACP,
 		GrantWrite:                 s.GrantWrite,
 		GrantWriteACP:              s.GrantWriteACP,
-		ObjectLockEnabledForBucket: aws.ToBool(s.ObjectLockEnabledForBucket),
+		ObjectLockEnabledForBucket: s.ObjectLockEnabledForBucket,
 		ObjectOwnership:            s3types.ObjectOwnership(aws.ToString(s.ObjectOwnership)),
 	}
 	if s.LocationConstraint != "us-east-1" {
@@ -270,7 +272,7 @@ func CopyTags(tags []v1beta1.Tag) []s3types.Tag {
 func CopyAWSTags(tags []s3types.Tag) []v1beta1.Tag {
 	out := make([]v1beta1.Tag, len(tags))
 	for i, one := range tags {
-		out[i] = v1beta1.Tag{Key: awsclient.StringValue(one.Key), Value: awsclient.StringValue(one.Value)}
+		out[i] = v1beta1.Tag{Key: pointer.StringValue(one.Key), Value: pointer.StringValue(one.Value)}
 	}
 	return out
 }

@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/neptune/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.DBCluster)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.DBCluster) (managed.TypedExternalClient[*svcapitypes.DBCluster], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.DBCluster)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.DBCluster) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,7 +74,7 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.DescribeDBClustersWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	resp = e.filterList(cr, resp)
 	if len(resp.DBClusters) == 0 {
@@ -92,23 +85,23 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateDBCluster(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.DBCluster)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.DBCluster) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateDBClusterInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -116,7 +109,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateDBClusterWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.DBCluster.AllocatedStorage != nil {
@@ -293,6 +286,11 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Spec.ForProvider.EngineVersion = nil
 	}
+	if resp.DBCluster.GlobalClusterIdentifier != nil {
+		cr.Spec.ForProvider.GlobalClusterIdentifier = resp.DBCluster.GlobalClusterIdentifier
+	} else {
+		cr.Spec.ForProvider.GlobalClusterIdentifier = nil
+	}
 	if resp.DBCluster.HostedZoneId != nil {
 		cr.Status.AtProvider.HostedZoneID = resp.DBCluster.HostedZoneId
 	} else {
@@ -323,6 +321,52 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Status.AtProvider.MultiAZ = nil
 	}
+	if resp.DBCluster.PendingModifiedValues != nil {
+		f31 := &svcapitypes.ClusterPendingModifiedValues{}
+		if resp.DBCluster.PendingModifiedValues.AllocatedStorage != nil {
+			f31.AllocatedStorage = resp.DBCluster.PendingModifiedValues.AllocatedStorage
+		}
+		if resp.DBCluster.PendingModifiedValues.BackupRetentionPeriod != nil {
+			f31.BackupRetentionPeriod = resp.DBCluster.PendingModifiedValues.BackupRetentionPeriod
+		}
+		if resp.DBCluster.PendingModifiedValues.DBClusterIdentifier != nil {
+			f31.DBClusterIdentifier = resp.DBCluster.PendingModifiedValues.DBClusterIdentifier
+		}
+		if resp.DBCluster.PendingModifiedValues.EngineVersion != nil {
+			f31.EngineVersion = resp.DBCluster.PendingModifiedValues.EngineVersion
+		}
+		if resp.DBCluster.PendingModifiedValues.IAMDatabaseAuthenticationEnabled != nil {
+			f31.IAMDatabaseAuthenticationEnabled = resp.DBCluster.PendingModifiedValues.IAMDatabaseAuthenticationEnabled
+		}
+		if resp.DBCluster.PendingModifiedValues.Iops != nil {
+			f31.IOPS = resp.DBCluster.PendingModifiedValues.Iops
+		}
+		if resp.DBCluster.PendingModifiedValues.PendingCloudwatchLogsExports != nil {
+			f31f6 := &svcapitypes.PendingCloudwatchLogsExports{}
+			if resp.DBCluster.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToDisable != nil {
+				f31f6f0 := []*string{}
+				for _, f31f6f0iter := range resp.DBCluster.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToDisable {
+					var f31f6f0elem string
+					f31f6f0elem = *f31f6f0iter
+					f31f6f0 = append(f31f6f0, &f31f6f0elem)
+				}
+				f31f6.LogTypesToDisable = f31f6f0
+			}
+			if resp.DBCluster.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToEnable != nil {
+				f31f6f1 := []*string{}
+				for _, f31f6f1iter := range resp.DBCluster.PendingModifiedValues.PendingCloudwatchLogsExports.LogTypesToEnable {
+					var f31f6f1elem string
+					f31f6f1elem = *f31f6f1iter
+					f31f6f1 = append(f31f6f1, &f31f6f1elem)
+				}
+				f31f6.LogTypesToEnable = f31f6f1
+			}
+			f31.PendingCloudwatchLogsExports = f31f6
+		}
+		cr.Status.AtProvider.PendingModifiedValues = f31
+	} else {
+		cr.Status.AtProvider.PendingModifiedValues = nil
+	}
 	if resp.DBCluster.PercentProgress != nil {
 		cr.Status.AtProvider.PercentProgress = resp.DBCluster.PercentProgress
 	} else {
@@ -344,13 +388,13 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Spec.ForProvider.PreferredMaintenanceWindow = nil
 	}
 	if resp.DBCluster.ReadReplicaIdentifiers != nil {
-		f34 := []*string{}
-		for _, f34iter := range resp.DBCluster.ReadReplicaIdentifiers {
-			var f34elem string
-			f34elem = *f34iter
-			f34 = append(f34, &f34elem)
+		f36 := []*string{}
+		for _, f36iter := range resp.DBCluster.ReadReplicaIdentifiers {
+			var f36elem string
+			f36elem = *f36iter
+			f36 = append(f36, &f36elem)
 		}
-		cr.Status.AtProvider.ReadReplicaIdentifiers = f34
+		cr.Status.AtProvider.ReadReplicaIdentifiers = f36
 	} else {
 		cr.Status.AtProvider.ReadReplicaIdentifiers = nil
 	}
@@ -364,6 +408,18 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	} else {
 		cr.Spec.ForProvider.ReplicationSourceIdentifier = nil
 	}
+	if resp.DBCluster.ServerlessV2ScalingConfiguration != nil {
+		f39 := &svcapitypes.ServerlessV2ScalingConfiguration{}
+		if resp.DBCluster.ServerlessV2ScalingConfiguration.MaxCapacity != nil {
+			f39.MaxCapacity = resp.DBCluster.ServerlessV2ScalingConfiguration.MaxCapacity
+		}
+		if resp.DBCluster.ServerlessV2ScalingConfiguration.MinCapacity != nil {
+			f39.MinCapacity = resp.DBCluster.ServerlessV2ScalingConfiguration.MinCapacity
+		}
+		cr.Spec.ForProvider.ServerlessV2ScalingConfiguration = f39
+	} else {
+		cr.Spec.ForProvider.ServerlessV2ScalingConfiguration = nil
+	}
 	if resp.DBCluster.Status != nil {
 		cr.Status.AtProvider.Status = resp.DBCluster.Status
 	} else {
@@ -375,18 +431,18 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 		cr.Spec.ForProvider.StorageEncrypted = nil
 	}
 	if resp.DBCluster.VpcSecurityGroups != nil {
-		f39 := []*svcapitypes.VPCSecurityGroupMembership{}
-		for _, f39iter := range resp.DBCluster.VpcSecurityGroups {
-			f39elem := &svcapitypes.VPCSecurityGroupMembership{}
-			if f39iter.Status != nil {
-				f39elem.Status = f39iter.Status
+		f42 := []*svcapitypes.VPCSecurityGroupMembership{}
+		for _, f42iter := range resp.DBCluster.VpcSecurityGroups {
+			f42elem := &svcapitypes.VPCSecurityGroupMembership{}
+			if f42iter.Status != nil {
+				f42elem.Status = f42iter.Status
 			}
-			if f39iter.VpcSecurityGroupId != nil {
-				f39elem.VPCSecurityGroupID = f39iter.VpcSecurityGroupId
+			if f42iter.VpcSecurityGroupId != nil {
+				f42elem.VPCSecurityGroupID = f42iter.VpcSecurityGroupId
 			}
-			f39 = append(f39, f39elem)
+			f42 = append(f42, f42elem)
 		}
-		cr.Status.AtProvider.VPCSecurityGroups = f39
+		cr.Status.AtProvider.VPCSecurityGroups = f42
 	} else {
 		cr.Status.AtProvider.VPCSecurityGroups = nil
 	}
@@ -394,35 +450,32 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.DBCluster)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Update(ctx context.Context, cr *svcapitypes.DBCluster) (managed.ExternalUpdate, error) {
 	input := GenerateModifyDBClusterInput(cr)
 	if err := e.preUpdate(ctx, cr, input); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.ModifyDBClusterWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.DBCluster)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.DBCluster) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteDBClusterInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteDBClusterWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -456,11 +509,11 @@ type external struct {
 	postObserve    func(context.Context, *svcapitypes.DBCluster, *svcsdk.DescribeDBClustersOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	filterList     func(*svcapitypes.DBCluster, *svcsdk.DescribeDBClustersOutput) *svcsdk.DescribeDBClustersOutput
 	lateInitialize func(*svcapitypes.DBClusterParameters, *svcsdk.DescribeDBClustersOutput) error
-	isUpToDate     func(*svcapitypes.DBCluster, *svcsdk.DescribeDBClustersOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.DBCluster, *svcsdk.DescribeDBClustersOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.DBCluster, *svcsdk.CreateDBClusterInput) error
 	postCreate     func(context.Context, *svcapitypes.DBCluster, *svcsdk.CreateDBClusterOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.DBCluster, *svcsdk.DeleteDBClusterInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.DBCluster, *svcsdk.DeleteDBClusterOutput, error) error
+	postDelete     func(context.Context, *svcapitypes.DBCluster, *svcsdk.DeleteDBClusterOutput, error) (managed.ExternalDelete, error)
 	preUpdate      func(context.Context, *svcapitypes.DBCluster, *svcsdk.ModifyDBClusterInput) error
 	postUpdate     func(context.Context, *svcapitypes.DBCluster, *svcsdk.ModifyDBClusterOutput, managed.ExternalUpdate, error) (managed.ExternalUpdate, error)
 }
@@ -478,8 +531,8 @@ func nopFilterList(_ *svcapitypes.DBCluster, list *svcsdk.DescribeDBClustersOutp
 func nopLateInitialize(*svcapitypes.DBClusterParameters, *svcsdk.DescribeDBClustersOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.DBCluster, *svcsdk.DescribeDBClustersOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.DBCluster, *svcsdk.DescribeDBClustersOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.DBCluster, *svcsdk.CreateDBClusterInput) error {
@@ -491,8 +544,8 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.DBCluster, _ *svcsdk.Create
 func nopPreDelete(context.Context, *svcapitypes.DBCluster, *svcsdk.DeleteDBClusterInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.DBCluster, _ *svcsdk.DeleteDBClusterOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.DBCluster, _ *svcsdk.DeleteDBClusterOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
 func nopPreUpdate(context.Context, *svcapitypes.DBCluster, *svcsdk.ModifyDBClusterInput) error {
 	return nil

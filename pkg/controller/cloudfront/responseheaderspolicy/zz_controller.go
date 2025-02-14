@@ -35,7 +35,8 @@ import (
 	cpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	svcapitypes "github.com/crossplane-contrib/provider-aws/apis/cloudfront/v1alpha1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
+	connectaws "github.com/crossplane-contrib/provider-aws/pkg/utils/connect/aws"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
 )
 
 const (
@@ -53,23 +54,15 @@ type connector struct {
 	opts []option
 }
 
-func (c *connector) Connect(ctx context.Context, mg cpresource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*svcapitypes.ResponseHeadersPolicy)
-	if !ok {
-		return nil, errors.New(errUnexpectedObject)
-	}
-	sess, err := awsclient.GetConfigV1(ctx, c.kube, mg, cr.Spec.ForProvider.Region)
+func (c *connector) Connect(ctx context.Context, cr *svcapitypes.ResponseHeadersPolicy) (managed.TypedExternalClient[*svcapitypes.ResponseHeadersPolicy], error) {
+	sess, err := connectaws.GetConfigV1(ctx, c.kube, cr, cr.Spec.ForProvider.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, errCreateSession)
 	}
 	return newExternal(c.kube, svcapi.New(sess), c.opts), nil
 }
 
-func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*svcapitypes.ResponseHeadersPolicy)
-	if !ok {
-		return managed.ExternalObservation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Observe(ctx context.Context, cr *svcapitypes.ResponseHeadersPolicy) (managed.ExternalObservation, error) {
 	if meta.GetExternalName(cr) == "" {
 		return managed.ExternalObservation{
 			ResourceExists: false,
@@ -81,30 +74,30 @@ func (e *external) Observe(ctx context.Context, mg cpresource.Managed) (managed.
 	}
 	resp, err := e.client.GetResponseHeadersPolicyWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalObservation{ResourceExists: false}, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
+		return managed.ExternalObservation{ResourceExists: false}, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDescribe)
 	}
 	currentSpec := cr.Spec.ForProvider.DeepCopy()
 	if err := e.lateInitialize(&cr.Spec.ForProvider, resp); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "late-init failed")
 	}
 	GenerateResponseHeadersPolicy(resp).Status.AtProvider.DeepCopyInto(&cr.Status.AtProvider)
-
-	upToDate, err := e.isUpToDate(cr, resp)
-	if err != nil {
-		return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+	upToDate := true
+	diff := ""
+	if !meta.WasDeleted(cr) { // There is no need to run isUpToDate if the resource is deleted
+		upToDate, diff, err = e.isUpToDate(ctx, cr, resp)
+		if err != nil {
+			return managed.ExternalObservation{}, errors.Wrap(err, "isUpToDate check failed")
+		}
 	}
 	return e.postObserve(ctx, cr, resp, managed.ExternalObservation{
 		ResourceExists:          true,
 		ResourceUpToDate:        upToDate,
+		Diff:                    diff,
 		ResourceLateInitialized: !cmp.Equal(&cr.Spec.ForProvider, currentSpec),
 	}, nil)
 }
 
-func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*svcapitypes.ResponseHeadersPolicy)
-	if !ok {
-		return managed.ExternalCreation{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Create(ctx context.Context, cr *svcapitypes.ResponseHeadersPolicy) (managed.ExternalCreation, error) {
 	cr.Status.SetConditions(xpv1.Creating())
 	input := GenerateCreateResponseHeadersPolicyInput(cr)
 	if err := e.preCreate(ctx, cr, input); err != nil {
@@ -112,7 +105,7 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	}
 	resp, err := e.client.CreateResponseHeadersPolicyWithContext(ctx, input)
 	if err != nil {
-		return managed.ExternalCreation{}, awsclient.Wrap(err, errCreate)
+		return managed.ExternalCreation{}, errorutils.Wrap(err, errCreate)
 	}
 
 	if resp.ETag != nil {
@@ -227,78 +220,106 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 			if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Name != nil {
 				f2f2.Name = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Name
 			}
+			if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.RemoveHeadersConfig != nil {
+				f2f2f4 := &svcapitypes.ResponseHeadersPolicyRemoveHeadersConfig{}
+				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.RemoveHeadersConfig.Items != nil {
+					f2f2f4f0 := []*svcapitypes.ResponseHeadersPolicyRemoveHeader{}
+					for _, f2f2f4f0iter := range resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.RemoveHeadersConfig.Items {
+						f2f2f4f0elem := &svcapitypes.ResponseHeadersPolicyRemoveHeader{}
+						if f2f2f4f0iter.Header != nil {
+							f2f2f4f0elem.Header = f2f2f4f0iter.Header
+						}
+						f2f2f4f0 = append(f2f2f4f0, f2f2f4f0elem)
+					}
+					f2f2f4.Items = f2f2f4f0
+				}
+				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.RemoveHeadersConfig.Quantity != nil {
+					f2f2f4.Quantity = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.RemoveHeadersConfig.Quantity
+				}
+				f2f2.RemoveHeadersConfig = f2f2f4
+			}
 			if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig != nil {
-				f2f2f4 := &svcapitypes.ResponseHeadersPolicySecurityHeadersConfig{}
+				f2f2f5 := &svcapitypes.ResponseHeadersPolicySecurityHeadersConfig{}
 				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy != nil {
-					f2f2f4f0 := &svcapitypes.ResponseHeadersPolicyContentSecurityPolicy{}
+					f2f2f5f0 := &svcapitypes.ResponseHeadersPolicyContentSecurityPolicy{}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy.ContentSecurityPolicy != nil {
-						f2f2f4f0.ContentSecurityPolicy = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy.ContentSecurityPolicy
+						f2f2f5f0.ContentSecurityPolicy = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy.ContentSecurityPolicy
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy.Override != nil {
-						f2f2f4f0.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy.Override
+						f2f2f5f0.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy.Override
 					}
-					f2f2f4.ContentSecurityPolicy = f2f2f4f0
+					f2f2f5.ContentSecurityPolicy = f2f2f5f0
 				}
 				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentTypeOptions != nil {
-					f2f2f4f1 := &svcapitypes.ResponseHeadersPolicyContentTypeOptions{}
+					f2f2f5f1 := &svcapitypes.ResponseHeadersPolicyContentTypeOptions{}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentTypeOptions.Override != nil {
-						f2f2f4f1.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentTypeOptions.Override
+						f2f2f5f1.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentTypeOptions.Override
 					}
-					f2f2f4.ContentTypeOptions = f2f2f4f1
+					f2f2f5.ContentTypeOptions = f2f2f5f1
 				}
 				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.FrameOptions != nil {
-					f2f2f4f2 := &svcapitypes.ResponseHeadersPolicyFrameOptions{}
+					f2f2f5f2 := &svcapitypes.ResponseHeadersPolicyFrameOptions{}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.FrameOptions.FrameOption != nil {
-						f2f2f4f2.FrameOption = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.FrameOptions.FrameOption
+						f2f2f5f2.FrameOption = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.FrameOptions.FrameOption
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.FrameOptions.Override != nil {
-						f2f2f4f2.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.FrameOptions.Override
+						f2f2f5f2.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.FrameOptions.Override
 					}
-					f2f2f4.FrameOptions = f2f2f4f2
+					f2f2f5.FrameOptions = f2f2f5f2
 				}
 				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ReferrerPolicy != nil {
-					f2f2f4f3 := &svcapitypes.ResponseHeadersPolicyReferrerPolicy{}
+					f2f2f5f3 := &svcapitypes.ResponseHeadersPolicyReferrerPolicy{}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ReferrerPolicy.Override != nil {
-						f2f2f4f3.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ReferrerPolicy.Override
+						f2f2f5f3.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ReferrerPolicy.Override
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ReferrerPolicy.ReferrerPolicy != nil {
-						f2f2f4f3.ReferrerPolicy = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ReferrerPolicy.ReferrerPolicy
+						f2f2f5f3.ReferrerPolicy = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ReferrerPolicy.ReferrerPolicy
 					}
-					f2f2f4.ReferrerPolicy = f2f2f4f3
+					f2f2f5.ReferrerPolicy = f2f2f5f3
 				}
 				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity != nil {
-					f2f2f4f4 := &svcapitypes.ResponseHeadersPolicyStrictTransportSecurity{}
+					f2f2f5f4 := &svcapitypes.ResponseHeadersPolicyStrictTransportSecurity{}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.AccessControlMaxAgeSec != nil {
-						f2f2f4f4.AccessControlMaxAgeSec = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.AccessControlMaxAgeSec
+						f2f2f5f4.AccessControlMaxAgeSec = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.AccessControlMaxAgeSec
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.IncludeSubdomains != nil {
-						f2f2f4f4.IncludeSubdomains = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.IncludeSubdomains
+						f2f2f5f4.IncludeSubdomains = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.IncludeSubdomains
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.Override != nil {
-						f2f2f4f4.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.Override
+						f2f2f5f4.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.Override
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.Preload != nil {
-						f2f2f4f4.Preload = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.Preload
+						f2f2f5f4.Preload = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity.Preload
 					}
-					f2f2f4.StrictTransportSecurity = f2f2f4f4
+					f2f2f5.StrictTransportSecurity = f2f2f5f4
 				}
 				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection != nil {
-					f2f2f4f5 := &svcapitypes.ResponseHeadersPolicyXSSProtection{}
+					f2f2f5f5 := &svcapitypes.ResponseHeadersPolicyXSSProtection{}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.ModeBlock != nil {
-						f2f2f4f5.ModeBlock = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.ModeBlock
+						f2f2f5f5.ModeBlock = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.ModeBlock
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.Override != nil {
-						f2f2f4f5.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.Override
+						f2f2f5f5.Override = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.Override
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.Protection != nil {
-						f2f2f4f5.Protection = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.Protection
+						f2f2f5f5.Protection = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.Protection
 					}
 					if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.ReportUri != nil {
-						f2f2f4f5.ReportURI = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.ReportUri
+						f2f2f5f5.ReportURI = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.SecurityHeadersConfig.XSSProtection.ReportUri
 					}
-					f2f2f4.XSSProtection = f2f2f4f5
+					f2f2f5.XSSProtection = f2f2f5f5
 				}
-				f2f2.SecurityHeadersConfig = f2f2f4
+				f2f2.SecurityHeadersConfig = f2f2f5
+			}
+			if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.ServerTimingHeadersConfig != nil {
+				f2f2f6 := &svcapitypes.ResponseHeadersPolicyServerTimingHeadersConfig{}
+				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.ServerTimingHeadersConfig.Enabled != nil {
+					f2f2f6.Enabled = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.ServerTimingHeadersConfig.Enabled
+				}
+				if resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.ServerTimingHeadersConfig.SamplingRate != nil {
+					f2f2f6.SamplingRate = resp.ResponseHeadersPolicy.ResponseHeadersPolicyConfig.ServerTimingHeadersConfig.SamplingRate
+				}
+				f2f2.ServerTimingHeadersConfig = f2f2f6
 			}
 			f2.ResponseHeadersPolicyConfig = f2f2
 		}
@@ -310,35 +331,32 @@ func (e *external) Create(ctx context.Context, mg cpresource.Managed) (managed.E
 	return e.postCreate(ctx, cr, resp, managed.ExternalCreation{}, err)
 }
 
-func (e *external) Update(ctx context.Context, mg cpresource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*svcapitypes.ResponseHeadersPolicy)
-	if !ok {
-		return managed.ExternalUpdate{}, errors.New(errUnexpectedObject)
-	}
+func (e *external) Update(ctx context.Context, cr *svcapitypes.ResponseHeadersPolicy) (managed.ExternalUpdate, error) {
 	input := GenerateUpdateResponseHeadersPolicyInput(cr)
 	if err := e.preUpdate(ctx, cr, input); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, "pre-update failed")
 	}
 	resp, err := e.client.UpdateResponseHeadersPolicyWithContext(ctx, input)
-	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, awsclient.Wrap(err, errUpdate))
+	return e.postUpdate(ctx, cr, resp, managed.ExternalUpdate{}, errorutils.Wrap(err, errUpdate))
 }
 
-func (e *external) Delete(ctx context.Context, mg cpresource.Managed) error {
-	cr, ok := mg.(*svcapitypes.ResponseHeadersPolicy)
-	if !ok {
-		return errors.New(errUnexpectedObject)
-	}
+func (e *external) Delete(ctx context.Context, cr *svcapitypes.ResponseHeadersPolicy) (managed.ExternalDelete, error) {
 	cr.Status.SetConditions(xpv1.Deleting())
 	input := GenerateDeleteResponseHeadersPolicyInput(cr)
 	ignore, err := e.preDelete(ctx, cr, input)
 	if err != nil {
-		return errors.Wrap(err, "pre-delete failed")
+		return managed.ExternalDelete{}, errors.Wrap(err, "pre-delete failed")
 	}
 	if ignore {
-		return nil
+		return managed.ExternalDelete{}, nil
 	}
 	resp, err := e.client.DeleteResponseHeadersPolicyWithContext(ctx, input)
-	return e.postDelete(ctx, cr, resp, awsclient.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+	return e.postDelete(ctx, cr, resp, errorutils.Wrap(cpresource.Ignore(IsNotFound, err), errDelete))
+}
+
+func (e *external) Disconnect(ctx context.Context) error {
+	// Unimplemented, required by newer versions of crossplane-runtime
+	return nil
 }
 
 type option func(*external)
@@ -370,11 +388,11 @@ type external struct {
 	preObserve     func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.GetResponseHeadersPolicyInput) error
 	postObserve    func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.GetResponseHeadersPolicyOutput, managed.ExternalObservation, error) (managed.ExternalObservation, error)
 	lateInitialize func(*svcapitypes.ResponseHeadersPolicyParameters, *svcsdk.GetResponseHeadersPolicyOutput) error
-	isUpToDate     func(*svcapitypes.ResponseHeadersPolicy, *svcsdk.GetResponseHeadersPolicyOutput) (bool, error)
+	isUpToDate     func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.GetResponseHeadersPolicyOutput) (bool, string, error)
 	preCreate      func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.CreateResponseHeadersPolicyInput) error
 	postCreate     func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.CreateResponseHeadersPolicyOutput, managed.ExternalCreation, error) (managed.ExternalCreation, error)
 	preDelete      func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.DeleteResponseHeadersPolicyInput) (bool, error)
-	postDelete     func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.DeleteResponseHeadersPolicyOutput, error) error
+	postDelete     func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.DeleteResponseHeadersPolicyOutput, error) (managed.ExternalDelete, error)
 	preUpdate      func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.UpdateResponseHeadersPolicyInput) error
 	postUpdate     func(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.UpdateResponseHeadersPolicyOutput, managed.ExternalUpdate, error) (managed.ExternalUpdate, error)
 }
@@ -389,8 +407,8 @@ func nopPostObserve(_ context.Context, _ *svcapitypes.ResponseHeadersPolicy, _ *
 func nopLateInitialize(*svcapitypes.ResponseHeadersPolicyParameters, *svcsdk.GetResponseHeadersPolicyOutput) error {
 	return nil
 }
-func alwaysUpToDate(*svcapitypes.ResponseHeadersPolicy, *svcsdk.GetResponseHeadersPolicyOutput) (bool, error) {
-	return true, nil
+func alwaysUpToDate(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.GetResponseHeadersPolicyOutput) (bool, string, error) {
+	return true, "", nil
 }
 
 func nopPreCreate(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.CreateResponseHeadersPolicyInput) error {
@@ -402,8 +420,8 @@ func nopPostCreate(_ context.Context, _ *svcapitypes.ResponseHeadersPolicy, _ *s
 func nopPreDelete(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.DeleteResponseHeadersPolicyInput) (bool, error) {
 	return false, nil
 }
-func nopPostDelete(_ context.Context, _ *svcapitypes.ResponseHeadersPolicy, _ *svcsdk.DeleteResponseHeadersPolicyOutput, err error) error {
-	return err
+func nopPostDelete(_ context.Context, _ *svcapitypes.ResponseHeadersPolicy, _ *svcsdk.DeleteResponseHeadersPolicyOutput, err error) (managed.ExternalDelete, error) {
+	return managed.ExternalDelete{}, err
 }
 func nopPreUpdate(context.Context, *svcapitypes.ResponseHeadersPolicy, *svcsdk.UpdateResponseHeadersPolicyInput) error {
 	return nil

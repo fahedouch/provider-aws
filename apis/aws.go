@@ -28,6 +28,7 @@ import (
 	apigatewayv2v1alpha1 "github.com/crossplane-contrib/provider-aws/apis/apigatewayv2/v1alpha1"
 	apigatewayv2v1beta1 "github.com/crossplane-contrib/provider-aws/apis/apigatewayv2/v1beta1"
 	athenav1alpha1 "github.com/crossplane-contrib/provider-aws/apis/athena/v1alpha1"
+	autoscalingv1beta1 "github.com/crossplane-contrib/provider-aws/apis/autoscaling/v1beta1"
 	batchmanualv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/batch/manualv1alpha1"
 	batchv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/batch/v1alpha1"
 	cachev1alpha1 "github.com/crossplane-contrib/provider-aws/apis/cache/v1alpha1"
@@ -57,6 +58,8 @@ import (
 	elbv2manualv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/elbv2/manualv1alpha1"
 	elbv2v1alpha1 "github.com/crossplane-contrib/provider-aws/apis/elbv2/v1alpha1"
 	emrcontainersv1alpah1 "github.com/crossplane-contrib/provider-aws/apis/emrcontainers/v1alpha1"
+	firehosev1alpha1 "github.com/crossplane-contrib/provider-aws/apis/firehose/v1alpha1"
+	globalacceleratorv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/globalaccelerator/v1alpha1"
 	gluev1alpha1 "github.com/crossplane-contrib/provider-aws/apis/glue/v1alpha1"
 	iamv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/iam/v1alpha1"
 	iamv1beta1 "github.com/crossplane-contrib/provider-aws/apis/iam/v1beta1"
@@ -80,9 +83,12 @@ import (
 	route53resolverv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/route53resolver/v1alpha1"
 	s3v1alpha2 "github.com/crossplane-contrib/provider-aws/apis/s3/v1alpha3"
 	s3v1beta1 "github.com/crossplane-contrib/provider-aws/apis/s3/v1beta1"
+	s3control "github.com/crossplane-contrib/provider-aws/apis/s3control/v1alpha1"
 	secretsmanagerv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/secretsmanager/v1alpha1"
 	secretsmanagerv1beta1 "github.com/crossplane-contrib/provider-aws/apis/secretsmanager/v1beta1"
+	servicecatalogv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/servicecatalog/v1alpha1"
 	servicediscoveryv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/servicediscovery/v1alpha1"
+	sesv2v1alpha1 "github.com/crossplane-contrib/provider-aws/apis/sesv2/v1alpha1"
 	sfnv1alpha1 "github.com/crossplane-contrib/provider-aws/apis/sfn/v1alpha1"
 	snsv1beta1 "github.com/crossplane-contrib/provider-aws/apis/sns/v1beta1"
 	sqsv1beta1 "github.com/crossplane-contrib/provider-aws/apis/sqs/v1beta1"
@@ -116,6 +122,7 @@ func init() {
 		secretsmanagerv1alpha1.SchemeBuilder.AddToScheme,
 		secretsmanagerv1beta1.SchemeBuilder.AddToScheme,
 		servicediscoveryv1alpha1.SchemeBuilder.AddToScheme,
+		sesv2v1alpha1.SchemeBuilder.AddToScheme,
 		acmpcav1alpha1.SchemeBuilder.AddToScheme,
 		acmpcav1beta1.SchemeBuilder.AddToScheme,
 		eksv1alpha1.SchemeBuilder.AddToScheme,
@@ -144,6 +151,7 @@ func init() {
 		kafkav1alpha1.SchemeBuilder.AddToScheme,
 		transferv1alpha1.SchemeBuilder.AddToScheme,
 		gluev1alpha1.SchemeBuilder.AddToScheme,
+		globalacceleratorv1alpha1.SchemeBuilder.AddToScheme,
 		mqv1alpha1.SchemeBuilder.AddToScheme,
 		mwaav1alpha1.SchemeBuilder.AddToScheme,
 		cloudwatchlogsv1alpha1.SchemeBuilder.AddToScheme,
@@ -163,6 +171,10 @@ func init() {
 		batchv1alpha1.AddToScheme,
 		batchmanualv1alpha1.SchemeBuilder.AddToScheme,
 		emrcontainersv1alpah1.SchemeBuilder.AddToScheme,
+		autoscalingv1beta1.SchemeBuilder.AddToScheme,
+		servicecatalogv1alpha1.SchemeBuilder.AddToScheme,
+		s3control.SchemeBuilder.AddToScheme,
+		firehosev1alpha1.SchemeBuilder.AddToScheme,
 	)
 }
 

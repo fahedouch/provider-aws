@@ -70,42 +70,59 @@ func GenerateVPCEndpoint(resp *svcsdk.DescribeVpcEndpointsOutput) *svcapitypes.V
 		} else {
 			cr.Status.AtProvider.DNSEntries = nil
 		}
-		if elem.Groups != nil {
-			f2 := []*svcapitypes.SecurityGroupIdentifier{}
-			for _, f2iter := range elem.Groups {
-				f2elem := &svcapitypes.SecurityGroupIdentifier{}
-				if f2iter.GroupId != nil {
-					f2elem.GroupID = f2iter.GroupId
-				}
-				if f2iter.GroupName != nil {
-					f2elem.GroupName = f2iter.GroupName
-				}
-				f2 = append(f2, f2elem)
+		if elem.DnsOptions != nil {
+			f2 := &svcapitypes.DNSOptionsSpecification{}
+			if elem.DnsOptions.DnsRecordIpType != nil {
+				f2.DNSRecordIPType = elem.DnsOptions.DnsRecordIpType
 			}
-			cr.Status.AtProvider.Groups = f2
+			if elem.DnsOptions.PrivateDnsOnlyForInboundResolverEndpoint != nil {
+				f2.PrivateDNSOnlyForInboundResolverEndpoint = elem.DnsOptions.PrivateDnsOnlyForInboundResolverEndpoint
+			}
+			cr.Spec.ForProvider.DNSOptions = f2
+		} else {
+			cr.Spec.ForProvider.DNSOptions = nil
+		}
+		if elem.Groups != nil {
+			f3 := []*svcapitypes.SecurityGroupIdentifier{}
+			for _, f3iter := range elem.Groups {
+				f3elem := &svcapitypes.SecurityGroupIdentifier{}
+				if f3iter.GroupId != nil {
+					f3elem.GroupID = f3iter.GroupId
+				}
+				if f3iter.GroupName != nil {
+					f3elem.GroupName = f3iter.GroupName
+				}
+				f3 = append(f3, f3elem)
+			}
+			cr.Status.AtProvider.Groups = f3
 		} else {
 			cr.Status.AtProvider.Groups = nil
 		}
+		if elem.IpAddressType != nil {
+			cr.Spec.ForProvider.IPAddressType = elem.IpAddressType
+		} else {
+			cr.Spec.ForProvider.IPAddressType = nil
+		}
 		if elem.LastError != nil {
-			f3 := &svcapitypes.LastError{}
+			f5 := &svcapitypes.LastError{}
 			if elem.LastError.Code != nil {
-				f3.Code = elem.LastError.Code
+				f5.Code = elem.LastError.Code
 			}
 			if elem.LastError.Message != nil {
-				f3.Message = elem.LastError.Message
+				f5.Message = elem.LastError.Message
 			}
-			cr.Status.AtProvider.LastError = f3
+			cr.Status.AtProvider.LastError = f5
 		} else {
 			cr.Status.AtProvider.LastError = nil
 		}
 		if elem.NetworkInterfaceIds != nil {
-			f4 := []*string{}
-			for _, f4iter := range elem.NetworkInterfaceIds {
-				var f4elem string
-				f4elem = *f4iter
-				f4 = append(f4, &f4elem)
+			f6 := []*string{}
+			for _, f6iter := range elem.NetworkInterfaceIds {
+				var f6elem string
+				f6elem = *f6iter
+				f6 = append(f6, &f6elem)
 			}
-			cr.Status.AtProvider.NetworkInterfaceIDs = f4
+			cr.Status.AtProvider.NetworkInterfaceIDs = f6
 		} else {
 			cr.Status.AtProvider.NetworkInterfaceIDs = nil
 		}
@@ -130,13 +147,13 @@ func GenerateVPCEndpoint(resp *svcsdk.DescribeVpcEndpointsOutput) *svcapitypes.V
 			cr.Status.AtProvider.RequesterManaged = nil
 		}
 		if elem.RouteTableIds != nil {
-			f9 := []*string{}
-			for _, f9iter := range elem.RouteTableIds {
-				var f9elem string
-				f9elem = *f9iter
-				f9 = append(f9, &f9elem)
+			f11 := []*string{}
+			for _, f11iter := range elem.RouteTableIds {
+				var f11elem string
+				f11elem = *f11iter
+				f11 = append(f11, &f11elem)
 			}
-			cr.Status.AtProvider.RouteTableIDs = f9
+			cr.Status.AtProvider.RouteTableIDs = f11
 		} else {
 			cr.Status.AtProvider.RouteTableIDs = nil
 		}
@@ -151,29 +168,29 @@ func GenerateVPCEndpoint(resp *svcsdk.DescribeVpcEndpointsOutput) *svcapitypes.V
 			cr.Status.AtProvider.State = nil
 		}
 		if elem.SubnetIds != nil {
-			f12 := []*string{}
-			for _, f12iter := range elem.SubnetIds {
-				var f12elem string
-				f12elem = *f12iter
-				f12 = append(f12, &f12elem)
+			f14 := []*string{}
+			for _, f14iter := range elem.SubnetIds {
+				var f14elem string
+				f14elem = *f14iter
+				f14 = append(f14, &f14elem)
 			}
-			cr.Status.AtProvider.SubnetIDs = f12
+			cr.Status.AtProvider.SubnetIDs = f14
 		} else {
 			cr.Status.AtProvider.SubnetIDs = nil
 		}
 		if elem.Tags != nil {
-			f13 := []*svcapitypes.Tag{}
-			for _, f13iter := range elem.Tags {
-				f13elem := &svcapitypes.Tag{}
-				if f13iter.Key != nil {
-					f13elem.Key = f13iter.Key
+			f15 := []*svcapitypes.Tag{}
+			for _, f15iter := range elem.Tags {
+				f15elem := &svcapitypes.Tag{}
+				if f15iter.Key != nil {
+					f15elem.Key = f15iter.Key
 				}
-				if f13iter.Value != nil {
-					f13elem.Value = f13iter.Value
+				if f15iter.Value != nil {
+					f15elem.Value = f15iter.Value
 				}
-				f13 = append(f13, f13elem)
+				f15 = append(f15, f15elem)
 			}
-			cr.Status.AtProvider.Tags = f13
+			cr.Status.AtProvider.Tags = f15
 		} else {
 			cr.Status.AtProvider.Tags = nil
 		}
@@ -206,6 +223,19 @@ func GenerateVPCEndpoint(resp *svcsdk.DescribeVpcEndpointsOutput) *svcapitypes.V
 func GenerateCreateVpcEndpointInput(cr *svcapitypes.VPCEndpoint) *svcsdk.CreateVpcEndpointInput {
 	res := &svcsdk.CreateVpcEndpointInput{}
 
+	if cr.Spec.ForProvider.DNSOptions != nil {
+		f0 := &svcsdk.DnsOptionsSpecification{}
+		if cr.Spec.ForProvider.DNSOptions.DNSRecordIPType != nil {
+			f0.SetDnsRecordIpType(*cr.Spec.ForProvider.DNSOptions.DNSRecordIPType)
+		}
+		if cr.Spec.ForProvider.DNSOptions.PrivateDNSOnlyForInboundResolverEndpoint != nil {
+			f0.SetPrivateDnsOnlyForInboundResolverEndpoint(*cr.Spec.ForProvider.DNSOptions.PrivateDNSOnlyForInboundResolverEndpoint)
+		}
+		res.SetDnsOptions(f0)
+	}
+	if cr.Spec.ForProvider.IPAddressType != nil {
+		res.SetIpAddressType(*cr.Spec.ForProvider.IPAddressType)
+	}
 	if cr.Spec.ForProvider.PolicyDocument != nil {
 		res.SetPolicyDocument(*cr.Spec.ForProvider.PolicyDocument)
 	}
@@ -215,30 +245,47 @@ func GenerateCreateVpcEndpointInput(cr *svcapitypes.VPCEndpoint) *svcsdk.CreateV
 	if cr.Spec.ForProvider.ServiceName != nil {
 		res.SetServiceName(*cr.Spec.ForProvider.ServiceName)
 	}
-	if cr.Spec.ForProvider.TagSpecifications != nil {
-		f3 := []*svcsdk.TagSpecification{}
-		for _, f3iter := range cr.Spec.ForProvider.TagSpecifications {
-			f3elem := &svcsdk.TagSpecification{}
-			if f3iter.ResourceType != nil {
-				f3elem.SetResourceType(*f3iter.ResourceType)
+	if cr.Spec.ForProvider.SubnetConfigurations != nil {
+		f5 := []*svcsdk.SubnetConfiguration{}
+		for _, f5iter := range cr.Spec.ForProvider.SubnetConfigurations {
+			f5elem := &svcsdk.SubnetConfiguration{}
+			if f5iter.IPv4 != nil {
+				f5elem.SetIpv4(*f5iter.IPv4)
 			}
-			if f3iter.Tags != nil {
-				f3elemf1 := []*svcsdk.Tag{}
-				for _, f3elemf1iter := range f3iter.Tags {
-					f3elemf1elem := &svcsdk.Tag{}
-					if f3elemf1iter.Key != nil {
-						f3elemf1elem.SetKey(*f3elemf1iter.Key)
-					}
-					if f3elemf1iter.Value != nil {
-						f3elemf1elem.SetValue(*f3elemf1iter.Value)
-					}
-					f3elemf1 = append(f3elemf1, f3elemf1elem)
-				}
-				f3elem.SetTags(f3elemf1)
+			if f5iter.IPv6 != nil {
+				f5elem.SetIpv6(*f5iter.IPv6)
 			}
-			f3 = append(f3, f3elem)
+			if f5iter.SubnetID != nil {
+				f5elem.SetSubnetId(*f5iter.SubnetID)
+			}
+			f5 = append(f5, f5elem)
 		}
-		res.SetTagSpecifications(f3)
+		res.SetSubnetConfigurations(f5)
+	}
+	if cr.Spec.ForProvider.TagSpecifications != nil {
+		f6 := []*svcsdk.TagSpecification{}
+		for _, f6iter := range cr.Spec.ForProvider.TagSpecifications {
+			f6elem := &svcsdk.TagSpecification{}
+			if f6iter.ResourceType != nil {
+				f6elem.SetResourceType(*f6iter.ResourceType)
+			}
+			if f6iter.Tags != nil {
+				f6elemf1 := []*svcsdk.Tag{}
+				for _, f6elemf1iter := range f6iter.Tags {
+					f6elemf1elem := &svcsdk.Tag{}
+					if f6elemf1iter.Key != nil {
+						f6elemf1elem.SetKey(*f6elemf1iter.Key)
+					}
+					if f6elemf1iter.Value != nil {
+						f6elemf1elem.SetValue(*f6elemf1iter.Value)
+					}
+					f6elemf1 = append(f6elemf1, f6elemf1elem)
+				}
+				f6elem.SetTags(f6elemf1)
+			}
+			f6 = append(f6, f6elem)
+		}
+		res.SetTagSpecifications(f6)
 	}
 	if cr.Spec.ForProvider.VPCEndpointType != nil {
 		res.SetVpcEndpointType(*cr.Spec.ForProvider.VPCEndpointType)
@@ -251,11 +298,41 @@ func GenerateCreateVpcEndpointInput(cr *svcapitypes.VPCEndpoint) *svcsdk.CreateV
 func GenerateModifyVpcEndpointInput(cr *svcapitypes.VPCEndpoint) *svcsdk.ModifyVpcEndpointInput {
 	res := &svcsdk.ModifyVpcEndpointInput{}
 
+	if cr.Spec.ForProvider.DNSOptions != nil {
+		f3 := &svcsdk.DnsOptionsSpecification{}
+		if cr.Spec.ForProvider.DNSOptions.DNSRecordIPType != nil {
+			f3.SetDnsRecordIpType(*cr.Spec.ForProvider.DNSOptions.DNSRecordIPType)
+		}
+		if cr.Spec.ForProvider.DNSOptions.PrivateDNSOnlyForInboundResolverEndpoint != nil {
+			f3.SetPrivateDnsOnlyForInboundResolverEndpoint(*cr.Spec.ForProvider.DNSOptions.PrivateDNSOnlyForInboundResolverEndpoint)
+		}
+		res.SetDnsOptions(f3)
+	}
+	if cr.Spec.ForProvider.IPAddressType != nil {
+		res.SetIpAddressType(*cr.Spec.ForProvider.IPAddressType)
+	}
 	if cr.Spec.ForProvider.PolicyDocument != nil {
 		res.SetPolicyDocument(*cr.Spec.ForProvider.PolicyDocument)
 	}
 	if cr.Spec.ForProvider.PrivateDNSEnabled != nil {
 		res.SetPrivateDnsEnabled(*cr.Spec.ForProvider.PrivateDNSEnabled)
+	}
+	if cr.Spec.ForProvider.SubnetConfigurations != nil {
+		f12 := []*svcsdk.SubnetConfiguration{}
+		for _, f12iter := range cr.Spec.ForProvider.SubnetConfigurations {
+			f12elem := &svcsdk.SubnetConfiguration{}
+			if f12iter.IPv4 != nil {
+				f12elem.SetIpv4(*f12iter.IPv4)
+			}
+			if f12iter.IPv6 != nil {
+				f12elem.SetIpv6(*f12iter.IPv6)
+			}
+			if f12iter.SubnetID != nil {
+				f12elem.SetSubnetId(*f12iter.SubnetID)
+			}
+			f12 = append(f12, f12elem)
+		}
+		res.SetSubnetConfigurations(f12)
 	}
 	if cr.Status.AtProvider.VPCEndpointID != nil {
 		res.SetVpcEndpointId(*cr.Status.AtProvider.VPCEndpointID)

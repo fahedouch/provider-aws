@@ -55,6 +55,8 @@ type DBSubnetGroupObservation struct {
 	Subnets []*Subnet `json:"subnets,omitempty"`
 	// Provides the virtual private cloud (VPC) ID of the subnet group.
 	VPCID *string `json:"vpcID,omitempty"`
+
+	CustomDBSubnetGroupObservation `json:",inline"`
 }
 
 // DBSubnetGroupStatus defines the observed state of DBSubnetGroup.
@@ -69,6 +71,7 @@ type DBSubnetGroupStatus struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,aws}

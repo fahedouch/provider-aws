@@ -21,20 +21,20 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/barkimedes/go-deepcopy"
-
-	"github.com/aws/smithy-go/document"
-	"github.com/google/go-cmp/cmp/cmpopts"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go/document"
 	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"k8s.io/utils/ptr"
 
 	"github.com/crossplane-contrib/provider-aws/apis/s3/v1beta1"
-	awsclient "github.com/crossplane-contrib/provider-aws/pkg/clients"
 	"github.com/crossplane-contrib/provider-aws/pkg/clients/s3"
+	"github.com/crossplane-contrib/provider-aws/pkg/controller/s3/bucket/convert"
+	errorutils "github.com/crossplane-contrib/provider-aws/pkg/utils/errors"
+	"github.com/crossplane-contrib/provider-aws/pkg/utils/pointer"
 )
 
 const (
@@ -54,16 +54,16 @@ func NewNotificationConfigurationClient(client s3.BucketClient) *NotificationCon
 
 // Observe checks if the resource exists and if it matches the local configuration
 func (in *NotificationConfigurationClient) Observe(ctx context.Context, bucket *v1beta1.Bucket) (ResourceStatus, error) {
-	external, err := in.client.GetBucketNotificationConfiguration(ctx, &awss3.GetBucketNotificationConfigurationInput{Bucket: awsclient.String(meta.GetExternalName(bucket))})
+	external, err := in.client.GetBucketNotificationConfiguration(ctx, &awss3.GetBucketNotificationConfigurationInput{Bucket: pointer.ToOrNilIfZeroValue(meta.GetExternalName(bucket))})
 	if err != nil {
-		return NeedsUpdate, awsclient.Wrap(err, notificationGetFailed)
+		return NeedsUpdate, errorutils.Wrap(err, notificationGetFailed)
 	}
 
 	return IsNotificationConfigurationUpToDate(bucket.Spec.ForProvider.NotificationConfiguration, external)
 }
 
 // IsNotificationConfigurationUpToDate determines whether a notification configuration needs to be updated
-func IsNotificationConfigurationUpToDate(cr *v1beta1.NotificationConfiguration, external *awss3.GetBucketNotificationConfigurationOutput) (ResourceStatus, error) { // nolint:gocyclo
+func IsNotificationConfigurationUpToDate(cr *v1beta1.NotificationConfiguration, external *awss3.GetBucketNotificationConfigurationOutput) (ResourceStatus, error) { //nolint:gocyclo
 	// Note - aws API treats nil configuration different than empty configuration
 	// As such, we can't prealloc this due to the API
 	// If no configuration is defined but there is one in aws, we must delete it
@@ -96,10 +96,12 @@ func IsNotificationConfigurationUpToDate(cr *v1beta1.NotificationConfiguration, 
 	sortTopic(generated.TopicConfigurations)
 	sortTopic(external.TopicConfigurations)
 
-	// The AWS API returns QueueConfiguration.Filter.Key.FilterRules.Name as "Prefix"/"Suffix" but expects
+	// The AWS API returns *Configuration.Filter.Key.FilterRules.Name as "Prefix"/"Suffix" but expects
 	// "prefix"/"suffix" this leads to inconsistency and a constant diff. Fixes
 	// https://github.com/crossplane-contrib/provider-aws/issues/1165
+	external.LambdaFunctionConfigurations = sanitizedLambdaFunctionConfigurations(external.LambdaFunctionConfigurations)
 	external.QueueConfigurations = sanitizedQueueConfigurations(external.QueueConfigurations)
+	external.TopicConfigurations = sanitizedTopicConfigurations(external.TopicConfigurations)
 
 	if cmp.Equal(external.LambdaFunctionConfigurations, generated.LambdaFunctionConfigurations, cmpopts.IgnoreTypes(document.NoSerde{}, types.LambdaFunctionConfiguration{}.Id), cmpopts.EquateEmpty()) &&
 		cmp.Equal(external.QueueConfigurations, generated.QueueConfigurations, cmpopts.IgnoreTypes(document.NoSerde{}, types.QueueConfiguration{}.Id), cmpopts.EquateEmpty()) &&
@@ -137,20 +139,80 @@ func sortTopic(configs []types.TopicConfiguration) {
 	})
 }
 
-func sanitizedQueueConfigurations(configs []types.QueueConfiguration) []types.QueueConfiguration {
-	rawConfig, err := deepcopy.Anything(configs)
-	if err != nil {
-		return configs
+func sanitizedLambdaFunctionConfigurations(configs []types.LambdaFunctionConfiguration) []types.LambdaFunctionConfiguration {
+	if configs == nil {
+		return []types.LambdaFunctionConfiguration{}
 	}
 
-	sConfig := rawConfig.([]types.QueueConfiguration)
-
+	sConfig := (&convert.ConverterImpl{}).DeepCopyAWSLambdaFunctionConfiguration(configs)
 	for c := range sConfig {
+		if sConfig[c].Events == nil {
+			sConfig[c].Events = []types.Event{}
+		}
 		if sConfig[c].Filter == nil {
 			continue
 		}
 		if sConfig[c].Filter.Key == nil {
 			continue
+		}
+		if sConfig[c].Filter.Key.FilterRules == nil {
+			sConfig[c].Filter.Key.FilterRules = []types.FilterRule{}
+		}
+		for r := range sConfig[c].Filter.Key.FilterRules {
+			name := string(sConfig[c].Filter.Key.FilterRules[r].Name)
+			sConfig[c].Filter.Key.FilterRules[r].Name = types.FilterRuleName(strings.ToLower(name))
+		}
+	}
+
+	return sConfig
+}
+
+func sanitizedQueueConfigurations(configs []types.QueueConfiguration) []types.QueueConfiguration {
+	if configs == nil {
+		return []types.QueueConfiguration{}
+	}
+
+	sConfig := (&convert.ConverterImpl{}).DeepCopyAWSQueueConfiguration(configs)
+	for c := range sConfig {
+		if sConfig[c].Events == nil {
+			sConfig[c].Events = []types.Event{}
+		}
+		if sConfig[c].Filter == nil {
+			continue
+		}
+		if sConfig[c].Filter.Key == nil {
+			continue
+		}
+		if sConfig[c].Filter.Key.FilterRules == nil {
+			sConfig[c].Filter.Key.FilterRules = []types.FilterRule{}
+		}
+		for r := range sConfig[c].Filter.Key.FilterRules {
+			name := string(sConfig[c].Filter.Key.FilterRules[r].Name)
+			sConfig[c].Filter.Key.FilterRules[r].Name = types.FilterRuleName(strings.ToLower(name))
+		}
+	}
+
+	return sConfig
+}
+
+func sanitizedTopicConfigurations(configs []types.TopicConfiguration) []types.TopicConfiguration {
+	if configs == nil {
+		return []types.TopicConfiguration{}
+	}
+
+	sConfig := (&convert.ConverterImpl{}).DeepCopyAWSTopicConfiguration(configs)
+	for c := range sConfig {
+		if sConfig[c].Events == nil {
+			sConfig[c].Events = []types.Event{}
+		}
+		if sConfig[c].Filter == nil {
+			continue
+		}
+		if sConfig[c].Filter.Key == nil {
+			continue
+		}
+		if sConfig[c].Filter.Key.FilterRules == nil {
+			sConfig[c].Filter.Key.FilterRules = []types.FilterRule{}
 		}
 		for r := range sConfig[c].Filter.Key.FilterRules {
 			name := string(sConfig[c].Filter.Key.FilterRules[r].Name)
@@ -165,12 +227,12 @@ func sanitizedQueueConfigurations(configs []types.QueueConfiguration) []types.Qu
 func GenerateLambdaConfiguration(config *v1beta1.NotificationConfiguration) []types.LambdaFunctionConfiguration {
 	// NOTE(muvaf): We skip prealloc because the behavior of AWS SDK differs when
 	// the array is 0 element vs nil.
-	var configurations []types.LambdaFunctionConfiguration // nolint:prealloc
+	var configurations []types.LambdaFunctionConfiguration //nolint:prealloc
 	for _, v := range config.LambdaFunctionConfigurations {
 		conf := types.LambdaFunctionConfiguration{
 			Filter:            nil,
 			Id:                v.ID,
-			LambdaFunctionArn: awsclient.String(v.LambdaFunctionArn),
+			LambdaFunctionArn: pointer.ToOrNilIfZeroValue(v.LambdaFunctionArn),
 		}
 		if v.Events != nil {
 			conf.Events = copyEvents(v.Events)
@@ -187,7 +249,7 @@ func GenerateLambdaConfiguration(config *v1beta1.NotificationConfiguration) []ty
 func GenerateTopicConfigurations(config *v1beta1.NotificationConfiguration) []types.TopicConfiguration {
 	// NOTE(muvaf): We skip prealloc because the behavior of AWS SDK differs when
 	// the array is 0 element vs nil.
-	var configurations []types.TopicConfiguration // nolint:prealloc
+	var configurations []types.TopicConfiguration //nolint:prealloc
 	for _, v := range config.TopicConfigurations {
 		conf := types.TopicConfiguration{
 			Id:       v.ID,
@@ -208,7 +270,7 @@ func GenerateTopicConfigurations(config *v1beta1.NotificationConfiguration) []ty
 func GenerateQueueConfigurations(config *v1beta1.NotificationConfiguration) []types.QueueConfiguration {
 	// NOTE(muvaf): We skip prealloc because the behavior of AWS SDK differs when
 	// the array is 0 element vs nil.
-	var configurations []types.QueueConfiguration // nolint:prealloc
+	var configurations []types.QueueConfiguration //nolint:prealloc
 	for _, v := range config.QueueConfigurations {
 		conf := types.QueueConfiguration{
 			Id:       v.ID,
@@ -267,7 +329,7 @@ func GenerateConfiguration(config *v1beta1.NotificationConfiguration) *types.Not
 // GenerateNotificationConfigurationInput creates the input for the LifecycleConfiguration request for the S3 Client
 func GenerateNotificationConfigurationInput(name string, config *v1beta1.NotificationConfiguration) *awss3.PutBucketNotificationConfigurationInput {
 	return &awss3.PutBucketNotificationConfigurationInput{
-		Bucket:                    awsclient.String(name),
+		Bucket:                    pointer.ToOrNilIfZeroValue(name),
 		NotificationConfiguration: GenerateConfiguration(config),
 	}
 }
@@ -279,19 +341,28 @@ func (in *NotificationConfigurationClient) CreateOrUpdate(ctx context.Context, b
 	}
 	input := GenerateNotificationConfigurationInput(meta.GetExternalName(bucket), bucket.Spec.ForProvider.NotificationConfiguration)
 	_, err := in.client.PutBucketNotificationConfiguration(ctx, input)
-	return awsclient.Wrap(err, notificationPutFailed)
+	return errorutils.Wrap(err, notificationPutFailed)
 }
 
-// Delete does nothing because there is no corresponding deletion call in awsclient.
-func (*NotificationConfigurationClient) Delete(_ context.Context, _ *v1beta1.Bucket) error {
-	return nil
+// Delete resets the buckets notification configuration to empty.
+func (in *NotificationConfigurationClient) Delete(ctx context.Context, bucket *v1beta1.Bucket) error {
+	_, err := in.client.PutBucketNotificationConfiguration(ctx, &awss3.PutBucketNotificationConfigurationInput{
+		Bucket: ptr.To(meta.GetExternalName(bucket)),
+		NotificationConfiguration: &types.NotificationConfiguration{
+			EventBridgeConfiguration:     &types.EventBridgeConfiguration{},
+			LambdaFunctionConfigurations: []types.LambdaFunctionConfiguration{},
+			QueueConfigurations:          []types.QueueConfiguration{},
+			TopicConfigurations:          []types.TopicConfiguration{},
+		},
+	})
+	return errorutils.Wrap(err, notificationPutFailed)
 }
 
 // LateInitialize is responsible for initializing the resource based on the external value
 func (in *NotificationConfigurationClient) LateInitialize(ctx context.Context, bucket *v1beta1.Bucket) error {
-	external, err := in.client.GetBucketNotificationConfiguration(ctx, &awss3.GetBucketNotificationConfigurationInput{Bucket: awsclient.String(meta.GetExternalName(bucket))})
+	external, err := in.client.GetBucketNotificationConfiguration(ctx, &awss3.GetBucketNotificationConfigurationInput{Bucket: pointer.ToOrNilIfZeroValue(meta.GetExternalName(bucket))})
 	if err != nil {
-		return awsclient.Wrap(err, notificationGetFailed)
+		return errorutils.Wrap(err, notificationGetFailed)
 	}
 	if emptyConfiguration(external) {
 		// There is nothing to initialize from AWS
@@ -373,8 +444,8 @@ func LateInitializeLambda(external []types.LambdaFunctionConfiguration, local []
 		local[i] = v1beta1.LambdaFunctionConfiguration{
 			Events:            LateInitializeEvents(local[i].Events, v.Events),
 			Filter:            LateInitializeFilter(local[i].Filter, v.Filter),
-			ID:                awsclient.LateInitializeStringPtr(local[i].ID, v.Id),
-			LambdaFunctionArn: awsclient.LateInitializeString(local[i].LambdaFunctionArn, v.LambdaFunctionArn),
+			ID:                pointer.LateInitialize(local[i].ID, v.Id),
+			LambdaFunctionArn: pointer.LateInitializeValueFromPtr(local[i].LambdaFunctionArn, v.LambdaFunctionArn),
 		}
 	}
 	return local
@@ -390,8 +461,8 @@ func LateInitializeQueue(external []types.QueueConfiguration, local []v1beta1.Qu
 		local[i] = v1beta1.QueueConfiguration{
 			Events:   LateInitializeEvents(local[i].Events, v.Events),
 			Filter:   LateInitializeFilter(local[i].Filter, v.Filter),
-			ID:       awsclient.LateInitializeStringPtr(local[i].ID, v.Id),
-			QueueArn: awsclient.LateInitializeStringPtr(local[i].QueueArn, v.QueueArn),
+			ID:       pointer.LateInitialize(local[i].ID, v.Id),
+			QueueArn: pointer.LateInitialize(local[i].QueueArn, v.QueueArn),
 		}
 	}
 	return local
@@ -407,8 +478,8 @@ func LateInitializeTopic(external []types.TopicConfiguration, local []v1beta1.To
 		local[i] = v1beta1.TopicConfiguration{
 			Events:   LateInitializeEvents(local[i].Events, v.Events),
 			Filter:   LateInitializeFilter(local[i].Filter, v.Filter),
-			ID:       awsclient.LateInitializeStringPtr(local[i].ID, v.Id),
-			TopicArn: awsclient.LateInitializeStringPtr(local[i].TopicArn, v.TopicArn),
+			ID:       pointer.LateInitialize(local[i].ID, v.Id),
+			TopicArn: pointer.LateInitialize(local[i].TopicArn, v.TopicArn),
 		}
 	}
 	return local
